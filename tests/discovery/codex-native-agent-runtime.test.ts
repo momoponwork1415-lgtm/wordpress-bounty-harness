@@ -24,6 +24,7 @@ import {
 } from "../../src/discovery/index.js";
 import { ProviderAttachmentStore } from "../../src/discovery/index.js";
 import { recoverRootAgentReport } from "../../src/discovery/recover-agent-reports.js";
+import { wordPressLabCommandRule } from "../../src/profiles/wordpress/discovery/lab-commands.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const image = `node@${digest}`;
@@ -211,6 +212,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         new ProviderAttachmentStore(root),
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       );
       // Reads count only under the mounts this run supplies.
@@ -289,6 +291,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         attachments,
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       );
       const result = await runtime.execute(run);
@@ -351,6 +354,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         new ProviderAttachmentStore(root),
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       );
       const result = await runtime.execute({
@@ -410,6 +414,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         new ProviderAttachmentStore(root),
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       );
       const result = await runtime.execute({
@@ -450,6 +455,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         new ProviderAttachmentStore(root),
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       );
       expect((await runtime.execute(run)).receipt).toMatchObject({
@@ -525,6 +531,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         attachments,
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       ).execute({
         ...run,
@@ -634,6 +641,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         attachments,
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       ).execute({
         ...run,
@@ -701,6 +709,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         attachments,
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       ).execute({
         ...run,
@@ -823,6 +832,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         attachments,
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       );
       const result = await runtime.execute({
@@ -892,6 +902,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         attachments,
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       ).execute({
         ...run,
@@ -927,6 +938,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         attachments,
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       ).execute({
         ...run,
@@ -1117,6 +1129,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         attachments,
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       );
       const result = await runtime.execute({
@@ -1183,6 +1196,7 @@ describe("Codex native agent runtime", () => {
           broker(),
           attachments,
           image,
+          wordPressLabCommandRule,
           () => new Date(now),
         ).execute({
           ...run,
@@ -1380,6 +1394,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         attachments,
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       ).execute({
         ...run,
@@ -1558,6 +1573,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         new ProviderAttachmentStore(root),
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       ).execute({
         ...run,
@@ -1613,6 +1629,7 @@ describe("Codex native agent runtime", () => {
         }),
         new ProviderAttachmentStore(root),
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       );
       const result = await runtime.execute({
@@ -1666,6 +1683,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         new ProviderAttachmentStore(root),
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       );
       expect(
@@ -1710,6 +1728,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         new ProviderAttachmentStore(root),
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       );
       const result = await runtime.execute({
@@ -1764,6 +1783,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         attachments,
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       );
       const result = await runtime.execute({
@@ -1792,6 +1812,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         new ProviderAttachmentStore(root),
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       );
       const candidate = { ...run, answerKey: "private-evaluation-data" };
@@ -1815,6 +1836,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         attachments,
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       );
       const result = await runtime.execute(run);
@@ -1871,6 +1893,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         new ProviderAttachmentStore(root),
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       );
       const { lab: _lab, ...withoutLab } = run;
@@ -1896,6 +1919,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         new ProviderAttachmentStore(root),
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       );
       const dependencySource = {
@@ -1959,6 +1983,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         new ProviderAttachmentStore(root),
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       );
       const php = {
@@ -2028,6 +2053,7 @@ describe("Codex native agent runtime", () => {
           broker(),
           attachments,
           image,
+          wordPressLabCommandRule,
           () => new Date(now),
         ).execute(run);
       const cases: [string, string | undefined][] = [
@@ -2081,6 +2107,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         attachments,
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       );
       expect((await wrongVersion.execute(run)).receipt).toMatchObject({
@@ -2092,6 +2119,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         attachments,
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       );
       expect((await invalidOutput.execute(run)).receipt).toMatchObject({
@@ -2104,6 +2132,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         attachments,
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       );
       expect((await exited.execute(run)).receipt).toMatchObject({
@@ -2127,6 +2156,7 @@ describe("Codex native agent runtime", () => {
         ),
         attachments,
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       );
       expect((await capped.execute(run)).receipt).toMatchObject({
@@ -2142,6 +2172,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         attachments,
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       );
       expect((await unadmitted.execute(run)).receipt).toMatchObject({
@@ -2175,6 +2206,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         new ProviderAttachmentStore(root),
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       );
       expect((await runtime.execute(run)).receipt).toMatchObject({
@@ -2216,6 +2248,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         attachments,
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       ).execute(run);
       expect(result.receipt).toMatchObject({
@@ -2267,6 +2300,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         attachments,
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       ).execute(run);
       expect(result.receipt).toMatchObject({ terminal: "completed" });
@@ -2291,6 +2325,7 @@ describe("Codex native agent runtime", () => {
         broker(),
         attachments,
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       ).execute(run);
       expect(failed.receipt.terminal).toBe("incomplete");
@@ -2334,6 +2369,7 @@ describe("Codex native agent runtime", () => {
           broker(),
           attachments,
           image,
+          wordPressLabCommandRule,
           () => new Date(now),
         );
       const result = await runtime(
@@ -2413,6 +2449,7 @@ describe("Codex native agent runtime", () => {
           broker(),
           new ProviderAttachmentStore(root),
           image,
+          wordPressLabCommandRule,
           () => new Date(now),
         );
       const withProgress = [
@@ -2477,6 +2514,7 @@ describe("Codex native agent runtime", () => {
           broker(grant),
           new ProviderAttachmentStore(root),
           image,
+          wordPressLabCommandRule,
           () => new Date(now),
         );
       const result = await runtime(tlsGrant).execute(chatgptRun);

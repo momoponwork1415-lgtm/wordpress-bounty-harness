@@ -145,15 +145,22 @@ describe("module boundary (ADR 0011)", () => {
     // `/workspace/dependencies` と、その read-path label は profile の
     // src/profiles/wordpress/sandbox-layout.ts が 1 回宣言し、汎用側は run の入力として受け取る。
     // `/workspace/main` と `/workspace/research` は sandbox 自身の契約なので汎用側に置く。
+    // Lab のホスト名（`wordpress`）と DB クライアント（`mysql` / `mariadb`）は
+    // profile の src/profiles/wordpress/discovery/lab-commands.ts が持ち、汎用の
+    // runtime は LabCommandRule を通して数える。正規表現の中（`\bwordpress\b`）も
+    // 拾うため、語の境界を使わず部分一致で見る。許すのは repository 名と、
+    // profile のディレクトリを指すコメントだけである。
     const pattern =
-      /\bwp_options\b|\bwp_ajax\b|admin-ajax\.php|\bwp-admin\b|\bwp-content\b|proxy-capture|\/workspace\/(?:wordpress|php|dependencies)\b|@(?:wordpress|php|dependencies)\//;
+      /\bwp_options\b|\bwp_ajax\b|admin-ajax\.php|\bwp-admin\b|\bwp-content\b|proxy-capture|\/workspace\/(?:wordpress|php|dependencies)\b|@(?:wordpress|php|dependencies)\/|wordpress|mysql|mariadb/i;
+    const allowed = /wordpress-bounty-harness|profiles\/wordpress\//gi;
     const offenders: string[] = [];
     for (const module of GENERIC_MODULES) {
       for (const file of await listTypeScriptFiles(join(SOURCE_ROOT, module))) {
         const text = await readFile(file, "utf8");
-        const line = text.split("\n").findIndex((l) => pattern.test(l));
-        if (line >= 0)
-          offenders.push(`${relative(SOURCE_ROOT, file)}:${line + 1}`);
+        text.split("\n").forEach((line, index) => {
+          if (pattern.test(line.replace(allowed, "")))
+            offenders.push(`${relative(SOURCE_ROOT, file)}:${index + 1}`);
+        });
       }
     }
     expect(offenders).toEqual([]);
