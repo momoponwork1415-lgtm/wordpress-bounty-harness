@@ -12,6 +12,19 @@ import type { BasisMissingReason } from "./submission-basis.js";
 export const MANUAL_LAB_RECEIPT_FILE = "manual-lab-session.json";
 export const MANUAL_OBSERVATION_EVIDENCE_FILE =
   "manual-observation-evidence.bin";
+export const MANUAL_OBSERVATION_CONFIGURATION_FILE =
+  "manual-observation-configuration.json";
+
+/**
+ * #578: the observer's own statement of whether the configuration they
+ * confirmed is one an ordinary public site uses, with a short reason. The
+ * boolean goes to the ledger; the reason stays in Private Evidence.
+ */
+export const manualObservationConfigurationSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  ordinaryPublicSite: z.boolean(),
+  reason: z.string().trim().min(1).max(500),
+});
 
 /** Projection never treats a missing or corrupt private artifact as usable proof. */
 export async function manualObservationEvidenceStatus(
@@ -243,6 +256,11 @@ export async function recordManualObservation(input: {
   readonly evidence: Uint8Array;
   readonly result: "match" | "mismatch" | "unavailable";
   readonly recordedBy: string;
+  /** #578: the observer's statement about the configuration they confirmed. */
+  readonly configuration?: {
+    readonly ordinaryPublicSite: boolean;
+    readonly reason: string;
+  };
   readonly clock?: () => Date;
 }): Promise<ResultEvent> {
   const ref = refSchema.parse(input.ref);
@@ -258,6 +276,13 @@ export async function recordManualObservation(input: {
     throw new Error("A named human actor is required");
   if (input.evidence.byteLength === 0 || input.evidence.byteLength > 10_000_000)
     throw new Error("Manual observation evidence must be 1-10000000 bytes");
+  const configuration =
+    input.configuration === undefined
+      ? undefined
+      : manualObservationConfigurationSchema.parse({
+          schemaVersion: 1,
+          ...input.configuration,
+        });
   const verification = currentObservationVerification(input.ledger, ref);
   if (verification === null)
     throw new Error("A current incomplete observation is required");
@@ -301,6 +326,12 @@ export async function recordManualObservation(input: {
   const evidenceDigest = await input.store.putFiles({
     [MANUAL_OBSERVATION_EVIDENCE_FILE]: input.evidence,
   });
+  const recordDigest =
+    configuration === undefined
+      ? undefined
+      : await input.store.putFiles({
+          [MANUAL_OBSERVATION_CONFIGURATION_FILE]: canonicalJson(configuration),
+        });
   const event: ResultEvent = {
     schemaVersion: 1,
     identity: `manual-observation:${randomUUID()}`,
@@ -314,11 +345,27 @@ export async function recordManualObservation(input: {
     evidenceDigest,
     result,
     recordedBy,
+    ...(configuration === undefined || recordDigest === undefined
+      ? {}
+      : {
+          configuration: {
+            ordinaryPublicSite: configuration.ordinaryPublicSite,
+            recordDigest,
+          },
+        }),
     occurredAt: (input.clock ?? (() => new Date()))().toISOString(),
     type: "manual-observation-recorded",
     artifacts: [
       { kind: "manual-lab-session", digest: receiptDigest },
       { kind: "manual-observation-evidence", digest: evidenceDigest },
+      ...(recordDigest === undefined
+        ? []
+        : [
+            {
+              kind: "manual-observation-configuration",
+              digest: recordDigest,
+            },
+          ]),
     ],
   };
   const appended = await input.ledger.append(event);

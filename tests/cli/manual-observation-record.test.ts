@@ -8,7 +8,9 @@ import { runCli, type CliProfile } from "../../src/cli/index.js";
 import { openState } from "../../src/cli/state.js";
 import {
   Review,
+  MANUAL_OBSERVATION_CONFIGURATION_FILE,
   MANUAL_OBSERVATION_EVIDENCE_FILE,
+  manualObservationConfigurationSchema,
   reviewExportV1Schema,
   reviewExportV2Schema,
 } from "../../src/review/index.js";
@@ -136,7 +138,12 @@ async function fixture() {
       "--finding",
       "finding-1",
     );
-  const observe = (receipt: string, result: string, by = "owner") =>
+  const observe = (
+    receipt: string,
+    result: string,
+    by = "owner",
+    ...extra: string[]
+  ) =>
     run(
       "review",
       "observe",
@@ -152,6 +159,7 @@ async function fixture() {
       evidencePath,
       "--by",
       by,
+      ...extra,
     );
   return {
     state,
@@ -221,6 +229,74 @@ it.each(["match", "mismatch", "unavailable"] as const)(
     );
   },
 );
+
+it("records the observer's typed statement about the configuration (#578)", async () => {
+  const f = await fixture();
+  const receipt = receiptOf((await f.lab()).stdout);
+  // Either flag alone, another value, or an empty reason is refused.
+  for (const extra of [
+    ["--ordinary-site", "yes"],
+    ["--ordinary-site-reason", "Defaults"],
+    ["--ordinary-site", "maybe", "--ordinary-site-reason", "Defaults"],
+    ["--ordinary-site", "yes", "--ordinary-site-reason", "  "],
+    ["--ordinary-site", "yes", "--ordinary-site-reason", "x".repeat(501)],
+  ])
+    expect(
+      (await f.observe(receipt, "match", "owner", ...extra)).code,
+    ).not.toBe(0);
+  expect(
+    f.state.ledger.readAll({ type: "manual-observation-recorded" }),
+  ).toHaveLength(0);
+
+  const recorded = await f.observe(
+    receipt,
+    "match",
+    "owner",
+    "--ordinary-site",
+    "no",
+    "--ordinary-site-reason",
+    " Needs a developer-only debug setting ",
+  );
+  expect(recorded.code).toBe(0);
+  expect(recorded.stdout.join("\n")).toContain("ordinary public site no");
+  const event = f.state.ledger.readAll({
+    type: "manual-observation-recorded",
+  })[0]?.event;
+  if (event?.type !== "manual-observation-recorded")
+    throw new Error("Result event missing");
+  // The ledger keeps the boolean and a digest; the reason is Private Evidence.
+  expect(event.configuration).toEqual({
+    ordinaryPublicSite: false,
+    recordDigest: expect.stringMatching(/^sha256:/),
+  });
+  expect(event.artifacts).toContainEqual({
+    kind: "manual-observation-configuration",
+    digest: event.configuration!.recordDigest,
+  });
+  expect(JSON.stringify(event)).not.toContain("debug setting");
+  const statement = await f.state.store.readJson(
+    event.configuration!.recordDigest,
+    MANUAL_OBSERVATION_CONFIGURATION_FILE,
+    manualObservationConfigurationSchema,
+    10_000,
+  );
+  expect(statement).toMatchObject({
+    status: "resolved",
+    value: {
+      schemaVersion: 1,
+      ordinaryPublicSite: false,
+      reason: "Needs a developer-only debug setting",
+    },
+  });
+
+  // Without the flags the statement is absent, not false.
+  const second = receiptOf((await f.lab()).stdout);
+  expect((await f.observe(second, "match")).code).toBe(0);
+  const unstated = f.state.ledger
+    .readAll({ type: "manual-observation-recorded" })
+    .at(-1)?.event;
+  expect(unstated).not.toHaveProperty("configuration");
+});
 
 it("rejects an invented artifact without a ready ledger event and a nonhuman actor", async () => {
   const f = await fixture();

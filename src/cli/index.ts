@@ -17,16 +17,14 @@ import {
   exportReviewBundle,
   exportReviewBundleV2,
   MANUAL_LAB_RECEIPT_FILE,
-  manualObservationEvidenceStatus,
   recordManualObservation,
   recordManualObservationLabReady,
-  type DuplicateCheck,
   type DuplicateResult,
   type HttpEvidenceReader,
   type BasisUse,
   type Review,
   type ReviewItem,
-  type ReviewQueue,
+  type ReviewListing,
   type ReviewRef,
   type StateDiffReader,
   type VerifierRecordReader,
@@ -561,25 +559,19 @@ export function formatFunnel(funnel: CampaignFunnel): string[] {
 }
 
 export function formatQueue(
-  queue: ReviewQueue,
+  queue: ReviewListing,
   /** The store's own location of an artifact's files, so the printed path opens. */
   contentPath: (digest: string) => string,
-  /** #442: the stage-4 result each item's latest decision carries. */
-  duplicates: ReadonlyMap<ReviewItem, DuplicateCheck | null> = new Map(),
-  /** Each decision's reason code, so a Finding dropped before its Lab shows why (#436). */
-  reasons: ReadonlyMap<ReviewItem, string> = new Map(),
-  /** Resolved from Private Evidence before printing a human observation. */
-  manualEvidence: ReadonlyMap<
-    ReviewItem,
-    "available" | "unavailable"
-  > = new Map(),
 ): string[] {
   const lines: string[] = [];
-  for (const item of queue.items) {
+  for (const {
+    item,
+    decisionReason: reason,
+    duplicate: check,
+    manualObservationEvidence,
+  } of queue.rows) {
     const head = `${item.status}  ${item.ref.campaignId}  finding ${item.ref.findingId}  ${item.category}`;
-    const reason = reasons.get(item);
-    const decision = `  decision: ${item.decision ?? "none"}${reason === undefined ? "" : ` (${reason})`}`;
-    const check = duplicates.get(item) ?? null;
+    const decision = `  decision: ${item.decision ?? "none"}${reason === null ? "" : ` (${reason})`}`;
     const duplicate = `  duplicate: ${
       check === null
         ? "none"
@@ -639,7 +631,7 @@ export function formatQueue(
         ...(item.manualObservation === undefined
           ? []
           : [
-              `  manual observation: ${item.manualObservation.result} (evidence ${manualEvidence.get(item) ?? "unchecked"}; receipt ${item.manualObservation.sessionReceiptDigest}, evidence ${item.manualObservation.evidenceDigest})`,
+              `  manual observation: ${item.manualObservation.result} (evidence ${manualObservationEvidence ?? "unchecked"}; receipt ${item.manualObservation.sessionReceiptDigest}, evidence ${item.manualObservation.evidenceDigest})`,
             ]),
         decision,
         duplicate,
@@ -651,7 +643,7 @@ export function formatQueue(
       .map(([reason, count]) => `${reason} ${count}`)
       .join(", ") || "none";
   if (
-    queue.items.length === 0 &&
+    queue.rows.length === 0 &&
     Object.keys(queue.incompleteByReason).length === 0
   )
     lines.push("review queue is empty");
@@ -1181,35 +1173,12 @@ const COMMANDS: readonly Command[] = [
     usage: ["review [--campaign <id>]"],
     options: { campaign: STR },
     handler: async ({ values, state, environment, print }) => {
-      const review = environment.profile.review(state);
-      const queue = review.queue(
-        values.campaign === undefined ? {} : { campaignId: values.campaign },
-      );
-      const duplicates = new Map<ReviewItem, DuplicateCheck | null>();
-      const manualEvidence = new Map<ReviewItem, "available" | "unavailable">();
-      for (const item of queue.items)
-        duplicates.set(item, await review.duplicateOf(item.ref));
-      for (const item of queue.items)
-        if (
-          item.status === "incomplete" &&
-          item.manualObservation !== undefined
-        )
-          manualEvidence.set(
-            item,
-            await manualObservationEvidenceStatus(
-              state.store,
-              item.manualObservation,
-            ),
-          );
-      print(
-        formatQueue(
-          queue,
-          (digest) => state.store.contentPath(digest),
-          duplicates,
-          await review.decisionReasons(queue.items),
-          manualEvidence,
-        ),
-      );
+      const listing = await environment.profile
+        .review(state)
+        .listing(
+          values.campaign === undefined ? {} : { campaignId: values.campaign },
+        );
+      print(formatQueue(listing, (digest) => state.store.contentPath(digest)));
       return 0;
     },
   }),
@@ -1360,7 +1329,7 @@ const COMMANDS: readonly Command[] = [
     name: "review observe",
     required: ["campaign", "finding", "receipt", "result", "evidence", "by"],
     usage: [
-      "review observe --campaign <id> --finding <id> --receipt <digest> --result match|mismatch|unavailable --evidence <path> --by <human>",
+      "review observe --campaign <id> --finding <id> --receipt <digest> --result match|mismatch|unavailable --evidence <path> --by <human> [--ordinary-site yes|no --ordinary-site-reason <text>]",
     ],
     options: {
       campaign: STR,
@@ -1369,6 +1338,8 @@ const COMMANDS: readonly Command[] = [
       result: STR,
       evidence: STR,
       by: STR,
+      "ordinary-site": STR,
+      "ordinary-site-reason": STR,
     },
     handler: async ({ values, state, environment, io }) => {
       const item = queued(environment.profile.review(state), values);
@@ -1392,6 +1363,30 @@ const COMMANDS: readonly Command[] = [
       const actor = required(values.by, "by");
       if (isNonHumanReviewer(actor))
         throw new UsageError("A named human actor is required");
+      // #578: the observer states whether the configuration they confirmed is
+      // one an ordinary public site uses; scope reads it, never guesses it.
+      const ordinarySite = values["ordinary-site"];
+      const ordinarySiteReason = values["ordinary-site-reason"]?.trim();
+      if ((ordinarySite === undefined) !== (ordinarySiteReason === undefined))
+        throw new UsageError(
+          "--ordinary-site and --ordinary-site-reason go together",
+        );
+      if (
+        ordinarySiteReason !== undefined &&
+        (ordinarySiteReason.length === 0 || ordinarySiteReason.length > 500)
+      )
+        throw new UsageError("--ordinary-site-reason must be 1-500 characters");
+      const configuration =
+        ordinarySite === undefined || ordinarySiteReason === undefined
+          ? undefined
+          : {
+              ordinaryPublicSite:
+                choice(ordinarySite, "ordinary-site", [
+                  "yes",
+                  "no",
+                ] as const) === "yes",
+              reason: ordinarySiteReason,
+            };
       const evidencePath = resolve(required(values.evidence, "evidence"));
       const evidenceStat = await lstat(evidencePath);
       if (
@@ -1409,10 +1404,17 @@ const COMMANDS: readonly Command[] = [
         evidence: await readFile(evidencePath),
         result,
         recordedBy: actor,
+        ...(configuration === undefined ? {} : { configuration }),
         clock: state.clock,
       });
       io.stdout(
-        `manual observation ${recorded.result} recorded for finding ${item.ref.findingId} (evidence ${recorded.evidenceDigest})`,
+        `manual observation ${recorded.result} recorded for finding ${item.ref.findingId} (evidence ${recorded.evidenceDigest}; ordinary public site ${
+          recorded.configuration === undefined
+            ? "not stated"
+            : recorded.configuration.ordinaryPublicSite
+              ? "yes"
+              : "no"
+        })`,
       );
       return 0;
     },

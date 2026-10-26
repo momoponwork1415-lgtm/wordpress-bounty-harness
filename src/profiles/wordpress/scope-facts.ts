@@ -2,7 +2,11 @@ import { z } from "zod";
 
 import type { PrivateArtifactStore } from "../../infrastructure/private-artifact-store.js";
 import type { Ledger } from "../../ledger/index.js";
-import type { ScopeFactsProvider } from "../../review/index.js";
+import {
+  MANUAL_OBSERVATION_CONFIGURATION_FILE,
+  manualObservationConfigurationSchema,
+  type ScopeFactsProvider,
+} from "../../review/index.js";
 import { retiredWordPressScenario } from "./lab/retired-scenarios.js";
 import { LAB_BROWSER_OBSERVATION_FILE } from "./verification/attempt-observer.js";
 import type { WordpressScopeInput } from "./scope-policy.js";
@@ -131,8 +135,8 @@ const labBrowserSchema = z.looseObject({
  * Scope input for a result a person observed as `match` in a review Lab
  * (#525, ADR 0040): the Finding's attacker position (the only account the
  * Harness released after setup), the Lab browser's victim record when there
- * is one, the selection record, the verified Lab scenario and the version
- * comparison.
+ * is one, the selection record, the observer's statement about the
+ * configuration (#578) and the version comparison.
  */
 export function wordpressHumanObservedScopeFacts(input: {
   readonly category: string;
@@ -140,7 +144,8 @@ export function wordpressHumanObservedScopeFacts(input: {
   readonly victimRole?: NonNullable<WordpressScopeInput["victimRole"]>;
   readonly target: { readonly activeInstallations: number };
   readonly latestVersionVerified: boolean;
-  readonly ordinaryScenarioVerified: boolean;
+  /** What the observer stated with `review observe --ordinary-site`; absent when not stated. */
+  readonly ordinaryPublicSite?: boolean;
 }): WordpressScopeInput {
   return {
     category: input.category as WordpressScopeInput["category"],
@@ -149,9 +154,9 @@ export function wordpressHumanObservedScopeFacts(input: {
     wordpressOrgListed: true,
     premium: false,
     ...(input.latestVersionVerified ? { latestVersionVerified: true } : {}),
-    ...(input.ordinaryScenarioVerified
-      ? { defaultOrCommonSettings: true }
-      : {}),
+    ...(input.ordinaryPublicSite === undefined
+      ? {}
+      : { defaultOrCommonSettings: input.ordinaryPublicSite }),
     ...(input.victimRole === undefined
       ? {}
       : {
@@ -304,6 +309,21 @@ export function createWordPressScopeFacts(options: {
                 labBrowserSchema,
                 64 * 1024,
               );
+        // #578: the observer's statement, never a Lab scenario record.
+        const stated = basis.observation.configuration;
+        if (stated !== undefined) {
+          const statement = await options.store.readJson(
+            stated.recordDigest,
+            MANUAL_OBSERVATION_CONFIGURATION_FILE,
+            manualObservationConfigurationSchema,
+            64 * 1024,
+          );
+          if (
+            statement.status !== "resolved" ||
+            statement.value.ordinaryPublicSite !== stated.ordinaryPublicSite
+          )
+            throw new Error("Observer configuration record is unreadable");
+        }
         return wordpressHumanObservedScopeFacts({
           category: finding.category,
           attacker: recorded.value.attackerPosition,
@@ -312,7 +332,9 @@ export function createWordPressScopeFacts(options: {
             : {}),
           target,
           latestVersionVerified,
-          ordinaryScenarioVerified,
+          ...(stated === undefined
+            ? {}
+            : { ordinaryPublicSite: stated.ordinaryPublicSite }),
         });
       }
       return wordpressScopeFacts({

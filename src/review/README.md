@@ -19,7 +19,7 @@
 
 `incomplete(observation)` の内部プレビューはこの 3 の正式な暫定文案に含めない。観測 signal と Snapshot / Lab Setup、攻撃要求との marker 一致と順序を照合した英語 Markdown、必須値が揃う場合だけ `pending` の Fill-Only JSON を Private Evidence に作れる。因果関係と既存コンテンツ由来かどうかは人間の確認待ちとする。`review draft` と manifest は作らず、scope assessment や提出用の人間の再現が済んだと扱わない。captured numeric-dialog の現在の `incomplete(observation)` は `lab up --for-review` で新しい Lab を開き、`review observe` で手動観測を別に記録できる。
 
-`review observe --by` は本人認証ではなく人間の記名申告である。指定された証拠ファイルは観測資料として保存するが、因果関係の自動証明にも `runtime-confirmed` にもならず、提出承認の条件を満たさない。
+`review observe --by` は本人認証ではなく人間の記名申告である。`--ordinary-site yes|no --ordinary-site-reason <text>` は、確かめた構成が通常の公開サイトの構成かの観測者の申告で、人間の観測の basis では scope の `defaultOrCommonSettings` になる（#578、ADR 0040 の 2026-10-26 追記 2）。指定された証拠ファイルは観測資料として保存するが、因果関係の自動証明にも `runtime-confirmed` にもならず、提出承認の条件を満たさない。
 
 ### `incomplete(observation)` の手動観測
 
