@@ -125,6 +125,10 @@ export const reviewExportV1Schema = z.strictObject({
     impact: z.string().max(64),
     brokenProperty: z.string().max(1000),
     configurationPrecondition: z.string().max(1000).nullable(),
+    /** #613: the agent's declared enum values; null when undeclared. */
+    configurationClass: z.string().max(64).nullable(),
+    attackerInputPath: z.string().max(64).nullable(),
+    exploitTiming: z.string().max(64).nullable(),
     sourceTrace: z.array(sourceTraceSchema),
     recordedAt: z.iso.datetime({ offset: true }),
     runId: id,
@@ -390,6 +394,9 @@ const findingRecordSchema = z.looseObject({
   impact: z.string(),
   brokenProperty: z.string(),
   configurationPrecondition: z.string().optional(),
+  configurationClass: z.string().max(64).optional(),
+  attackerInputPath: z.string().max(64).optional(),
+  exploitTiming: z.string().max(64).optional(),
   sourceTrace: z.array(sourceTraceSchema).optional(),
 });
 const selectionRecordSchema = z.looseObject({
@@ -812,6 +819,9 @@ export async function exportReviewBundle(options: {
       impact: record?.impact ?? finding.category,
       brokenProperty: record?.brokenProperty ?? "(finding.json unavailable)",
       configurationPrecondition: record?.configurationPrecondition ?? null,
+      configurationClass: record?.configurationClass ?? null,
+      attackerInputPath: record?.attackerInputPath ?? null,
+      exploitTiming: record?.exploitTiming ?? null,
       sourceTrace: record?.sourceTrace ?? [],
       recordedAt: finding.occurredAt,
       runId: finding.runId,

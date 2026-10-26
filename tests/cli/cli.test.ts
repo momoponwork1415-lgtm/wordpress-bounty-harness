@@ -42,7 +42,7 @@ import {
   type TargetIntakePacket,
   type WordPressOrgTargetSource,
 } from "../../src/profiles/wordpress/acquisition/index.js";
-import { wordPressDiscoveryOutputContractV4 } from "../../src/profiles/wordpress/discovery/output-contract.js";
+import { wordPressDiscoveryOutputContractV5 } from "../../src/profiles/wordpress/discovery/output-contract.js";
 import {
   openWordPressLab,
   diffWordPressLabState,
@@ -1388,7 +1388,7 @@ describe("discovery runtime share", () => {
 });
 
 describe("harness CLI vertical slice", () => {
-  it("adds the generated v4 contract to the sole runnable prompt and records separate digests", async () => {
+  it("adds the generated v5 contract to the sole runnable prompt and records separate digests", async () => {
     const { run, configPath, prompts, ledger } = await harness();
     const result = await run(
       "campaign",
@@ -1401,7 +1401,7 @@ describe("harness CLI vertical slice", () => {
     );
     expect(result.code).toBe(0);
     const objective = await loadWordPressDiscoveryAsset("wp2shell-bounty-v11");
-    const contract = wordPressDiscoveryOutputContractV4();
+    const contract = wordPressDiscoveryOutputContractV5();
     expect(prompts[0]).toContain(objective.text.trim());
     expect(prompts[0]).toContain(contract.text);
     expect(prompts[0]?.split(contract.text)).toHaveLength(2);
@@ -3780,6 +3780,25 @@ describe("harness CLI vertical slice", () => {
       reason: "outside-programme-boundary",
       artifacts: [{ kind: "finding", digest }],
     });
+    // #613: a park on the agent's declaration shows the declared values next to the reason.
+    await ledger().append({
+      schemaVersion: 1,
+      identity: "parked-2",
+      campaignId: "campaign-parked",
+      snapshotDigest: snapshot,
+      occurredAt: "2026-10-26T00:00:00Z",
+      type: "finding-parked",
+      findingId: "finding-parked-2",
+      runId: "run-1",
+      category: "stored-xss",
+      reason: "declared-precondition",
+      declaredPrecondition: {
+        configurationClass: "default",
+        attackerInputPath: "vendor-controlled-data",
+        exploitTiming: "any-time",
+      },
+      artifacts: [{ kind: "finding", digest }],
+    });
     const listed = await run(
       "review",
       "parked",
@@ -3790,7 +3809,10 @@ describe("harness CLI vertical slice", () => {
     expect(listed.stdout).toContain(
       "parked  other  finding-parked-1  Throttle trusts a forwarded header",
     );
-    expect(listed.stdout).toContain("reason: outside-programme-boundary");
+    expect(listed.stdout).toContain("reason: outside-programme-boundary\n");
+    expect(listed.stdout).toContain(
+      "parked  stored-xss  finding-parked-2  Throttle trusts a forwarded header  reason: declared-precondition configurationClass=default attackerInputPath=vendor-controlled-data exploitTiming=any-time",
+    );
     expect(
       ledger().read({
         campaignId: "campaign-parked",

@@ -52,7 +52,7 @@
 | Programme Boundary | Harness が探索に付ける節で、報奨プログラムの対象内とする影響を書く。外にある impact の Finding は `finding-parked` に回す（SPEC 第 8a 節・第 8b 節）。 |
 | レビュー列 | 人間のレビューを待つ Finding の列（review queue）。対象範囲内の Finding は、検証の結果に関係なく全件が出る（SPEC 第 8 節、ADR 0031）。 |
 | 保留候補（candidate-held） | 探索 run の最終 JSON から抽出したが、正規化後も出力契約を通らない Finding / Lead 候補。分類と issue path だけを台帳に残し、本文は Private Evidence に置く。Finding でも検証対象でもない（ADR 0018）。 |
-| finding-parked | Programme Boundary 外の impact と、判別の付きにくい 5 分類の Finding。台帳と Private Evidence に残し、検証・レビュー列・funnel の raw に入れない。一覧は `review parked` で見る（ADR 0032）。 |
+| finding-parked | Programme Boundary 外の impact と、判別の付きにくい 5 分類の Finding。エージェントが申告欄で管理者の脆弱な設定、攻撃者が書けないデータ（ベンダー、サイト自身、管理者だけが書く）、時間窓か競合に頼る発火を選んだ Finding も含む（reason `declared-precondition`、ADR 0038 追記 13）。台帳と Private Evidence に残し、検証・レビュー列・funnel の raw に入れない。一覧は `review parked` で見る（ADR 0032）。 |
 | 段（cascade） | 選定の主帯（インストール数 100k–1M）が尽きたときだけ、順に試す段。順は 50k → 30k → ≥1M かつ paying class 記録 ≥2。`target-selected` に `cascadeStep` が残る（ADR 0037）。 |
 | 再開区間（segment） | 止まった Root のスレッド（理由は問わない。`completed` は除く）を、操作者が `campaign resume` で新しいサンドボックスに再開した続き。同じ Trial に数え、`resumesRun` / `resumeSegment` が記録される（ADR 0036）。 |
 | 中断した run（interrupted） | ホストの電源断などで持ち主のプロセスが死に、終了イベントが無いまま残った run。`campaign resume` が残骸を封じて `reason: interrupted` の終了イベントを追記してから再開する。死んだかどうかは、サンドボックスが書く印の boot id と pid で決める（ADR 0036 の 2026-10-19 追記 2）。再起動した `continuous run` も、新しい Trial より先に同じ経路で自動再開する（追記 3）。 |

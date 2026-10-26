@@ -27,7 +27,7 @@ export type WordPressDiscoveryMode = "deep" | "wide";
 export const WORDPRESS_DISCOVERY_MODES = ["deep", "wide"] as const;
 
 /** Generated Finding / Lead contract versions the Harness appends (ADR 0019). */
-export type WordPressOutputContractVersion = "v1" | "v2" | "v4";
+export type WordPressOutputContractVersion = "v1" | "v2" | "v4" | "v5";
 
 /**
  * The human-written parts of a discovery objective (redesign 2026-10-25 §5).
@@ -227,7 +227,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     id: "wp2shell-bounty-v11",
     digest:
       "sha256:0ce13a617484c0e0b7ff3af6a55b4b821ea106189a897ed573040e9d5ad16ae9",
-    outputContract: "v4",
+    outputContract: "v5",
     status: "current",
     mode: "deep",
     // v10 without the lifetime paragraph, the child count and the minutes;
@@ -324,7 +324,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     id: "wp2shell-bounty-v15-wide",
     digest:
       "sha256:3e82116ebdd32e4e863d7daacf7a87d90c43f6c4e73efe49333668883fcf680d",
-    outputContract: "v4",
+    outputContract: "v5",
     status: "candidate",
     mode: "wide",
     // v14-wide plus one sentence: the root agent copies the Harness `## Lab`
@@ -347,7 +347,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     id: "wp2shell-bounty-v16-wide",
     digest:
       "sha256:1ffb15f4f3f7ad6de70e330e10fd24c31513e41d250c8e0d6885b760a0a5c1f3",
-    outputContract: "v4",
+    outputContract: "v5",
     status: "current",
     mode: "wide",
     // v14-wide with one sentence of the sink strategy replaced (owner

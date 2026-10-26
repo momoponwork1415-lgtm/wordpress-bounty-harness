@@ -39,7 +39,11 @@ async function assessCorrection(options: RestoreOptions) {
     )
   )
     throw new Error("Finding was recorded before its admission park");
-  if (parked.reason !== "admin-configuration-precondition")
+  // #613: a park on the agent's declaration is the operator's to reverse, like the retired gate.
+  if (
+    parked.reason !== "admin-configuration-precondition" &&
+    parked.reason !== "declared-precondition"
+  )
     throw new Error("Programme Boundary parks cannot be restored here");
   const active = ledger
     .activeParked({ campaignId })
@@ -122,9 +126,10 @@ export async function inspectParkedWordPressFinding(options: RestoreOptions) {
 }
 
 /**
- * Restore an admission park caused by the retired configuration gate. The old
- * event and Private Evidence remain intact; the new events restore its queue
- * position. Programme Boundary parks cannot pass this operation.
+ * Restore an admission park caused by the retired configuration gate or by
+ * the agent's declared precondition (#613). The old event and Private
+ * Evidence remain intact; the new events restore its queue position.
+ * Programme Boundary parks cannot pass this operation.
  */
 export async function restoreParkedWordPressFinding(
   options: RestoreOptions,

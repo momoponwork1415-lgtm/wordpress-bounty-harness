@@ -10,6 +10,7 @@ import {
   wordPressDiscoveryOutputContract,
   wordPressDiscoveryOutputContractV2,
   wordPressDiscoveryOutputContractV4,
+  wordPressDiscoveryOutputContractV5,
 } from "../../../src/profiles/wordpress/discovery/output-contract.js";
 
 import {
@@ -235,7 +236,11 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
       expect(WORDPRESS_PROMPT_SECTIONS).toContain(path.split("/")[0]);
   });
 
-  it("pins the generated v4 contract the composed objectives receive", () => {
+  it("pins the generated v5 contract the composed objectives receive and keeps v4", () => {
+    expect(wordPressDiscoveryOutputContractV5().digest).toBe(
+      "sha256:4ead63b056590be4cbdd7f474bd79c7e301550454a7e4644d943a17bb0bd6ec4",
+    );
+    // Archived rows and earlier Trials' `contractDigest` (#613).
     expect(wordPressDiscoveryOutputContractV4().digest).toBe(
       "sha256:5acd5157fc82cb76c35490af607513a1558477c4eb03acaa046fdf0a64c99883",
     );
@@ -321,11 +326,22 @@ describe("WordPress discovery prompt assets", () => {
 
   it("renders both complete claim schemas and normalization rules in one versioned contract", () => {
     const contract = wordPressDiscoveryOutputContract();
-    const schemaLine = (label: string) =>
-      JSON.parse(contract.text.split(`${label} schema: `)[1]!.split("\n")[0]!);
+    const schemaLine = (label: string, text = contract.text) =>
+      JSON.parse(text.split(`${label} schema: `)[1]!.split("\n")[0]!);
+    // The archived contracts keep the schema before the declared fields (#613).
     expect(schemaLine("Finding")).toEqual(
-      z.toJSONSchema(wordpressFindingClaimSchema, { io: "output" }),
+      z.toJSONSchema(
+        wordpressFindingClaimSchema.omit({
+          configurationClass: true,
+          attackerInputPath: true,
+          exploitTiming: true,
+        }),
+        { io: "output" },
+      ),
     );
+    expect(
+      schemaLine("Finding", wordPressDiscoveryOutputContractV5().text),
+    ).toEqual(z.toJSONSchema(wordpressFindingClaimSchema, { io: "output" }));
     expect(schemaLine("Lead")).toEqual(
       z.toJSONSchema(wordpressLeadClaimSchema, { io: "output" }),
     );
@@ -354,6 +370,75 @@ describe("WordPress discovery prompt assets", () => {
     expect(current.text).toContain("Lead schema:");
     expect(current.digest).toBe(
       "sha256:a74a93951d790aec174c3506a6df9ae2cd391bc44bdedea7fdf8ff74d503db3d",
+    );
+  });
+
+  it("carries the three declared-precondition fields and each value's description only in v5", () => {
+    const v5 = wordPressDiscoveryOutputContractV5();
+    expect(v5.id).toBe("wordpress-discovery-contract-v5");
+    const finding = JSON.parse(
+      v5.text.split("Finding schema: ")[1]!.split("\n")[0]!,
+    ) as {
+      required: string[];
+      properties: Record<
+        string,
+        { anyOf: { const: string; description: string }[] }
+      >;
+    };
+    expect(finding.required).not.toContain("configurationClass");
+    expect(finding.required).not.toContain("attackerInputPath");
+    expect(finding.required).not.toContain("exploitTiming");
+    const values = (field: string) =>
+      finding.properties[field]!.anyOf.map((option) => option.const);
+    expect(values("configurationClass")).toEqual([
+      "default",
+      "ordinary-feature-use",
+      "admin-authored-unsafe-content",
+      "admin-setting-change",
+      "developer-mode",
+    ]);
+    expect(values("attackerInputPath")).toEqual([
+      "direct-request",
+      "own-account-data",
+      "public-third-party-content",
+      "vendor-controlled-data",
+    ]);
+    expect(values("exploitTiming")).toEqual([
+      "any-time",
+      "time-window",
+      "race",
+    ]);
+    for (const field of [
+      "configurationClass",
+      "attackerInputPath",
+      "exploitTiming",
+    ])
+      for (const option of finding.properties[field]!.anyOf)
+        expect(option.description).toMatch(/^[^\n]{10,260}$/);
+    expect(v5.text).toContain(
+      "Anyone can write it, e.g. a comment on a public social-media page, or the attacker's own blocked request kept in a WAF log.",
+    );
+    expect(v5.text).toContain(
+      "Only the service's vendor, the site itself or an administrator writes it, e.g. scanner results, a vulnerability database, a fixed vendor feed or notice, an official translation pack, an API response body, an administrator-run check's output.",
+    );
+    for (const archived of [
+      wordPressDiscoveryOutputContract(),
+      wordPressDiscoveryOutputContractV2(),
+      wordPressDiscoveryOutputContractV4(),
+    ]) {
+      expect(archived.text).not.toContain("configurationClass");
+      expect(archived.text).not.toContain("attackerInputPath");
+      expect(archived.text).not.toContain("exploitTiming");
+    }
+    // v5 is v4 with only the Finding schema line changed.
+    const withoutFinding = (text: string) =>
+      text
+        .split("\n")
+        .filter((line) => !line.startsWith("Finding schema: "))
+        .join("\n")
+        .replace(/contract-v[45]/, "contract-vN");
+    expect(withoutFinding(v5.text)).toBe(
+      withoutFinding(wordPressDiscoveryOutputContractV4().text),
     );
   });
 

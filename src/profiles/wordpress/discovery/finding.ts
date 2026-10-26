@@ -28,6 +28,131 @@ const sourceFile = z
   .transform(normalizeWordPressSourcePath)
   .pipe(relativeFile);
 
+/**
+ * #613 (ADR 0038 追記 13): the agent's own judgment of the configuration a
+ * route needs, of how the attacker's input reaches the sink and of when the
+ * attacker can trigger it. The Harness parks on the declared value alone and
+ * never derives it from wording. All three fields are optional: an omitted
+ * declaration neither holds nor parks.
+ */
+export const configurationClassSchema = z
+  .union([
+    z
+      .literal("default")
+      .describe(
+        "The route works on the plugin as installed, with no setting changed.",
+      ),
+    z
+      .literal("ordinary-feature-use")
+      .describe(
+        "An administrator uses a feature as intended, in a way a typical site may plausibly use it.",
+      ),
+    z
+      .literal("admin-authored-unsafe-content")
+      .describe(
+        "An administrator must author the unsafe thing themselves: markup, script, a field or column definition, a query condition, a template or snippet that no typical site would create.",
+      ),
+    z
+      .literal("admin-setting-change")
+      .describe(
+        "An administrator must set an option to a value that creates the vulnerability or disables a safeguard (for example turning sanitisation off), which a typical site would not choose.",
+      ),
+    z
+      .literal("developer-mode")
+      .describe(
+        "A debug, development or test mode must be on; a production site would not run it.",
+      ),
+  ])
+  .describe("The site configuration the route needs.");
+export type ConfigurationClass = z.infer<typeof configurationClassSchema>;
+
+export const attackerInputPathSchema = z
+  .union([
+    z
+      .literal("direct-request")
+      .describe("The attacker sends an HTTP request to the target site."),
+    z
+      .literal("own-account-data")
+      .describe(
+        "The attacker writes a field of their own account on the site, e.g. a profile field, a comment, a form submission.",
+      ),
+    z
+      .literal("public-third-party-content")
+      .describe(
+        "Anyone can write it, e.g. a comment on a public social-media page, or the attacker's own blocked request kept in a WAF log.",
+      ),
+    z
+      .literal("vendor-controlled-data")
+      .describe(
+        "Only the service's vendor, the site itself or an administrator writes it, e.g. scanner results, a vulnerability database, a fixed vendor feed or notice, an official translation pack, an API response body, an administrator-run check's output.",
+      ),
+  ])
+  .describe("How the attacker's input reaches the sink.");
+export type AttackerInputPath = z.infer<typeof attackerInputPathSchema>;
+
+export const exploitTimingSchema = z
+  .union([
+    z
+      .literal("any-time")
+      .describe("The attacker can trigger it whenever they choose."),
+    z
+      .literal("time-window")
+      .describe(
+        "It works only inside a window another actor opens, e.g. a transient's lifetime or a few minutes after an administrator acts.",
+      ),
+    z.literal("race").describe("It depends on two requests interleaving."),
+  ])
+  .describe("When the attacker can trigger the route.");
+export type ExploitTiming = z.infer<typeof exploitTimingSchema>;
+
+/** The declared fields; a park records each one the Finding declared. */
+export type WordPressDeclaredPrecondition = {
+  readonly configurationClass?: ConfigurationClass;
+  readonly attackerInputPath?: AttackerInputPath;
+  readonly exploitTiming?: ExploitTiming;
+};
+
+/** The declared values that park a Finding at the exit (owner, 2026-10-26). */
+const PARKED_DECLARATIONS: {
+  readonly [
+    Field in keyof WordPressDeclaredPrecondition
+  ]-?: readonly NonNullable<WordPressDeclaredPrecondition[Field]>[];
+} = {
+  configurationClass: [
+    "admin-authored-unsafe-content",
+    "admin-setting-change",
+    "developer-mode",
+  ],
+  attackerInputPath: ["vendor-controlled-data"],
+  exploitTiming: ["time-window", "race"],
+};
+
+/**
+ * The declaration a park records, when one of its values parks the Finding.
+ * Only enum values leave the Finding; an undeclared field never parks.
+ */
+export function wordPressDeclaredPreconditionPark(
+  finding: Pick<
+    WordPressFinding,
+    "configurationClass" | "attackerInputPath" | "exploitTiming"
+  >,
+): WordPressDeclaredPrecondition | undefined {
+  const { configurationClass, attackerInputPath, exploitTiming } = finding;
+  const declared = {
+    ...(configurationClass === undefined ? {} : { configurationClass }),
+    ...(attackerInputPath === undefined ? {} : { attackerInputPath }),
+    ...(exploitTiming === undefined ? {} : { exploitTiming }),
+  };
+  const parks =
+    (configurationClass !== undefined &&
+      PARKED_DECLARATIONS.configurationClass.includes(configurationClass)) ||
+    (attackerInputPath !== undefined &&
+      PARKED_DECLARATIONS.attackerInputPath.includes(attackerInputPath)) ||
+    (exploitTiming !== undefined &&
+      PARKED_DECLARATIONS.exploitTiming.includes(exploitTiming));
+  return parks ? declared : undefined;
+}
+
 export const wordpressFindingClaimSchema = z.strictObject({
   claim: z.string().min(1).max(4000),
   attackerPosition: z.enum(["unauthenticated", "subscriber", "customer"]),
@@ -60,6 +185,9 @@ export const wordpressFindingClaimSchema = z.strictObject({
     ]),
   ),
   configurationPrecondition: z.string().min(1).max(1000),
+  configurationClass: configurationClassSchema.optional(),
+  attackerInputPath: attackerInputPathSchema.optional(),
+  exploitTiming: exploitTimingSchema.optional(),
   brokenProperty: z.string().min(1).max(1000),
   sourceTrace: z
     .array(
