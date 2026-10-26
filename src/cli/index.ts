@@ -30,11 +30,12 @@ import {
   type StateDiffReader,
   type VerifierRecordReader,
 } from "../review/index.js";
-import type {
-  CampaignSummary,
-  ReverificationSummary,
-  TargetLimit,
-  VerifyNextSummary,
+import {
+  MAXIMUM_CAMPAIGN_ID_LENGTH,
+  type CampaignSummary,
+  type ReverificationSummary,
+  type TargetLimit,
+  type VerifyNextSummary,
 } from "./pipeline.js";
 import { holdDiscoverySweep } from "./continuous.js";
 import {
@@ -1052,6 +1053,11 @@ const COMMANDS: readonly Command[] = [
         throw new UsageError(
           "campaign run takes exactly one of <slug> or --all",
         );
+      // A longer id cannot be written into the ledger's per-snapshot identities (#281).
+      if ((values.campaign?.length ?? 0) > MAXIMUM_CAMPAIGN_ID_LENGTH)
+        throw new UsageError(
+          `--campaign must be at most ${MAXIMUM_CAMPAIGN_ID_LENGTH} characters`,
+        );
     },
     handler: async ({ values, rest, state, environment, io, print }) => {
       const target = rest[0] ?? null;
@@ -1099,7 +1105,9 @@ const COMMANDS: readonly Command[] = [
         );
       print(formatFunnel(state.ledger.funnel(summary.campaignId)));
       // A distinct exit code lets an unattended schedule tell a resumable stop apart.
-      return summary.stopped === undefined ? 0 : 3;
+      if (summary.stopped !== undefined) return 3;
+      // Every target skipped is a failure, not a quiet zero runs (#281).
+      return summary.targets.length === 0 ? 1 : 0;
     },
   }),
   continuousRow(
