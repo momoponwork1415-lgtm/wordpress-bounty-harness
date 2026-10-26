@@ -213,3 +213,20 @@ v8 の協調 Trial は Root 1 thread を同じ gVisor container の中で `codex
 ### 消し方
 
 この節と #512 の差分を戻す。サンドボックスはまた `finally` で印を消す。
+
+## 2026-10-27 追記: 再開 segment は Trial が記録した目的文の版で組む（#548）
+
+規則 4 は、今の campaign 設定が指す目的文の digest を元の run と比べていた。2026-10-26〜27 に wide の目的文が v14 → v16 → v17 と数時間で入れ替わると、設定を新しい版へ切り替えた後は、古い版で始まった run がすべて `prompt-version-differs` で再開できなくなる。runner の自動再開（追記 3・4）も同じ理由で拒否される。再開 segment は目的文を送り直さず、元の版の再開段落だけを送るので、今の設定の版を見る理由は無い。この追記は規則 4 の目的文の部分を改める。
+
+### 決定
+
+- 再開 segment は、元の run の `discovery-run-started` にある `configuration.promptVariant` の版を registry から読み、再開段落と Harness が組む節をその版で作る。今の設定の `promptId` は使わない。子の上限・最低時間・wall は ADR 0039 の 2026-10-26 追記 6 のとおり記録値を使う。
+- registry は archived の版も残す（ADR 0029）。記録した版が registry に無いときは、組み直せないので `prompt-version-differs`（`<版> is not in the prompt registry`）で拒否する。
+- 読んだ版の digest が記録した `promptDigest` と違うとき（registry が固定する digest が変わった場合）は、これまでどおり `prompt-version-differs` で拒否する。
+- 再開段落が無い版は、これまでどおり `resume-paragraph-missing` で拒否する。
+- 再開 segment の `discovery-run-started` は、これまでどおり元の run の `configuration`（`promptVariant`、`promptDigest`、`inputDigest` など）を写す。event の形は変えない。
+- Snapshot、runtime profile、Lab 予算の規則と、残り wall の規則（規則 6）は変えない。
+
+### 消し方
+
+この節と #548 の差分を戻す。再開はまた今の設定の `promptId` から目的文を組み、版が違えば `prompt-version-differs` で拒否する。
