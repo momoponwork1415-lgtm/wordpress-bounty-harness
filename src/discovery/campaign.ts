@@ -150,6 +150,8 @@ export async function runDiscoveryCampaign(options: {
       run: DiscoveryTransportRun,
       signal?: AbortSignal,
     ): Promise<DiscoveryTransportResult>;
+    /** Called once a run's finish is appended (#512). */
+    release?(runId: string): Promise<void>;
   };
   readonly attachments: ProviderAttachmentStore;
   readonly evidence: PrivateArtifactStore;

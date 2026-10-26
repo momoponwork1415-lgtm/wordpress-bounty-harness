@@ -2,7 +2,12 @@ import { z } from "zod";
 
 import { canonicalJson } from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
-import type { LabHandle, LabProvisioner } from "../lab/index.js";
+import {
+  provisionThrew,
+  storeLabDiagnostic,
+  type LabHandle,
+  type LabProvisioner,
+} from "../lab/index.js";
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
 import type { VerificationResultV1 } from "./reproduction-package.js";
 
@@ -335,13 +340,15 @@ export class Verification<
       }
       const provisioned = await this.#options.lab
         .provision(input.snapshot, input.setup, { purpose: "verification" })
-        .catch(() => null);
-      if (provisioned === null || provisioned.status !== "ready") {
-        const reason =
-          provisioned?.status === "incomplete" &&
-          provisioned.reason === "precondition"
-            ? "precondition"
-            : "provision";
+        .catch(provisionThrew);
+      if (provisioned.status !== "ready") {
+        const reason = provisioned.reason;
+        // The exception and next step stay in Private Evidence (#284).
+        const diagnosticDigest = await storeLabDiagnostic(
+          this.#options.store,
+          "provision",
+          provisioned,
+        );
         const failed = await this.#options.ledger.append({
           schemaVersion: 1,
           identity: `verification-lab-failed-${verificationId}`,
@@ -354,13 +361,11 @@ export class Verification<
           findingId,
           verificationId,
           reason,
+          artifacts: [{ kind: "lab-diagnostic", digest: diagnosticDigest }],
         });
         if (failed.status === "conflict")
           throw new Error("Verification Lab failure identity conflict");
-        return incomplete(
-          reason,
-          provisioned?.nextStep ?? "Provision a fresh Lab and repeat",
-        );
+        return incomplete(reason, provisioned.nextStep);
       }
       const lab = provisioned.handle;
       labSetupDigest = lab.setupDigest;

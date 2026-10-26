@@ -276,10 +276,11 @@ export async function continuousCommand(
     stateDirectory: state.stateDirectory,
     campaignPrefix: context.campaignPrefix,
     ledger: state.ledger,
-    async select() {
+    async select({ stop }) {
       const report = await profile.select(state, {
         configPath: selectionPath,
         minimum: SELECT_MINIMUM,
+        stop,
       });
       return {
         batchId: report.batchId,
@@ -297,6 +298,12 @@ export async function continuousCommand(
         configPath,
         selectionPolicyPath: selectionPath,
       }),
+    discardStaleSelection: async (campaignId) =>
+      (await profile.discardStaleSelection?.(state, {
+        campaignId,
+        configPath,
+        selectionPolicyPath: selectionPath,
+      })) ?? null,
     // Only discovery leftovers: a Lab belongs to whoever started it (`verify
     // next`, `lab up --for-review`, `lab down`), which runs beside the runner (#526).
     async cleanupLeftovers() {

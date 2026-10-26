@@ -44,7 +44,7 @@ async function fixture(
     readonly preexistingVerifications?: number;
     readonly impact?: string;
     readonly labSnapshotDigest?: string;
-    readonly provision?: "ready" | "incomplete";
+    readonly provision?: "ready" | "incomplete" | "throws";
     readonly verifier?: Verifier<SyntheticFinding, LabHandle>["attempt"];
     /** What the Harness attempt observer reports after a finished attempt. */
     readonly observer?: "recorded" | "missing-capture" | "throws";
@@ -162,6 +162,8 @@ async function fixture(
       calls.provision++;
       if (options.provision === "incomplete")
         return { status: "incomplete", reason: "provision", nextStep: "Retry" };
+      if (options.provision === "throws")
+        throw new RangeError("synthetic provision exception");
       return {
         status: "ready",
         handle: { ...handle, id: `lab-${calls.provision}` },
@@ -489,6 +491,34 @@ describe("verification public interface", () => {
     const { result, calls } = await fixture({ provision: "incomplete" });
     expect(result).toMatchObject({ status: "incomplete", reason: "provision" });
     expect(calls.verifier).toBe(0);
+  });
+
+  it("keeps a thrown provision exception in a lab-diagnostic artifact (#284)", async () => {
+    const { result, calls, ledger, store } = await fixture({
+      provision: "throws",
+    });
+    expect(result).toMatchObject({ status: "incomplete", reason: "provision" });
+    expect(calls.verifier).toBe(0);
+    const failed = ledger.read({ type: "verification-lab-failed" })[0]?.event;
+    expect(failed).toMatchObject({
+      reason: "provision",
+      artifacts: [{ kind: "lab-diagnostic" }],
+    });
+    const file = await store.readFile(
+      failed!.artifacts[0]!.digest,
+      "lab-diagnostic.json",
+      1024 * 1024,
+    );
+    if (file.status !== "resolved") throw new Error(file.status);
+    expect(JSON.parse(file.bytes.toString("utf8"))).toEqual({
+      failureStage: "provision",
+      reason: "provision",
+      nextStep: "Read the Lab diagnostic, then provision a fresh Lab",
+      exception: {
+        className: "RangeError",
+        message: "synthetic provision exception",
+      },
+    });
   });
 
   it("maps a Verifier failure to incomplete recipe and still tears down", async () => {

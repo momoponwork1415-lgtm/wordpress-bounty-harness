@@ -7,6 +7,10 @@ import { isIP } from "node:net";
 import { z } from "zod";
 
 import { canonicalDigest } from "../infrastructure/canonical-json.js";
+import {
+  recordDiscoveryOwner,
+  type OwnerRecord,
+} from "../infrastructure/lab-owner-record.js";
 import { claudeModelSchema } from "./agent-runtime-profile.js";
 import { createGrantTls } from "./grant-tls.js";
 import type { ProviderApiProtocol } from "./provider-credential-proxy.js";
@@ -270,6 +274,8 @@ export interface ProviderCredentialEgressBrokerOptions {
     args: readonly string[],
     timeoutMs: number,
   ) => Promise<DockerCommandResult>;
+  /** Host-wide discovery owner records; tests isolate it (#550). */
+  readonly ownerDirectory?: string;
 }
 
 const BROKER_ALIAS = "provider-egress";
@@ -497,6 +503,18 @@ export function createProviderCredentialEgressBroker(
       };
       let networkCreated = false;
       let brokerCreated = false;
+      /** Recorded before each resource exists, released after its removal (#550). */
+      const owners: OwnerRecord[] = [];
+      const recordOwner = async (resource: string) => {
+        owners.push(
+          await recordDiscoveryOwner({
+            resource,
+            ...(options.ownerDirectory === undefined
+              ? {}
+              : { directory: options.ownerDirectory }),
+          }),
+        );
+      };
       let proxyMetrics: ProviderCredentialEgressReceipt["metrics"];
       let stagingDirectory: string | undefined;
       let secrets: readonly string[] = [];
@@ -667,6 +685,8 @@ export function createProviderCredentialEgressBroker(
           signal?.aborted
             ? Promise.resolve({ exitCode: -1, stdout: "", stderr: "" })
             : dockerCommand(args, timeoutMs);
+        if (request.agentNetworkName === undefined)
+          await recordOwner(networkName);
         const network = await executeDocker(
           request.agentNetworkName === undefined
             ? ["network", "create", "--internal", networkName]
@@ -686,6 +706,7 @@ export function createProviderCredentialEgressBroker(
             stage: "broker-start",
             reason: "broker-container-unavailable",
           };
+          await recordOwner(containerName);
           const broker = await executeDocker(
             [
               "create",
@@ -905,6 +926,9 @@ export function createProviderCredentialEgressBroker(
             failedSteps.push("network-remove");
           }
         }
+        // A resource its owner failed to remove is left to the next sweep.
+        for (const owner of owners)
+          await owner.release().catch(() => undefined);
         if (stagingDirectory !== undefined) {
           try {
             await rm(stagingDirectory, { recursive: true, force: true });

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { runInNewContext } from "node:vm";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,15 +10,23 @@ import { afterEach, describe, expect, it } from "vitest";
 import { measureCanonicalSourceTree } from "../../../src/infrastructure/canonical-source-tree.js";
 import { canonicalDigest } from "../../../src/infrastructure/canonical-json.js";
 import {
+  readDiscoveryOwners,
   readLabOwners,
+  recordDiscoveryOwner,
   recordLabOwner,
 } from "../../../src/infrastructure/lab-owner-record.js";
 import {
   openWordPressLab,
+  wordpressExplorationObserveSchema,
   type DockerRequest,
   type WordPressLabHandle,
   type WordPressVictimRoute,
 } from "../../../src/profiles/wordpress/lab/index.js";
+import {
+  MAX_VICTIM_FILE_BYTES,
+  victimFile,
+  WORDPRESS_VICTIM_FILE_FIXTURES,
+} from "../../../src/profiles/wordpress/lab/victim-files.js";
 import type { Snapshot } from "../../../src/snapshot/index.js";
 import {
   wordPressScenario,
@@ -911,6 +919,86 @@ describe("WordPress gVisor Lab", () => {
       await chmod(ownerDirectory, 0o755);
     }
     expect(existsSync(deadRecord)).toBe(true);
+  });
+
+  it("never names a discovery resource whose owner lives, whichever state directory started it (#550)", async () => {
+    const { lab, docker, ownerDirectory } = await fixture();
+    // Host-wide: the sibling of the Lab owner records, not a state directory.
+    const directory = join(dirname(ownerDirectory), "discovery-owners");
+    const [foreign, dead, own] = [randomUUID(), randomUUID(), randomUUID()];
+    // A live process (another runner's, standing in) owns these three.
+    const records = await Promise.all(
+      [
+        `codex-agent-${foreign}`,
+        `provider-egress-broker-${foreign}`,
+        `provider-egress-${foreign}`,
+      ].map((resource) => recordDiscoveryOwner({ resource, directory })),
+    );
+    // A runner killed on an earlier boot left these behind with their records.
+    for (const resource of [`claude-agent-${dead}`, `provider-egress-${dead}`])
+      await writeFile(
+        join(directory, `${resource}.json`),
+        JSON.stringify({
+          schemaVersion: 1,
+          resource,
+          owner: { pid: 1, bootId: "previous-boot", startTicks: "1" },
+        }),
+      );
+    for (const id of [foreign, dead, own]) {
+      docker.containers.add(`codex-agent-${id}`);
+      docker.networks.add(`provider-egress-${id}`);
+    }
+    docker.containers.add(`provider-egress-broker-${foreign}`);
+    docker.containers.add(`claude-agent-${dead}`);
+    const patterns = {
+      containers: [
+        /^codex-agent-/,
+        /^claude-agent-/,
+        /^provider-egress-broker-/,
+      ],
+      networks: [/^provider-egress-(?!broker-)/],
+    };
+    const expected = {
+      containers: [
+        `codex-agent-${dead}`,
+        `codex-agent-${own}`,
+        `claude-agent-${dead}`,
+      ],
+      networks: [`provider-egress-${dead}`, `provider-egress-${own}`],
+      volumes: [],
+    };
+    // Listing (`lab cleanup` without --remove) leaves the live owner out too.
+    expect(
+      await lab.cleanupLeftovers({ remove: false, labs: false, patterns }),
+    ).toEqual(expected);
+    expect(
+      await lab.cleanupLeftovers({ remove: true, labs: false, patterns }),
+    ).toEqual(expected);
+    expect([...docker.containers].sort()).toEqual(
+      [`codex-agent-${foreign}`, `provider-egress-broker-${foreign}`].sort(),
+    );
+    expect([...docker.networks]).toEqual([`provider-egress-${foreign}`]);
+    // Dead records go with their resources; the live owner keeps its own.
+    expect(await readDiscoveryOwners(directory)).toEqual({
+      live: new Set([
+        `codex-agent-${foreign}`,
+        `provider-egress-broker-${foreign}`,
+        `provider-egress-${foreign}`,
+      ]),
+      dead: new Set(),
+    });
+    // Once that owner releases (or dies), the next sweep removes what is left.
+    await Promise.all(records.map((record) => record.release()));
+    expect(
+      await lab.cleanupLeftovers({ remove: true, labs: false, patterns }),
+    ).toEqual({
+      containers: [
+        `codex-agent-${foreign}`,
+        `provider-egress-broker-${foreign}`,
+      ],
+      networks: [`provider-egress-${foreign}`],
+      volumes: [],
+    });
   });
 
   it("pins ordinary scenarios and seeds translation data with an approved comment", async () => {
@@ -2490,6 +2578,220 @@ describe("WordPress gVisor Lab", () => {
     expect(await runPopupVisit({ url: "about:blank", extraPopup: true })).toBe(
       "Unobserved victim popup opened",
     );
+  });
+
+  it("puts only a Harness-owned fixture into the victim's file input and records its digest (#468)", async () => {
+    for (const name of WORDPRESS_VICTIM_FILE_FIXTURES) {
+      const file = victimFile(name);
+      expect(file.bytes.length).toBeGreaterThan(0);
+      expect(file.bytes.length).toBeLessThanOrEqual(MAX_VICTIM_FILE_BYTES);
+    }
+    expect(victimFile("image-png").bytes.subarray(0, 8).toString("hex")).toBe(
+      "89504e470d0a1a0a",
+    );
+    expect(victimFile("image-jpeg").bytes.subarray(0, 3).toString("hex")).toBe(
+      "ffd8ff",
+    );
+
+    const { lab, snapshot, setup, commands, database } = await fixture();
+    const provisioned = await lab.provision(snapshot, setup, {
+      purpose: "verification",
+    });
+    if (provisioned.status !== "ready") throw new Error("not ready");
+    const { handle } = provisioned;
+    const png = victimFile("image-png", "original-name.PNG");
+    const route: WordPressVictimRoute = {
+      role: "administrator",
+      paths: [
+        "/wp-admin/upload.php",
+        {
+          path: "/wp-admin/upload.php?page=fixture",
+          actions: [
+            {
+              kind: "set-file",
+              selector: "#userfile",
+              fixture: "image-png",
+              fileName: "original-name.PNG",
+            },
+            { kind: "click", selector: "#submit" },
+          ],
+        },
+      ],
+    };
+    const supplied = [
+      {
+        visitIndex: 1,
+        actionIndex: 0,
+        fixture: "image-png",
+        fileName: "original-name.PNG",
+        size: png.bytes.length,
+        sha256: png.sha256,
+      },
+    ];
+    expect(await lab.observeVictimPages(handle, route)).toEqual({
+      status: "observed",
+      victimRole: "administrator",
+      screenshot: expect.any(Buffer),
+      victimBrowserDiagnostic: browserDiagnostic,
+      files: supplied,
+    });
+    const visit = commands.find((command) =>
+      command.args.includes("WBH_VISIT_PATH=/wp-admin/upload.php?page=fixture"),
+    );
+    const sent = visit?.args
+      .find((arg) => arg.startsWith("WBH_VISIT_ACTIONS="))
+      ?.slice("WBH_VISIT_ACTIONS=".length);
+    // The browser receives the fixture's bytes, resolved by the Harness.
+    expect(JSON.parse(sent ?? "null")).toEqual([
+      {
+        kind: "set-file",
+        selector: "#userfile",
+        file: {
+          name: "original-name.PNG",
+          mimeType: "image/png",
+          base64: png.bytes.toString("base64"),
+        },
+      },
+      { kind: "click", selector: "#submit" },
+    ]);
+
+    database.browserFailureAt = "/wp-admin/upload.php?page=fixture";
+    database.browserFailureMessage = "Victim action file failed";
+    expect(await lab.observeVictimPages(handle, route)).toEqual({
+      status: "unavailable",
+      phase: "victim-page",
+      failureCode: "victim-action-file",
+      privateDiagnostic: Buffer.from("Victim action file failed"),
+      files: supplied,
+    });
+    database.browserFailureAt = null;
+
+    // A route names a fixture: it cannot bring bytes, another fixture, or
+    // a name with another extension.
+    for (const action of [
+      {
+        kind: "set-file",
+        selector: "#userfile",
+        fixture: "image-png",
+        base64: "PD9waHAgZWNobyAxOw==",
+      },
+      { kind: "set-file", selector: "#userfile", fixture: "php-script" },
+      {
+        kind: "set-file",
+        selector: "#userfile",
+        fixture: "image-png",
+        fileName: "shell.php",
+      },
+      {
+        kind: "set-file",
+        selector: "#userfile",
+        fixture: "text-plain",
+        fileName: ".htaccess",
+      },
+    ])
+      expect(
+        await lab.observeVictimPages(handle, {
+          role: "administrator",
+          paths: [{ path: "/wp-admin/", actions: [action] }],
+        } as unknown as WordPressVictimRoute),
+      ).toEqual({ status: "unavailable", phase: "victim-input" });
+    // The exploration Lab's /observe keeps the page actions only.
+    expect(
+      wordpressExplorationObserveSchema.safeParse({
+        role: "administrator",
+        path: "/wp-admin/",
+        actions: [
+          { kind: "set-file", selector: "#userfile", fixture: "image-png" },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(await lab.teardown(handle)).toEqual({ status: "removed" });
+
+    // The visit script hands the bytes to the file input, which may be hidden.
+    const script = visit?.args[visit.args.indexOf("-e") + 1];
+    if (script === undefined || sent === undefined)
+      throw new Error("Browser visit script missing");
+    const runFileVisit = async (input: {
+      attached: boolean;
+      rejects?: boolean;
+    }) => {
+      let finish: (result: string) => void = () => {};
+      const completed = new Promise<string>((resolve) => {
+        finish = resolve;
+      });
+      const waited: string[] = [];
+      const given: unknown[] = [];
+      const clicked: string[] = [];
+      const locator = (selector: string) => ({
+        waitFor: async (options: { state: string }) => {
+          waited.push(options.state);
+          if (!input.attached) throw new Error("Timeout");
+        },
+        count: async () => (input.attached ? 1 : 0),
+        evaluate: async () => false,
+        setInputFiles: async (files: unknown) => {
+          if (input.rejects) throw new Error("Not a file input");
+          given.push(files);
+        },
+        click: async () => {
+          clicked.push(selector);
+        },
+      });
+      const main = {
+        on() {},
+        context: () => ({ on() {} }),
+        goto: async () => null,
+        url: () => "http://wordpress/wp-admin/upload.php",
+        evaluate: async () => "",
+        locator,
+        waitForEvent: () => Promise.reject(new Error("Timeout")),
+        waitForLoadState: async () => {},
+        waitForTimeout: async () => {},
+        isClosed: () => false,
+        screenshot: async () => Buffer.from("89504e470d0a1a0a", "hex"),
+      };
+      runInNewContext(script, {
+        require: () => ({
+          chromium: {
+            launch: async () => ({
+              newPage: async () => main,
+              close: async () => {},
+            }),
+          },
+        }),
+        process: {
+          env: {
+            WBH_VISIT_PATH: "/wp-admin/upload.php?page=fixture",
+            WBH_VISIT_ACTIONS: sent,
+          },
+          stdout: { write: () => finish("observed") },
+          exitCode: 0,
+        },
+        console: { error: (message: unknown) => finish(String(message)) },
+        Buffer,
+        URL,
+      });
+      return { output: await completed, waited, given, clicked };
+    };
+    const filled = await runFileVisit({ attached: true });
+    expect(filled.output).toBe("observed");
+    expect(filled.waited).toEqual(["attached", "visible"]);
+    expect(filled.given).toEqual([
+      { name: "original-name.PNG", mimeType: "image/png", buffer: png.bytes },
+    ]);
+    expect(filled.clicked).toEqual(["#submit"]);
+    expect((await runFileVisit({ attached: true, rejects: true })).output).toBe(
+      "Victim action file failed",
+    );
+    const missing = (await runFileVisit({ attached: false })).output;
+    expect(missing.startsWith("Victim action not visible {")).toBe(true);
+    expect(
+      JSON.parse(missing.slice("Victim action not visible ".length)),
+    ).toMatchObject({
+      check: "action-attached",
+      kind: "set-file",
+      selector: "#userfile",
+    });
   });
 
   it("does not start target containers when source differs from its snapshot", async () => {

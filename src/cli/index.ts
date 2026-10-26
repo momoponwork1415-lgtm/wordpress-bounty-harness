@@ -30,11 +30,12 @@ import {
   type StateDiffReader,
   type VerifierRecordReader,
 } from "../review/index.js";
-import type {
-  CampaignSummary,
-  ReverificationSummary,
-  TargetLimit,
-  VerifyNextSummary,
+import {
+  MAXIMUM_CAMPAIGN_ID_LENGTH,
+  type CampaignSummary,
+  type ReverificationSummary,
+  type TargetLimit,
+  type VerifyNextSummary,
 } from "./pipeline.js";
 import { holdDiscoverySweep } from "./continuous.js";
 import {
@@ -195,8 +196,24 @@ export interface CliProfile {
       readonly configPath: string;
       /** Fewest frozen targets that make a batch; fewer selects nothing. */
       readonly minimum?: number;
+      /** The runner's stop request; true before recording selects nothing (#302). */
+      readonly stop?: () => boolean;
     },
   ): Promise<CliSelectionReport>;
+  /**
+   * The runner only, before it continues a campaign after a restart: when the
+   * campaign's selection batch was frozen under another policy, record that it
+   * is discarded and return its id; null when the batch can run (#302).
+   */
+  discardStaleSelection?(
+    state: CliState,
+    input: {
+      readonly campaignId: string;
+      readonly configPath: string;
+      /** Replaces the campaign config's selection policy path in process. */
+      readonly selectionPolicyPath?: string;
+    },
+  ): Promise<string | null>;
   runCampaign(
     state: CliState,
     input: {
@@ -319,6 +336,19 @@ export interface CliProfile {
       readonly snapshotCampaignId?: string;
     },
   ): Promise<ReverificationSummary>;
+  /**
+   * #529: returns a Finding parked by a retired admission rule to the queues;
+   * the profile refuses Programme Boundary and verification parks.
+   */
+  restoreParked?(
+    state: CliState,
+    input: {
+      readonly campaignId: string;
+      readonly findingId: string;
+      readonly restoredBy: string;
+      readonly reason: string;
+    },
+  ): Promise<{ readonly status: "restored" | "already-restored" }>;
   /** Summarizes the profile's Lab state diff artifact for `review export` (#186). */
   stateDiffReader(state: CliState): StateDiffReader;
   /** Reads the profile's HTTP evidence record for `review export`; names of its files stay in the profile. */
@@ -1052,6 +1082,11 @@ const COMMANDS: readonly Command[] = [
         throw new UsageError(
           "campaign run takes exactly one of <slug> or --all",
         );
+      // A longer id cannot be written into the ledger's per-snapshot identities (#281).
+      if ((values.campaign?.length ?? 0) > MAXIMUM_CAMPAIGN_ID_LENGTH)
+        throw new UsageError(
+          `--campaign must be at most ${MAXIMUM_CAMPAIGN_ID_LENGTH} characters`,
+        );
     },
     handler: async ({ values, rest, state, environment, io, print }) => {
       const target = rest[0] ?? null;
@@ -1085,9 +1120,16 @@ const COMMANDS: readonly Command[] = [
         return 0;
       }
       for (const target of summary.targets) {
+        const failure = target.labFailure;
         io.stdout(
-          `${target.targetId} ${target.version}  snapshot ${target.snapshotDigest}  lab ${target.lab}  runs ${target.runCount}  stopped by ${target.stoppedBy}`,
+          `${target.targetId} ${target.version}  snapshot ${target.snapshotDigest}  lab ${target.lab}  runs ${target.runCount}  stopped by ${target.stoppedBy}${
+            failure === undefined
+              ? ""
+              : `  failed at ${failure.failureStage} (${failure.reason})  diagnostic ${failure.diagnosticDigest.slice("sha256:".length, "sha256:".length + 12)}`
+          }`,
         );
+        if (failure !== undefined)
+          io.stdout(`  next step: ${failure.nextStep}`);
         for (const verification of target.verifications)
           io.stdout(
             `  finding ${verification.findingId}: ${verification.status}`,
@@ -1099,7 +1141,13 @@ const COMMANDS: readonly Command[] = [
         );
       print(formatFunnel(state.ledger.funnel(summary.campaignId)));
       // A distinct exit code lets an unattended schedule tell a resumable stop apart.
-      return summary.stopped === undefined ? 0 : 3;
+      if (summary.stopped !== undefined) return 3;
+      // Every target skipped (#281) or a Lab that could not be set up (#284)
+      // is a failure, not a quiet zero.
+      return summary.targets.length === 0 ||
+        summary.targets.some((target) => target.stoppedBy === "setup-failed")
+        ? 1
+        : 0;
     },
   }),
   continuousRow(
@@ -1178,6 +1226,33 @@ const COMMANDS: readonly Command[] = [
           `parked  ${event.category}  ${event.findingId}  ${property}  reason: ${event.reason}`,
         ]);
       }
+      return 0;
+    },
+  }),
+  command({
+    name: "review restore",
+    required: ["campaign", "finding", "reason"],
+    usage: [
+      "review restore --campaign <id> --finding <id> --reason <text> [--by <name>]",
+    ],
+    options: { campaign: STR, finding: STR, reason: STR, by: STR },
+    handler: async ({ values, state, environment, print }) => {
+      // #529 (ADR 0038 追記 8): append-only restore of a retired admission park.
+      const restore = environment.profile.restoreParked;
+      if (restore === undefined)
+        throw new UsageError("This profile cannot restore parked Findings");
+      const reason = required(values.reason, "reason").trim();
+      if (reason === "") throw new UsageError("--reason must not be empty");
+      const findingId = required(values.finding, "finding");
+      const result = await restore(state, {
+        campaignId: required(values.campaign, "campaign"),
+        findingId,
+        restoredBy: values.by ?? "operator",
+        reason,
+      });
+      if (result.status === "already-restored")
+        throw new Error(`Finding ${findingId} is already restored`);
+      print([`restored finding ${findingId} to the review queue`]);
       return 0;
     },
   }),

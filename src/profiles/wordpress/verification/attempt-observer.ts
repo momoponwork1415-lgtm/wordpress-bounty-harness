@@ -116,6 +116,9 @@ export function createWordPressAttemptObserver(options: {
                   status: "visit-failed",
                   phase: browser.phase,
                   failureCode: browser.failureCode ?? "browser-visit",
+                  ...(browser.files === undefined
+                    ? {}
+                    : { files: browser.files }),
                 }),
                 ...(browser.privateDiagnostic === undefined
                   ? {}
@@ -146,6 +149,9 @@ export function createWordPressAttemptObserver(options: {
                           event: browser.dialog.event,
                         },
                       }),
+                  ...(browser.files === undefined
+                    ? {}
+                    : { files: browser.files }),
                 }),
                 ...(browser.dialog === undefined
                   ? {}

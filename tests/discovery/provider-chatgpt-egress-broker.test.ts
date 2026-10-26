@@ -74,6 +74,7 @@ async function setup(file: string) {
     credentialFilePath,
     credentialKind: "chatgpt-login",
     scratchRootDirectory: root,
+    ownerDirectory: join(root, "discovery-owners"),
     proxyBundleDirectory,
     clock: () => now,
     resolveProviderAddresses: async (hostname) =>

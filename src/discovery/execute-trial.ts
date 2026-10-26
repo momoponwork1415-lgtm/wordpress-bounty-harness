@@ -58,6 +58,11 @@ export type TrialContext = {
       run: DiscoveryTransportRun,
       signal?: AbortSignal,
     ): Promise<DiscoveryTransportResult>;
+    /**
+     * Removes what the run kept for ADR 0036 recovery; called only after its
+     * finish is appended, so a crash before that leaves it in place (#512).
+     */
+    release?(runId: string): Promise<void>;
   };
   readonly attachments: ProviderAttachmentStore;
   readonly evidence: PrivateArtifactStore;
@@ -338,8 +343,10 @@ export async function executeTrial(
     receiptOnSilence: syntheticReceipt,
   });
   await context.lab?.open();
+  let execution: Promise<DiscoveryTransportResult> | undefined;
+  let silent = false;
   try {
-    const execution = context.executor.execute(
+    execution = context.executor.execute(
       {
         ...run,
         campaignInput: {
@@ -350,7 +357,13 @@ export async function executeTrial(
       },
       cancellation.signal,
     );
-    const result = await Promise.race([execution, cancellation.fallback]);
+    const result = await Promise.race([
+      execution,
+      cancellation.fallback.then((fallback) => {
+        silent = true;
+        return fallback;
+      }),
+    ]);
     cancellation.disarmWall();
     if (result.researchArtifact !== undefined) {
       if (result.researchArtifact.attachment.kind !== "research")
@@ -468,6 +481,15 @@ export async function executeTrial(
   const finished = await context.ledger.append(
     finishedEventFrom(base, outcome),
   );
+  // The finish is recorded: the run no longer needs its marker. A transport
+  // that has not answered yet releases once it does.
+  if (execution !== undefined) {
+    const release = async () => {
+      await context.executor.release?.(run.runId);
+    };
+    const released = execution.then(release, release).catch(() => undefined);
+    if (!silent) await released;
+  }
   if (finished.status === "conflict")
     throw new Error("Discovery finish identity conflict");
   return outcome;

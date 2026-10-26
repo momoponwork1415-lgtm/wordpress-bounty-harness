@@ -287,6 +287,8 @@ export interface WordPressCampaignBoundaries {
       run: DiscoveryTransportRun,
       startedAt: string,
     ): Promise<InterruptedRunRecovery>;
+    /** Removes a run's marker and directories once its finish is appended (#512). */
+    release?(runId: string): Promise<void>;
   };
   /** The Claude discovery runtime, present when the host configures it and the campaign's share uses it. */
   readonly claude?: {

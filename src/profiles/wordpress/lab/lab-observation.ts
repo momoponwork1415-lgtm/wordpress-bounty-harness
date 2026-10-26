@@ -11,10 +11,16 @@ import type {
   WordPressDialogEvent,
   WordPressLabHandle,
   WordPressVictimBrowserDiagnostic,
+  WordPressVictimFileRecord,
   WordPressVictimPagesFailureCode,
   WordPressVictimPagesObservation,
 } from "./contract.js";
 import type { WordPressLabSession } from "./lab-session.js";
+import {
+  victimFile,
+  victimFileNameFits,
+  WORDPRESS_VICTIM_FILE_FIXTURES,
+} from "./victim-files.js";
 
 /**
  * Observations the Lab makes about itself. Every function takes the active
@@ -211,7 +217,7 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
       ? await settle(tab.getByText(action.text, { exact: false }).count())
       : undefined;
     return {
-      check: "action-visible",
+      check: action.kind === "set-file" ? "action-attached" : "action-visible",
       actionIndex,
       kind: action.kind,
       ...(action.kind === "click-text"
@@ -249,7 +255,9 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
     const target = action.kind === "click-text"
       ? visiblePage.getByText(action.text, { exact: action.exact })
       : visiblePage.locator(action.selector);
-    const visible = await target.waitFor({ state: "visible", timeout: 10000 })
+    // A file input is often hidden behind its label, so it need only exist.
+    const state = action.kind === "set-file" ? "attached" : "visible";
+    const visible = await target.waitFor({ state, timeout: 10000 })
       .then(() => true, () => false);
     if (!visible)
       fail("Victim action not visible",
@@ -261,6 +269,17 @@ const BROWSER_VISIT = `const { chromium } = require("playwright");
         actionIndex,
         matchCount,
       });
+    if (action.kind === "set-file") {
+      // The bytes are the Harness fixture the TypeScript side resolved (#468).
+      await target.setInputFiles({
+        name: action.file.name,
+        mimeType: action.file.mimeType,
+        buffer: Buffer.from(action.file.base64, "base64"),
+      }, { timeout: 10000 }).catch(() => {
+        throw new Error("Victim action file failed");
+      });
+      continue;
+    }
     const opener = visiblePage;
     const expectsPopup = await target.evaluate((element) => {
       const carriers = [
@@ -400,14 +419,15 @@ export const wordpressVisitPathSchema = z
   .string()
   .max(2048)
   .regex(/^\/(?!\/)[^\s\0\\]*$/);
-export const wordpressVictimActionSchema = z.discriminatedUnion("kind", [
+const victimSelectorSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(/^[#.a-zA-Z0-9_ \[\]="'():>+~*,-]+$/);
+const victimPageActionSchemas = [
   z.strictObject({
     kind: z.literal("click"),
-    selector: z
-      .string()
-      .min(1)
-      .max(200)
-      .regex(/^[#.a-zA-Z0-9_ \[\]="'():>+~*,-]+$/),
+    selector: victimSelectorSchema,
   }),
   z.strictObject({
     kind: z.literal("click-text"),
@@ -416,19 +436,44 @@ export const wordpressVictimActionSchema = z.discriminatedUnion("kind", [
   }),
   z.strictObject({
     kind: z.literal("fill"),
-    selector: z
-      .string()
-      .min(1)
-      .max(200)
-      .regex(/^[#.a-zA-Z0-9_ \[\]="'():>+~*,-]+$/),
+    selector: victimSelectorSchema,
     value: z.string().min(1).max(120),
   }),
+] as const;
+export const wordpressVictimActionSchema = z.discriminatedUnion("kind", [
+  ...victimPageActionSchemas,
+]);
+/**
+ * The victim's file input gets a Harness-owned fixture (#468): the route names
+ * the fixture and, optionally, the file name with the fixture's extension;
+ * the bytes never come from the route.
+ */
+const victimFileActionSchema = z
+  .strictObject({
+    kind: z.literal("set-file"),
+    selector: victimSelectorSchema,
+    fixture: z.enum(WORDPRESS_VICTIM_FILE_FIXTURES),
+    fileName: z
+      .string()
+      .regex(/^[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}$/)
+      .optional(),
+  })
+  .refine(
+    (action) =>
+      action.fileName === undefined ||
+      victimFileNameFits(action.fixture, action.fileName),
+    { path: ["fileName"], message: "The extension must be the fixture's" },
+  );
+/** Victim visits only; the exploration Lab's `/observe` keeps the page actions. */
+const victimRouteActionSchema = z.discriminatedUnion("kind", [
+  ...victimPageActionSchemas,
+  victimFileActionSchema,
 ]);
 const victimVisitSchema = z.union([
   wordpressVisitPathSchema,
   z.strictObject({
     path: wordpressVisitPathSchema,
-    actions: z.array(wordpressVictimActionSchema).min(1).max(5),
+    actions: z.array(victimRouteActionSchema).min(1).max(5),
   }),
 ]);
 export const wordpressVictimRouteSchema = z.strictObject({
@@ -441,7 +486,48 @@ export const wordpressVictimRouteSchema = z.strictObject({
     .optional(),
 });
 export type WordPressVictimRoute = z.infer<typeof wordpressVictimRouteSchema>;
-type VictimActions = readonly z.infer<typeof wordpressVictimActionSchema>[];
+type VictimActions = readonly z.infer<typeof victimRouteActionSchema>[];
+
+/** The actions as the browser receives them, with each fixture's bytes. */
+function browserActions(actions: VictimActions): unknown[] {
+  return actions.map((action) => {
+    if (action.kind !== "set-file") return action;
+    const file = victimFile(action.fixture, action.fileName);
+    return {
+      kind: action.kind,
+      selector: action.selector,
+      file: {
+        name: file.name,
+        mimeType: file.mimeType,
+        base64: file.bytes.toString("base64"),
+      },
+    };
+  });
+}
+
+/** Which fixture file each `set-file` action supplies, by digest. */
+function suppliedFiles(
+  paths: WordPressVictimRoute["paths"],
+): WordPressVictimFileRecord[] {
+  return paths.flatMap((visit, visitIndex) =>
+    typeof visit === "string"
+      ? []
+      : visit.actions.flatMap((action, actionIndex) => {
+          if (action.kind !== "set-file") return [];
+          const file = victimFile(action.fixture, action.fileName);
+          return [
+            {
+              visitIndex,
+              actionIndex,
+              fixture: action.fixture,
+              fileName: file.name,
+              size: file.bytes.length,
+              sha256: file.sha256,
+            },
+          ];
+        }),
+  );
+}
 
 /** True when the observer's own input carries the marker, however it was encoded. */
 function observerInputCarriesMarker(value: unknown, marker: string): boolean {
@@ -639,7 +725,7 @@ async function runBrowserVisit(input: {
       "--env",
       `WBH_VISIT_PATH=${path}`,
       "--env",
-      `WBH_VISIT_ACTIONS=${JSON.stringify(actions ?? [])}`,
+      `WBH_VISIT_ACTIONS=${JSON.stringify(browserActions(actions ?? []))}`,
       ...(input.dialogMarker === undefined
         ? []
         : ["--env", `WBH_DIALOG_MARKER=${input.dialogMarker}`]),
@@ -666,6 +752,7 @@ async function runBrowserVisit(input: {
       ],
       ["Victim action click failed", "victim-action-click"],
       ["Victim action fill failed", "victim-action-fill"],
+      ["Victim action file failed", "victim-action-file"],
       ["Expected victim popup did not open", "victim-popup"],
       ["Victim navigation left the Lab origin", "victim-navigation"],
       ["Victim action left the Lab origin", "victim-navigation"],
@@ -896,6 +983,8 @@ export async function observeVictimPages(
       phase: "victim-input",
       failureCode: "observer-marker-input",
     };
+  const supplied = suppliedFiles(paths);
+  const files = supplied.length === 0 ? {} : { files: supplied };
   try {
     let screenshot: Buffer | undefined;
     let victimBrowserDiagnostic: WordPressVictimBrowserDiagnostic | undefined;
@@ -947,11 +1036,13 @@ export async function observeVictimPages(
         ? {}
         : { victimBrowserDiagnostic }),
       ...(dialog === undefined ? {} : { dialog }),
+      ...files,
     };
   } catch (error) {
     return {
       status: "unavailable",
       phase: "victim-page",
+      ...files,
       failureCode:
         error instanceof BrowserVisitFailure
           ? error.failureCode

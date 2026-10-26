@@ -374,6 +374,8 @@ export interface CodexSandbox {
   ): Promise<CodexSandboxResult>;
   /** Reads back the directories of a run whose marker names `runId`. */
   leftover?(runId: string): Promise<CodexSandboxLeftover>;
+  /** Removes what a marked run of this process left, once its finish is recorded (#512). */
+  release?(runId: string): Promise<void>;
 }
 /** `recoverInterrupted`: the leftover sealed as an `interrupted` result, or why not. */
 export type InterruptedRunRecovery =
@@ -726,6 +728,12 @@ type ChildRollout = {
   readonly finalMessage: string | undefined;
   /** Each completed turn's final message, in order; a Root follow-up starts a new turn. */
   readonly turnMessages: readonly string[];
+  /** How the last turn ended: a provider error, an abort (the Root's segment stopped), or a reply (#540). */
+  readonly lastTurnEnd:
+    | { readonly kind: "provider"; readonly detail: string }
+    | { readonly kind: "aborted" }
+    | { readonly kind: "replied" }
+    | undefined;
   readonly startedAt: string;
   readonly completedAt: string;
   readonly captureTruncated: boolean;
@@ -744,6 +752,7 @@ function decodeChildRollout(
   let usage: z.infer<typeof usageSchema> | undefined;
   let finalMessage: string | undefined;
   const turnMessages: string[] = [];
+  let lastTurnEnd: ChildRollout["lastTurnEnd"];
   let startedAt: string | undefined;
   let completedAt: string | undefined;
   let captureTruncated = false;
@@ -806,7 +815,14 @@ function decodeChildRollout(
           finalMessage = payload.last_agent_message;
           turnMessages.push(payload.last_agent_message);
         }
+        const error = object(payload.error);
+        lastTurnEnd =
+          error === undefined
+            ? { kind: "replied" }
+            : { kind: "provider", detail: childProviderErrorDetail(error) };
         if (typeof event.timestamp === "string") completedAt = event.timestamp;
+      } else if (payload?.type === "turn_aborted") {
+        lastTurnEnd = { kind: "aborted" };
       }
     }
   }
@@ -822,10 +838,22 @@ function decodeChildRollout(
     commands,
     finalMessage,
     turnMessages,
+    lastTurnEnd,
     startedAt: startedAt ?? new Date(0).toISOString(),
     completedAt: completedAt ?? startedAt ?? new Date(0).toISOString(),
     captureTruncated,
   };
+}
+
+/** The provider's typed error code only; its message text stays in the private rollout. */
+function childProviderErrorDetail(error: Record<string, unknown>): string {
+  const info = error.codex_error_info;
+  if (info === "cyber_policy") return "provider-cyber-policy";
+  const code =
+    typeof info === "string" ? info : Object.keys(object(info) ?? {})[0];
+  return code !== undefined && /^[a-z0-9_]{1,64}$/.test(code)
+    ? `child-provider-error:${code}`
+    : "child-provider-error";
 }
 
 function parseChildFinalMessage(
@@ -1897,6 +1925,14 @@ export class CodexNativeAgentRuntime {
     };
   }
 
+  /**
+   * The run's finish is in the ledger: its marker and directories are no
+   * longer needed to recover it (#512).
+   */
+  async release(runId: string): Promise<void> {
+    await this.sandbox.release?.(runId);
+  }
+
   async #runWithBroker(
     run: DiscoveryTransportRun,
     cooperative: boolean,
@@ -2178,7 +2214,8 @@ export class CodexNativeAgentRuntime {
     raw: string,
     grantReceiptDigest: string,
   ): Promise<AgentRun> {
-    let reason: "policy" | "schema" | "evidence" | undefined;
+    let reason:
+      "policy" | "schema" | "evidence" | "provider" | "interrupted" | undefined;
     let reasonDetail: string | undefined;
     if (child.captureTruncated) {
       reason = "evidence";
@@ -2212,8 +2249,19 @@ export class CodexNativeAgentRuntime {
           Buffer.from(canonicalJson(report)),
         );
       } catch {
-        reason = "schema";
-        reasonDetail = "child-final-message-not-report";
+        // A last turn the provider ended or the Root's stop aborted is not a
+        // malformed report (#540); only a reply that is not one is.
+        const ended = child.lastTurnEnd;
+        if (ended?.kind === "provider") {
+          reason = "provider";
+          reasonDetail = ended.detail;
+        } else if (ended?.kind === "aborted") {
+          reason = "interrupted";
+          reasonDetail = "child-turn-aborted";
+        } else {
+          reason = "schema";
+          reasonDetail = "child-final-message-not-report";
+        }
       }
     }
     const receipt = createNativeRunReceipt({
