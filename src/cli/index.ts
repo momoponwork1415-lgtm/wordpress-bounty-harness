@@ -68,7 +68,7 @@ export type { CliState } from "./state.js";
 
 export type LabDownSummary = {
   readonly labId: string | null;
-  /** The foreground `lab up --for-review` process asked to close its Lab (#592). */
+  /** The foreground process holding the Lab (`lab up --for-review`, #592, or `verify next --handoff`, #600) asked to close it. */
   readonly ownerStopped?: number;
   readonly removed: {
     readonly containers: readonly string[];
@@ -288,6 +288,14 @@ export interface CliProfile {
       };
       /** The one Finding the operator named, outside the queue's retry rules. */
       readonly findingId?: string;
+      /**
+       * #600: shows a person the attempt's Lab kept up after it was recorded
+       * and resolves when it should go; `skipped` says why none was kept.
+       */
+      readonly observation?: {
+        present(session: HeldObservationLab): Promise<void>;
+        skipped(reason: string): void;
+      };
     },
   ): Promise<VerifyNextSummary | null>;
   /** The target's newest public version, observed once; absent without a host. */
@@ -372,6 +380,27 @@ export interface CliProfile {
     input: { readonly configPath: string | null },
   ): Promise<LabDownSummary>;
 }
+
+/** The recorded attempt's verification Lab a person observes in (#600). */
+export type HeldObservationLab = {
+  /** The attempt, recorded as `incomplete(awaiting-human-observation)`. */
+  readonly ref: {
+    readonly campaignId: string;
+    readonly findingId: string;
+    readonly verificationId: string;
+  };
+  readonly labId: string;
+  readonly endpoint: string;
+  readonly attackerAccounts: unknown;
+  readonly administrator: unknown;
+  readonly host: {
+    readonly url: string;
+    readonly hostHeader: string;
+    readonly port: number;
+  };
+  readonly receipt: { readonly digest: string; readonly path: string };
+  readonly expiresAt: string;
+};
 
 type ReviewLabSession = Awaited<
   ReturnType<NonNullable<CliProfile["reviewLab"]>>
@@ -727,6 +756,70 @@ function exactDraft(values: Values) {
   };
 }
 
+/** Where a person's browser and curl reach a Lab published on host loopback. */
+function hostLines(host: {
+  readonly url: string;
+  readonly hostHeader: string;
+  readonly port: number;
+}): string[] {
+  const { url, hostHeader, port } = host;
+  return [
+    `host loopback: ${url} (Host header: ${hostHeader})`,
+    // The site redirects to its own name without a port, so a browser needs port 80 (#592).
+    port === 80
+      ? `browser: add the hosts line "127.0.0.1 ${hostHeader}" once, then open http://${hostHeader}/`
+      : `browser: port 80 is in use, so http://${hostHeader}/ is not reachable through a hosts line; start Chrome with --host-resolver-rules="MAP ${hostHeader} 127.0.0.1:${port}" and open http://${hostHeader}/`,
+  ];
+}
+
+/**
+ * #600: shows a person the verification Lab `verify next --handoff` kept
+ * after recording the attempt, then waits for SIGINT/SIGTERM (`lab down`
+ * sends SIGTERM) or the Lab's wall, whichever comes first.
+ */
+export async function presentHeldVerificationLab(
+  session: HeldObservationLab,
+  io: CliIo,
+  signals: ReviewSignalSource = process,
+  now: () => number = Date.now,
+): Promise<void> {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  signals.on("SIGINT", release);
+  signals.on("SIGTERM", release);
+  const wall = setTimeout(
+    release,
+    Math.max(0, Date.parse(session.expiresAt) - now()),
+  );
+  try {
+    const { ref } = session;
+    io.stdout(
+      `verified finding ${ref.findingId} as ${ref.verificationId}: incomplete (awaiting-human-observation)`,
+    );
+    io.stdout(
+      `verification Lab ${session.labId} kept for a person's observation on ${session.endpoint} until ${session.expiresAt}`,
+    );
+    for (const line of hostLines(session.host)) io.stdout(line);
+    io.stdout(`attacker accounts: ${JSON.stringify(session.attackerAccounts)}`);
+    io.stdout(`review administrator: ${JSON.stringify(session.administrator)}`);
+    io.stdout(
+      `manual observation receipt: ${session.receipt.digest} (${session.receipt.path})`,
+    );
+    io.stdout(
+      `record: review observe --campaign ${ref.campaignId} --finding ${ref.findingId} --receipt ${session.receipt.digest} --result match|mismatch|unavailable --evidence <path> --by <human>`,
+    );
+    io.stdout(
+      "Run lab down (or interrupt this command) to remove the Lab once the observation is recorded.",
+    );
+    await released;
+  } finally {
+    clearTimeout(wall);
+    signals.off("SIGINT", release);
+    signals.off("SIGTERM", release);
+  }
+  io.stdout("observation window closed; removing the verification Lab");
+}
+
 /**
  * The one owner of SIGINT/SIGTERM for `lab up --for-review`: a signal during
  * launch closes the session as soon as it exists; a signal afterwards ends the
@@ -770,16 +863,8 @@ export async function runForegroundReviewLab(
         io.stdout(
           `review administrator: ${JSON.stringify(session.administrator)}`,
         );
-        if (session.host !== undefined) {
-          const { url, hostHeader, port } = session.host;
-          io.stdout(`host loopback: ${url} (Host header: ${hostHeader})`);
-          // The site redirects to its own name without a port, so a browser needs port 80 (#592).
-          io.stdout(
-            port === 80
-              ? `browser: add the hosts line "127.0.0.1 ${hostHeader}" once, then open http://${hostHeader}/`
-              : `browser: port 80 is in use, so http://${hostHeader}/ is not reachable through a hosts line; start Chrome with --host-resolver-rules="MAP ${hostHeader} 127.0.0.1:${port}" and open http://${hostHeader}/`,
-          );
-        }
+        if (session.host !== undefined)
+          for (const line of hostLines(session.host)) io.stdout(line);
         const shellQuote = (value: string) =>
           `'${value.replaceAll("'", "'\\''")}'`;
         io.stdout(
@@ -822,7 +907,9 @@ export function formatLabDown(summary: LabDownSummary): string[] {
       : `lab ${summary.labId} down`,
     ...(summary.ownerStopped === undefined
       ? []
-      : [`  asked lab up process ${summary.ownerStopped} to close the Lab`]),
+      : [
+          `  asked the Lab's foreground process ${summary.ownerStopped} to close the Lab`,
+        ]),
     `  ${count("containers")}`,
     `  ${count("networks")}`,
     `  ${count("volumes")}`,
@@ -1419,7 +1506,7 @@ const COMMANDS: readonly Command[] = [
         clock: state.clock,
       });
       io.stdout(
-        `manual observation ${recorded.result} recorded for finding ${item.ref.findingId} (evidence ${recorded.evidenceDigest}; ordinary public site ${
+        `manual observation ${recorded.result} recorded for finding ${item.ref.findingId} in the ${recorded.labKind ?? "review"} Lab (evidence ${recorded.evidenceDigest}; ordinary public site ${
           recorded.configuration === undefined
             ? "not stated"
             : recorded.configuration.ordinaryPublicSite
@@ -1685,6 +1772,12 @@ const COMMANDS: readonly Command[] = [
           databasePort: integerOption(values["db-port"], "db-port", 0, 65535),
         },
         ...(values.finding === undefined ? {} : { findingId: values.finding }),
+        // #600: a person observes in this Lab; it stays until lab down or its wall.
+        observation: {
+          present: (session) => presentHeldVerificationLab(session, io),
+          skipped: (reason) =>
+            io.stdout(`verification Lab not kept for observation: ${reason}`),
+        },
       });
       io.stdout(
         summary === null

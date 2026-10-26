@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,7 +20,18 @@ import {
   type WordPressFinding,
 } from "../../../src/profiles/wordpress/discovery/finding.js";
 import { readLabOwners } from "../../../src/infrastructure/lab-owner-record.js";
-import { openWordPressLab } from "../../../src/profiles/wordpress/lab/index.js";
+import {
+  openWordPressLab,
+  type WordPressLab,
+} from "../../../src/profiles/wordpress/lab/index.js";
+import type { WordPressLabHandle } from "../../../src/profiles/wordpress/lab/contract.js";
+import {
+  holdWordPressVerificationLab,
+  releaseHeldLabRecord,
+  wordPressReviewLabDown,
+} from "../../../src/profiles/wordpress/lab/review-lab.js";
+import { presentHeldVerificationLab } from "../../../src/cli/index.js";
+import { liveLabOwner } from "../../../src/infrastructure/lab-owner-record.js";
 import { createWordPressScopeFacts } from "../../../src/profiles/wordpress/scope-facts.js";
 import {
   createWordpressScopeEvaluator,
@@ -42,7 +54,10 @@ import {
 import type { Snapshot } from "../../../src/snapshot/index.js";
 import { Review } from "../../../src/review/index.js";
 import { exportReviewBundleV2 } from "../../../src/review/manual-observation-export.js";
-import { Verification } from "../../../src/verification/index.js";
+import {
+  Verification,
+  type HeldVerificationLab,
+} from "../../../src/verification/index.js";
 
 const sha = (value: string) => `sha256:${value.repeat(64)}`;
 const directories: string[] = [];
@@ -167,6 +182,19 @@ type Scenario = {
   readonly ordinaryLatestVersion?: boolean;
   /** The operator's `WBH_RECORD_VIDEO=1` (#549). */
   readonly recordVideo?: boolean;
+  /** #600: what `verify next --handoff` does with the recorded attempt's Lab. */
+  readonly hold?: (context: HoldContext) => Promise<void>;
+};
+
+/** The Lab a recorded attempt keeps, with the records a person's observation uses (#600). */
+type HoldContext = {
+  readonly held: HeldVerificationLab<WordPressLabHandle>;
+  readonly lab: WordPressLab;
+  readonly ledger: Ledger;
+  readonly store: PrivateArtifactStore;
+  readonly stateDirectory: string;
+  readonly ownerDirectory: string;
+  readonly host: DockerHost;
 };
 
 /** The skill's side: setup as the administrator, `setup-done`, then the attacker route. */
@@ -243,9 +271,10 @@ async function verifyThroughHandoff(
     visits: [],
   };
   const ok = (stdout = "ok") => ({ exitCode: 0, stdout, stderr: "" });
+  const ownerDirectory = shared.ownerDirectory ?? join(root, "lab-owners");
   const lab = openWordPressLab({
     dockerExecutablePath: "/usr/bin/docker",
-    ownerDirectory: shared.ownerDirectory ?? join(root, "lab-owners"),
+    ownerDirectory,
     images: {
       database: `mariadb@${sha("1")}`,
       wordpress: `wordpress@${sha("2")}`,
@@ -438,6 +467,20 @@ async function verifyThroughHandoff(
         customerRole: false,
       },
       campaignLabSetupDigest: sha("b"),
+      ...(scenario.hold === undefined
+        ? {}
+        : {
+            hold: (held: HeldVerificationLab<WordPressLabHandle>) =>
+              scenario.hold!({
+                held,
+                lab,
+                ledger,
+                store,
+                stateDirectory: root,
+                ownerDirectory,
+                host: shared.host,
+              }),
+          }),
     }),
     skill(directory, state, scenario),
   ]);
@@ -452,6 +495,9 @@ async function verifyThroughHandoff(
     finding,
     state,
     snapshot,
+    lab,
+    root,
+    host: shared.host,
     ...observed,
   };
 }
@@ -920,5 +966,229 @@ describe("handoff verification through the real transport and observer (#525)", 
     expect(
       ledger.read({ type: "verification-finished" }).at(-1)?.event,
     ).toMatchObject({ result: AWAITING });
+  });
+  it("keeps the verification Lab on host port 80 after the attempt is recorded, records a person's match there, and lab down removes it (#600)", async () => {
+    const signals = new EventEmitter();
+    const lines: string[] = [];
+    let whileHeld:
+      | {
+          readonly labId: string;
+          readonly live: readonly string[];
+          readonly hostPort: number | undefined;
+          readonly record: unknown;
+          readonly latest: unknown;
+          readonly recorded: unknown;
+          readonly down: Promise<unknown>;
+        }
+      | undefined;
+    let observed: Promise<void> | undefined;
+    const { result, ledger, lab, root, host, finding } =
+      await verifyThroughHandoff({
+        hold: async (context) => {
+          const { held, ledger, store, stateDirectory } = context;
+          const kept = await holdWordPressVerificationLab({
+            held,
+            lab: context.lab,
+            ledger,
+            store,
+            stateDirectory,
+            clock: () => new Date(),
+            wallMs: 30 * 60_000,
+            present: (session) =>
+              presentHeldVerificationLab(
+                session,
+                {
+                  stdout(line) {
+                    lines.push(line);
+                    if (!line.startsWith("Run lab down")) return;
+                    // The Lab is up and published; a person records what they saw.
+                    observed = (async () => {
+                      const labId = held.lab.id;
+                      const live = [...context.host.containers].filter((name) =>
+                        name.startsWith(`wbh-${labId}-`),
+                      );
+                      const receipt = session.receipt.digest;
+                      const admitted = await observedReviewLabPackage({
+                        ledger,
+                        store,
+                        ref: held.ref,
+                      });
+                      const recorded = await recordManualObservation({
+                        ledger,
+                        store,
+                        ref: held.ref,
+                        packageDigest: admitted!.packageDigest,
+                        sessionReceiptDigest: receipt,
+                        evidence: new TextEncoder().encode("alert seen"),
+                        result: "match",
+                        recordedBy: "owner",
+                      });
+                      const record = JSON.parse(
+                        await readFile(
+                          join(stateDirectory, "review-lab.json"),
+                          "utf8",
+                        ),
+                      ) as unknown;
+                      // `lab down` asks the living owner (this process) to close the Lab.
+                      const down = wordPressReviewLabDown({
+                        stateDirectory,
+                        lab: context.lab,
+                        ownerOf: (id) =>
+                          liveLabOwner(id, context.ownerDirectory),
+                        signal: () => signals.emit("SIGTERM"),
+                        waitMs: 10_000,
+                      });
+                      whileHeld = {
+                        labId,
+                        live,
+                        hostPort: context.host.ports.get(
+                          `wbh-${labId}-host 80/tcp`,
+                        ),
+                        record,
+                        latest: ledger
+                          .read({ type: "verification-finished" })
+                          .at(-1)?.event,
+                        recorded,
+                        down,
+                      };
+                    })();
+                  },
+                  stderr: () => undefined,
+                },
+                signals,
+              ),
+          });
+          expect(kept).toEqual({ status: "held" });
+        },
+      });
+    expect(result).toMatchObject(AWAITING);
+    await observed;
+    const labId = whileHeld!.labId;
+    // The verify next profile forgets the record once the Lab is gone; lab down then returns.
+    await releaseHeldLabRecord({ stateDirectory: root, labId, lab });
+    const down = await whileHeld!.down;
+    // While held: WordPress, its database and the host gateway on 127.0.0.1:80.
+    expect(whileHeld!.live).toEqual(
+      expect.arrayContaining([
+        `wbh-${labId}-wp`,
+        `wbh-${labId}-db`,
+        `wbh-${labId}-host`,
+      ]),
+    );
+    expect(whileHeld!.hostPort).toBe(80);
+    expect(whileHeld!.record).toMatchObject({
+      labId,
+      httpPort: 80,
+      labKind: "verification",
+    });
+    // The attempt was recorded before the person looked, and stays incomplete.
+    expect(whileHeld!.latest).toMatchObject({ result: AWAITING });
+    expect(whileHeld!.recorded).toMatchObject({
+      type: "manual-observation-recorded",
+      result: "match",
+      labKind: "verification",
+    });
+    expect(
+      ledger.read({ type: "manual-observation-lab-ready" }).at(-1)?.event,
+    ).toMatchObject({ findingId: finding.findingId });
+    expect(down).toMatchObject({
+      labId,
+      ownerStopped: process.pid,
+      remaining: { containers: [], networks: [], volumes: [] },
+    });
+    // The window shows the address, the hosts line and the receipt to pass on.
+    expect(lines).toContain(
+      "host loopback: http://127.0.0.1:80 (Host header: wordpress)",
+    );
+    expect(lines).toContain(
+      'browser: add the hosts line "127.0.0.1 wordpress" once, then open http://wordpress/',
+    );
+    expect(lines.some((line) => line.includes("--receipt sha256:"))).toBe(true);
+    expect(lines.at(-1)).toBe(
+      "observation window closed; removing the verification Lab",
+    );
+    expect([...host.containers, ...host.networks, ...host.volumes]).toEqual([]);
+    await expect(readFile(join(root, "review-lab.json"))).rejects.toThrow();
+    expect(signals.listenerCount("SIGTERM")).toBe(0);
+  });
+
+  it("removes the kept verification Lab at its wall when nobody runs lab down (#600)", async () => {
+    let clock = Date.parse("2026-10-26T00:00:00Z");
+    let labId = "";
+    const lines: string[] = [];
+    const { host, lab, root } = await verifyThroughHandoff({
+      hold: async (context) => {
+        labId = context.held.lab.id;
+        await holdWordPressVerificationLab({
+          held: context.held,
+          lab: context.lab,
+          ledger: context.ledger,
+          store: context.store,
+          stateDirectory: context.stateDirectory,
+          clock: () => new Date(clock),
+          wallMs: 1_000,
+          present: (session) => {
+            // The wall passed while the person was away.
+            clock += 5_000;
+            return presentHeldVerificationLab(
+              session,
+              { stdout: (line) => lines.push(line), stderr: () => undefined },
+              new EventEmitter(),
+              () => clock,
+            );
+          },
+        });
+      },
+    });
+    await releaseHeldLabRecord({ stateDirectory: root, labId, lab });
+    expect(lines[1]).toBe(
+      `verification Lab ${labId} kept for a person's observation on http://wordpress until 2026-10-26T00:00:01.000Z`,
+    );
+    expect(lines.at(-1)).toBe(
+      "observation window closed; removing the verification Lab",
+    );
+    expect([...host.containers, ...host.networks, ...host.volumes]).toEqual([]);
+    await expect(readFile(join(root, "review-lab.json"))).rejects.toThrow();
+  });
+
+  it("does not keep a Lab whose attempt has no Harness capture (#600)", async () => {
+    let held = false;
+    const { result, host } = await verifyThroughHandoff({
+      silent: true,
+      hold: async () => {
+        held = true;
+      },
+    });
+    expect(result).toMatchObject({ status: "incomplete", reason: "evidence" });
+    expect(held).toBe(false);
+    expect([...host.containers, ...host.networks, ...host.volumes]).toEqual([]);
+  });
+  it("does not keep the Lab while another Lab is held for a person in the state directory (#600)", async () => {
+    let kept: unknown;
+    const { result, host } = await verifyThroughHandoff({
+      hold: async (context) => {
+        await writeFile(
+          join(context.stateDirectory, "review-lab.json"),
+          JSON.stringify({ schemaVersion: 1 }),
+        );
+        kept = await holdWordPressVerificationLab({
+          held: context.held,
+          lab: context.lab,
+          ledger: context.ledger,
+          store: context.store,
+          stateDirectory: context.stateDirectory,
+          clock: () => new Date(),
+          wallMs: 1_000,
+          present: () => Promise.reject(new Error("must not present")),
+        });
+      },
+    });
+    expect(result).toMatchObject(AWAITING);
+    expect(kept).toEqual({
+      status: "not-held",
+      reason:
+        "another Lab is held for a person in this state directory; run lab down first",
+    });
+    expect([...host.containers, ...host.networks, ...host.volumes]).toEqual([]);
   });
 });

@@ -25,6 +25,7 @@ import { storeTargetSkipDiagnostic } from "./skip-diagnostic.js";
 import {
   countAttemptsForReason,
   shouldAutomaticallyRetryVerification,
+  type HeldVerificationLab,
   type VerifiableFinding,
   type Verification,
   type VerificationResultV1,
@@ -768,6 +769,8 @@ export async function verifyNextFinding<
   readonly loadSnapshot: (digest: string) => Promise<Snapshot>;
   readonly setupFor: (snapshot: Snapshot) => Setup;
   readonly verification: Verification<Finding, Setup, Handle>;
+  /** #600: keeps the recorded attempt's Lab for a person's observation. */
+  readonly hold?: (held: HeldVerificationLab<Handle>) => Promise<void>;
 }): Promise<VerifyNextSummary | null> {
   const scope =
     options.campaignId === undefined ? {} : { campaignId: options.campaignId };
@@ -863,6 +866,7 @@ export async function verifyNextFinding<
       snapshot,
       setup,
       campaignLabSetupDigest: canonicalDigest(setup),
+      ...(options.hold === undefined ? {} : { hold: options.hold }),
     });
     return {
       campaignId: event.campaignId,

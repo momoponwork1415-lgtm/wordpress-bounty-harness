@@ -599,7 +599,7 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     result: z.enum(["match", "mismatch", "unavailable"]),
   }),
   event({
-    /** A fresh manual Lab reached ready; session details stay in Private Evidence. */
+    /** A Lab is ready for a person's observation; session details stay in Private Evidence. */
     type: z.literal("manual-observation-lab-ready"),
     findingId: id,
     verificationId: id,
@@ -618,6 +618,12 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     evidenceDigest: digest,
     result: z.enum(["match", "mismatch", "unavailable"]),
     recordedBy: id,
+    /**
+     * #600: the Lab the person observed in, from the session receipt: the
+     * attempt's own verification Lab kept up after it, or a fresh review Lab.
+     * Absent on earlier events, which were all review Labs.
+     */
+    labKind: z.enum(["verification", "review"]).optional(),
     /**
      * #578: whether the person stated that the configuration they confirmed is
      * one an ordinary public site uses. Their statement with a short reason stays in Private
