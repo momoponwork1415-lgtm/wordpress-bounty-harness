@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { runInNewContext } from "node:vm";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,7 +10,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { measureCanonicalSourceTree } from "../../../src/infrastructure/canonical-source-tree.js";
 import { canonicalDigest } from "../../../src/infrastructure/canonical-json.js";
 import {
+  readDiscoveryOwners,
   readLabOwners,
+  recordDiscoveryOwner,
   recordLabOwner,
 } from "../../../src/infrastructure/lab-owner-record.js";
 import {
@@ -905,6 +907,86 @@ describe("WordPress gVisor Lab", () => {
       await chmod(ownerDirectory, 0o755);
     }
     expect(existsSync(deadRecord)).toBe(true);
+  });
+
+  it("never names a discovery resource whose owner lives, whichever state directory started it (#550)", async () => {
+    const { lab, docker, ownerDirectory } = await fixture();
+    // Host-wide: the sibling of the Lab owner records, not a state directory.
+    const directory = join(dirname(ownerDirectory), "discovery-owners");
+    const [foreign, dead, own] = [randomUUID(), randomUUID(), randomUUID()];
+    // A live process (another runner's, standing in) owns these three.
+    const records = await Promise.all(
+      [
+        `codex-agent-${foreign}`,
+        `provider-egress-broker-${foreign}`,
+        `provider-egress-${foreign}`,
+      ].map((resource) => recordDiscoveryOwner({ resource, directory })),
+    );
+    // A runner killed on an earlier boot left these behind with their records.
+    for (const resource of [`claude-agent-${dead}`, `provider-egress-${dead}`])
+      await writeFile(
+        join(directory, `${resource}.json`),
+        JSON.stringify({
+          schemaVersion: 1,
+          resource,
+          owner: { pid: 1, bootId: "previous-boot", startTicks: "1" },
+        }),
+      );
+    for (const id of [foreign, dead, own]) {
+      docker.containers.add(`codex-agent-${id}`);
+      docker.networks.add(`provider-egress-${id}`);
+    }
+    docker.containers.add(`provider-egress-broker-${foreign}`);
+    docker.containers.add(`claude-agent-${dead}`);
+    const patterns = {
+      containers: [
+        /^codex-agent-/,
+        /^claude-agent-/,
+        /^provider-egress-broker-/,
+      ],
+      networks: [/^provider-egress-(?!broker-)/],
+    };
+    const expected = {
+      containers: [
+        `codex-agent-${dead}`,
+        `codex-agent-${own}`,
+        `claude-agent-${dead}`,
+      ],
+      networks: [`provider-egress-${dead}`, `provider-egress-${own}`],
+      volumes: [],
+    };
+    // Listing (`lab cleanup` without --remove) leaves the live owner out too.
+    expect(
+      await lab.cleanupLeftovers({ remove: false, labs: false, patterns }),
+    ).toEqual(expected);
+    expect(
+      await lab.cleanupLeftovers({ remove: true, labs: false, patterns }),
+    ).toEqual(expected);
+    expect([...docker.containers].sort()).toEqual(
+      [`codex-agent-${foreign}`, `provider-egress-broker-${foreign}`].sort(),
+    );
+    expect([...docker.networks]).toEqual([`provider-egress-${foreign}`]);
+    // Dead records go with their resources; the live owner keeps its own.
+    expect(await readDiscoveryOwners(directory)).toEqual({
+      live: new Set([
+        `codex-agent-${foreign}`,
+        `provider-egress-broker-${foreign}`,
+        `provider-egress-${foreign}`,
+      ]),
+      dead: new Set(),
+    });
+    // Once that owner releases (or dies), the next sweep removes what is left.
+    await Promise.all(records.map((record) => record.release()));
+    expect(
+      await lab.cleanupLeftovers({ remove: true, labs: false, patterns }),
+    ).toEqual({
+      containers: [
+        `codex-agent-${foreign}`,
+        `provider-egress-broker-${foreign}`,
+      ],
+      networks: [`provider-egress-${foreign}`],
+      volumes: [],
+    });
   });
 
   it("pins ordinary scenarios and seeds translation data with an approved comment", async () => {
@@ -1936,7 +2018,9 @@ describe("WordPress gVisor Lab", () => {
     if (boundedFailure.status !== "unavailable")
       throw new Error("Expected bounded browser failure");
     expect(boundedFailure.privateDiagnostic?.length).toBe(16 * 1024);
-    database.browserFailureMessage = "Victim action left the Lab origin";
+    const navigationLine =
+      'Victim action left the Lab origin {"check":"url-origin","actionIndex":0}';
+    database.browserFailureMessage = `(node:1) warning\n${navigationLine}\n`;
     expect(
       await pages({
         role: "administrator",
@@ -1946,6 +2030,22 @@ describe("WordPress gVisor Lab", () => {
       status: "unavailable",
       phase: "victim-page",
       failureCode: "victim-navigation",
+      privateDiagnostic: Buffer.from(navigationLine),
+    });
+    // Page text inside the detail cannot rename the failure.
+    const notVisibleLine =
+      'Victim action not visible {"visibleText":"Victim login failed"}';
+    database.browserFailureMessage = notVisibleLine;
+    expect(
+      await pages({
+        role: "administrator",
+        paths: ["/wp-admin/admin.php?page=fixture"],
+      }),
+    ).toEqual({
+      status: "unavailable",
+      phase: "victim-page",
+      failureCode: "victim-action-not-visible",
+      privateDiagnostic: Buffer.from(notVisibleLine),
     });
     database.browserFailureAt = null;
 
@@ -2060,6 +2160,8 @@ describe("WordPress gVisor Lab", () => {
       openerAccessible?: boolean;
       extraPopup?: boolean;
       captureDiagnostic?: boolean;
+      hidden?: boolean;
+      clickText?: boolean;
     }): Promise<string> => {
       let onPage: ((tab: unknown) => void) | undefined;
       let resolvePopup: ((tab: unknown) => void) | undefined;
@@ -2091,8 +2193,10 @@ describe("WordPress gVisor Lab", () => {
         screenshot: async () => Buffer.from("89504e470d0a1a0a", "hex"),
       };
       const target = {
-        waitFor: async () => {},
-        count: async () => 1,
+        waitFor: async () => {
+          if (input.hidden) throw new Error("Timeout");
+        },
+        count: async () => (input.hidden ? 0 : 1),
         evaluate: async () => true,
         click: async () => {
           onPage?.(popup);
@@ -2121,8 +2225,11 @@ describe("WordPress gVisor Lab", () => {
         on() {},
         context: () => context,
         goto: async () => {},
-        url: () => "http://wordpress/?p=7",
+        url: () => "http://wordpress/?p=7&_wpnonce=private",
+        evaluate: async (read: () => unknown) => read(),
         locator: () => target,
+        getByText: (_text: string, options: { exact: boolean }) =>
+          options.exact ? target : { count: async () => 2 },
         waitForEvent: () =>
           new Promise<unknown>((resolve) => {
             resolvePopup = resolve;
@@ -2155,7 +2262,9 @@ describe("WordPress gVisor Lab", () => {
           env: {
             WBH_VISIT_PATH: "/?p=7",
             WBH_VISIT_ACTIONS: JSON.stringify([
-              { kind: "click", selector: "#open" },
+              input.clickText
+                ? { kind: "click-text", text: "Open", exact: true }
+                : { kind: "click", selector: "#open" },
             ]),
           },
           stdout: {
@@ -2173,6 +2282,7 @@ describe("WordPress gVisor Lab", () => {
         URL,
         HTMLImageElement: ImageElement,
         document: {
+          body: { innerText: `  Plugin   settings\n${"x".repeat(2000)}` },
           readyState: "complete",
           querySelectorAll: () => [
             new ImageElement(),
@@ -2204,18 +2314,82 @@ describe("WordPress gVisor Lab", () => {
         http4xxCount: 1,
       },
     });
+    const failure = (output: string, name: string): unknown => {
+      expect(output.startsWith(`${name} {`)).toBe(true);
+      return JSON.parse(output.slice(name.length + 1));
+    };
+    const leftOrigin = "Victim action left the Lab origin";
     expect(
-      await runPopupVisit({ url: "about:blank", browserOpener: false }),
-    ).toBe("Victim action left the Lab origin");
+      failure(
+        await runPopupVisit({ url: "about:blank", browserOpener: false }),
+        leftOrigin,
+      ),
+    ).toEqual({
+      check: "blank-opener-differs",
+      actionIndex: 0,
+      popup: true,
+      url: "about:blank",
+      expectedOrigin: "http://wordpress",
+    });
     expect(
-      await runPopupVisit({ url: "about:blank", effectiveOrigin: "null" }),
-    ).toBe("Victim action left the Lab origin");
+      failure(
+        await runPopupVisit({ url: "about:blank", effectiveOrigin: "null" }),
+        leftOrigin,
+      ),
+    ).toMatchObject({ check: "blank-origin-not-inherited" });
     expect(
-      await runPopupVisit({ url: "about:blank", openerAccessible: false }),
-    ).toBe("Victim action left the Lab origin");
-    expect(await runPopupVisit({ url: "https://outside.invalid/" })).toBe(
-      "Victim action left the Lab origin",
+      failure(
+        await runPopupVisit({ url: "about:blank", openerAccessible: false }),
+        leftOrigin,
+      ),
+    ).toMatchObject({ check: "blank-origin-not-inherited" });
+    expect(
+      failure(
+        await runPopupVisit({
+          url: "https://outside.invalid/path?token=private#frag",
+        }),
+        leftOrigin,
+      ),
+    ).toEqual({
+      check: "url-origin",
+      actionIndex: 0,
+      popup: true,
+      url: "https://outside.invalid/path",
+      expectedOrigin: "http://wordpress",
+    });
+    const notVisible = failure(
+      await runPopupVisit({ url: "about:blank", hidden: true }),
+      "Victim action not visible",
     );
+    expect(notVisible).toEqual({
+      check: "action-visible",
+      actionIndex: 0,
+      kind: "click",
+      selector: "#open",
+      url: "http://wordpress/",
+      attachedCount: 0,
+      visibleText: expect.stringMatching(/^Plugin settings x+$/),
+    });
+    expect((notVisible as { visibleText: string }).visibleText.length).toBe(
+      1024,
+    );
+    // An exact text that misses while looser text matches is told apart.
+    expect(
+      failure(
+        await runPopupVisit({
+          url: "about:blank",
+          hidden: true,
+          clickText: true,
+        }),
+        "Victim action not visible",
+      ),
+    ).toMatchObject({
+      kind: "click-text",
+      text: "Open",
+      exact: true,
+      attachedCount: 0,
+      looseTextCount: 2,
+    });
     expect(
       await runPopupVisit({
         url: "http://wordpress/?p=8",

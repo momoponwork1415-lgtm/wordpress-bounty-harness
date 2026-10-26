@@ -196,8 +196,24 @@ export interface CliProfile {
       readonly configPath: string;
       /** Fewest frozen targets that make a batch; fewer selects nothing. */
       readonly minimum?: number;
+      /** The runner's stop request; true before recording selects nothing (#302). */
+      readonly stop?: () => boolean;
     },
   ): Promise<CliSelectionReport>;
+  /**
+   * The runner only, before it continues a campaign after a restart: when the
+   * campaign's selection batch was frozen under another policy, record that it
+   * is discarded and return its id; null when the batch can run (#302).
+   */
+  discardStaleSelection?(
+    state: CliState,
+    input: {
+      readonly campaignId: string;
+      readonly configPath: string;
+      /** Replaces the campaign config's selection policy path in process. */
+      readonly selectionPolicyPath?: string;
+    },
+  ): Promise<string | null>;
   runCampaign(
     state: CliState,
     input: {
@@ -320,6 +336,19 @@ export interface CliProfile {
       readonly snapshotCampaignId?: string;
     },
   ): Promise<ReverificationSummary>;
+  /**
+   * #529: returns a Finding parked by a retired admission rule to the queues;
+   * the profile refuses Programme Boundary and verification parks.
+   */
+  restoreParked?(
+    state: CliState,
+    input: {
+      readonly campaignId: string;
+      readonly findingId: string;
+      readonly restoredBy: string;
+      readonly reason: string;
+    },
+  ): Promise<{ readonly status: "restored" | "already-restored" }>;
   /** Summarizes the profile's Lab state diff artifact for `review export` (#186). */
   stateDiffReader(state: CliState): StateDiffReader;
   /** Reads the profile's HTTP evidence record for `review export`; names of its files stay in the profile. */
@@ -1186,6 +1215,33 @@ const COMMANDS: readonly Command[] = [
           `parked  ${event.category}  ${event.findingId}  ${property}  reason: ${event.reason}`,
         ]);
       }
+      return 0;
+    },
+  }),
+  command({
+    name: "review restore",
+    required: ["campaign", "finding", "reason"],
+    usage: [
+      "review restore --campaign <id> --finding <id> --reason <text> [--by <name>]",
+    ],
+    options: { campaign: STR, finding: STR, reason: STR, by: STR },
+    handler: async ({ values, state, environment, print }) => {
+      // #529 (ADR 0038 追記 8): append-only restore of a retired admission park.
+      const restore = environment.profile.restoreParked;
+      if (restore === undefined)
+        throw new UsageError("This profile cannot restore parked Findings");
+      const reason = required(values.reason, "reason").trim();
+      if (reason === "") throw new UsageError("--reason must not be empty");
+      const findingId = required(values.finding, "finding");
+      const result = await restore(state, {
+        campaignId: required(values.campaign, "campaign"),
+        findingId,
+        restoredBy: values.by ?? "operator",
+        reason,
+      });
+      if (result.status === "already-restored")
+        throw new Error(`Finding ${findingId} is already restored`);
+      print([`restored finding ${findingId} to the review queue`]);
       return 0;
     },
   }),

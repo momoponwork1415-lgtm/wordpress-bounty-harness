@@ -374,7 +374,7 @@ describe("WordPress selection public interface", () => {
     expect(policy.historyWindowDays).toBe(365);
     expect(policy.historyCountCap).toBe(10);
     expect(policy.historyPayingClassCap).toBe(3);
-    expect(policy.maximumHistoryAgeDays).toBe(14);
+    expect(policy.maximumHistoryAgeDays).toBe(2);
     expect(policy.maximumTargets).toBe(5);
     expect(policy.maximumUpdateAgeDays).toBe(365);
     expect(policy.revisitPolicy).toEqual({

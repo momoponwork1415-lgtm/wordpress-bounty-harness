@@ -1,10 +1,13 @@
-import { isAbsolute } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 
 import { z } from "zod";
 
 import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
 import {
+  DISCOVERY_OWNER_DIRECTORY,
+  forgetDiscoveryOwners,
   forgetLabOwners,
+  readDiscoveryOwners,
   readLabOwners,
   recordLabOwner,
   type LabOwnerRecord,
@@ -208,7 +211,8 @@ export interface WordPressLab extends LabProvisioner<
    * patterns only. Removes them when asked; use only while no campaign runs.
    * With `labId`, only that Lab's resources (and its host gateway) are named.
    * With `labs: false`, only the given patterns are named, so a live Lab is
-   * never touched (the runner's discovery sweep, #526).
+   * never touched (the runner's discovery sweep, #526). Without `labId`, a
+   * pattern match whose discovery owner process lives is never named (#550).
    */
   cleanupLeftovers(input: {
     readonly remove: boolean;
@@ -286,7 +290,10 @@ export function openWordPressLab(options: {
   readonly source: WordPressSourceResolver;
   readonly runner?: DockerRunner;
   readonly healthAttempts?: number;
-  /** Dependency injection for isolated Lab tests; hosts use the one shared path. */
+  /**
+   * Dependency injection for isolated Lab tests; hosts use the one shared path.
+   * Discovery owner records are read from its sibling `discovery-owners` (#550).
+   */
   readonly ownerDirectory?: string;
 }): WordPressLab {
   if (!isAbsolute(options.dockerExecutablePath))
@@ -298,6 +305,10 @@ export function openWordPressLab(options: {
   const docker = createLabDocker(
     options.runner ?? nativeDockerRunner(options.dockerExecutablePath),
   );
+  const discoveryOwnerDirectory =
+    options.ownerDirectory === undefined
+      ? DISCOVERY_OWNER_DIRECTORY
+      : join(dirname(options.ownerDirectory), "discovery-owners");
   const active = new Map<string, WordPressLabSession>();
   /** One owner record per live Lab of this process; there is no host-wide slot (#432). */
   const owners = new Map<string, LabOwnerRecord>();
@@ -370,22 +381,32 @@ export function openWordPressLab(options: {
     }
     // Without `labId`, a Lab whose owner process lives is never named (#432).
     // Read after listing: a Lab records its owner before its first resource exists.
-    // `labs: false` names no Lab, so it never reads owner records (#526).
+    // `labs: false` names no Lab, so it never reads Lab owner records (#526).
     const { live, dead } =
       labs && (onlyLab === undefined || remove)
         ? await readLabOwners(options.ownerDirectory)
+        : { live: new Set<string>(), dead: new Set<string>() };
+    // Nor is a discovery resource whose owner process lives, whichever state
+    // directory or checkout started it (#550).
+    const discovery =
+      onlyLab === undefined && Object.keys(patterns).length > 0
+        ? await readDiscoveryOwners(discoveryOwnerDirectory)
         : { live: new Set<string>(), dead: new Set<string>() };
     if (onlyLab === undefined)
       for (const [kind] of kinds)
         found[kind] = found[kind].filter((name) => {
           const owner = labOfResource.exec(name)?.[1];
-          return owner === undefined || !live.has(owner);
+          return (
+            (owner === undefined || !live.has(owner)) &&
+            !discovery.live.has(name)
+          );
         });
     // Containers go first so their networks and volumes are no longer in use.
     if (remove) {
       for (const [kind, , removal] of kinds)
         if (found[kind].length > 0)
           await docker.require([...removal, ...found[kind]]);
+      await forgetDiscoveryOwners(discovery.dead, discoveryOwnerDirectory);
       if (labs)
         await forgetLabOwners(
           onlyLab === undefined

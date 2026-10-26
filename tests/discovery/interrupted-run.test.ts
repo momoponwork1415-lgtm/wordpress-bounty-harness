@@ -219,6 +219,7 @@ async function fixture() {
       image,
       bundledCatalogPath: "/opt/codex/model-catalog.json",
       scratchRootDirectory: scratch,
+      ownerDirectory: join(scratch, "discovery-owners"),
       maxOutputBytes: 1024 * 1024,
       timeoutMs: 120 * MINUTE,
       clock: () => new Date(T0),

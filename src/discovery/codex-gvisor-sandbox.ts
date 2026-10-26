@@ -22,6 +22,7 @@ import {
   type ExpectedSourceTree,
 } from "../infrastructure/canonical-source-tree.js";
 import { canonicalJson } from "../infrastructure/canonical-json.js";
+import { recordDiscoveryOwner } from "../infrastructure/lab-owner-record.js";
 import { stopDockerContainer } from "../infrastructure/stop-docker-container.js";
 
 import {
@@ -600,6 +601,8 @@ export interface GvisorCodexSandboxOptions {
   /** This process and boot, recorded in each run marker; tests substitute another host. */
   readonly owner?: () => Promise<SandboxOwner>;
   readonly ownerAlive?: (pid: number) => boolean;
+  /** Host-wide discovery owner records; tests isolate it (#550). */
+  readonly ownerDirectory?: string;
 }
 
 type DockerRun = (
@@ -1073,6 +1076,13 @@ export class GvisorCodexSandbox implements CodexSandbox {
             ]),
       ];
       let result: NativeModelProcessResult;
+      // Before the container exists, so another runner's sweep never names it (#550).
+      const owner = await recordDiscoveryOwner({
+        resource: containerName,
+        ...(this.#options.ownerDirectory === undefined
+          ? {}
+          : { directory: this.#options.ownerDirectory }),
+      });
       const controller = new AbortController();
       const onAbort = () =>
         controller.abort(signal?.reason === "operator" ? "operator" : "wall");
@@ -1131,6 +1141,7 @@ export class GvisorCodexSandbox implements CodexSandbox {
           undefined,
           20_000,
         ).catch(() => undefined);
+        await owner.release().catch(() => undefined);
       }
       const completedAt = now().toISOString();
       const captured = await captureRun(codexHome, researchDirectory);

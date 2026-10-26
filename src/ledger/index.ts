@@ -49,6 +49,19 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     selectionIds: z.array(id).min(1).max(10),
   }),
   event({
+    /**
+     * The runner dropped an automatic selection batch frozen under another
+     * policy, which can never run under the current one (#302). campaignId is
+     * the batch id. Its targets have no Trial, so selection admits them again.
+     */
+    type: z.literal("selection-batch-discarded"),
+    /** The policy the batch was frozen under. */
+    policyDigest: digest,
+    /** The policy the runner selects under now. */
+    currentPolicyDigest: digest,
+    reason: z.enum(["policy-changed"]),
+  }),
+  event({
     type: z.literal("snapshot-frozen"),
     sourceDigest: digest,
     dependencyDigests: z.array(digest).optional(),
