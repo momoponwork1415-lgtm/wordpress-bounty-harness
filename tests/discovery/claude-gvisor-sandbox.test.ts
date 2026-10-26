@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { GvisorClaudeSandbox } from "../../src/discovery/index.js";
 import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-source-tree.js";
+import { readDiscoveryOwners } from "../../src/infrastructure/lab-owner-record.js";
 
 describe("Claude gVisor sandbox", () => {
   it("runs the pinned image under runsc with only the Trial grant, passed outside argv", async () => {
@@ -23,10 +24,14 @@ describe("Claude gVisor sandbox", () => {
         stdin: string | undefined;
         hostEnvironment: Readonly<Record<string, string>> | undefined;
       }[] = [];
+      const ownerDirectory = join(root, "discovery-owners");
+      /** What a sweep in another state directory reads while the agent runs (#550). */
+      let ownedWhileRunning: ReadonlySet<string> | undefined;
       const sandbox = new GvisorClaudeSandbox({
         dockerExecutablePath: "/usr/bin/docker",
         image: `claude@sha256:${"a".repeat(64)}`,
         scratchRootDirectory: root,
+        ownerDirectory,
         maxOutputBytes: 1024 * 1024,
         timeoutMs: 60_000,
         runDocker: async (
@@ -37,6 +42,9 @@ describe("Claude gVisor sandbox", () => {
           hostEnvironment,
         ) => {
           calls.push({ args: [...args], stdin, hostEnvironment });
+          if (args.includes("--network=trial-internal"))
+            ownedWhileRunning = (await readDiscoveryOwners(ownerDirectory))
+              .live;
           return {
             kind: "exited",
             exitCode: 0,
@@ -117,6 +125,12 @@ describe("Claude gVisor sandbox", () => {
         "subagentModel",
       );
       expect(calls.at(-1)?.args.slice(0, 2)).toEqual(["rm", "--force"]);
+      const name = agent?.args.find((arg) => arg.startsWith("--name="));
+      expect(name).toMatch(/^--name=claude-agent-[0-9a-f-]{36}$/);
+      expect(ownedWhileRunning).toEqual(
+        new Set([name?.slice("--name=".length)]),
+      );
+      expect((await readDiscoveryOwners(ownerDirectory)).live.size).toBe(0);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

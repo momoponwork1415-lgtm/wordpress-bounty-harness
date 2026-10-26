@@ -21,6 +21,7 @@ import {
   runNativeModelProcess,
   type NativeModelProcessResult,
 } from "../infrastructure/native-model-process.js";
+import { recordDiscoveryOwner } from "../infrastructure/lab-owner-record.js";
 import { stopDockerContainer } from "../infrastructure/stop-docker-container.js";
 import { CLAUDE_RUNNER_SOURCE } from "./claude-runner.js";
 import {
@@ -153,6 +154,8 @@ export interface GvisorClaudeSandboxOptions {
   readonly timeoutMs: number;
   readonly clock?: () => Date;
   readonly runDocker?: DockerRun;
+  /** Host-wide discovery owner records; tests isolate it (#550). */
+  readonly ownerDirectory?: string;
 }
 
 const host = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -466,6 +469,13 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
         this.#options.image,
         "/opt/claude-support/runner.mjs",
       ];
+      // Before the container exists, so another runner's sweep never names it (#550).
+      const owner = await recordDiscoveryOwner({
+        resource: containerName,
+        ...(this.#options.ownerDirectory === undefined
+          ? {}
+          : { directory: this.#options.ownerDirectory }),
+      });
       const controller = new AbortController();
       const onAbort = () =>
         controller.abort(signal?.reason === "operator" ? "operator" : "wall");
@@ -516,6 +526,7 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
           undefined,
           20_000,
         ).catch(() => undefined);
+        await owner.release().catch(() => undefined);
       }
       const completedAt = clock().toISOString();
       const transcripts = await collectTranscripts(home).then(
