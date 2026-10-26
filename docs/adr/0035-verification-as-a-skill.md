@@ -110,3 +110,7 @@ PR #415 のレビュー指摘 4 への対応。決定の本文は #415 より前
 - **前提の gate を通さない。** SPEC 第 7 節の前提の分類は handoff でも行い、記録済みの分類と違うときと `admin-configuration` のときは `finding-precondition-classified` を記録する。ただし handoff の transport は、前提作りを自分で受け持つと宣言している（`preconditionSetup: "transport"`）。そのため、分類から `incomplete(precondition)` で早く終える次の 3 つの検査を飛ばす。(a) 分類が次の scenario ID を名指しするとき、run の前に返す。(b) 分類が理由コード `common-usage-scenario-missing` を返すとき、run の前に返す。(c) 6 file が揃った後、Finding の前提が `unknown` に分類されていたときに返す（「catalogue に無い前提」）。飛ばす理由は、本 ADR で前提作りを skill に移したことにある。scenario catalogue に無い前提も、skill が `setup-done` の前に Lab の通常機能で作る。作れなければ、skill は手順どおり `precondition-unavailable` で abort する。6 file の `precondition` が空でないときは、handoff でも `incomplete(precondition)` にする。次の手は、分類から決めた理由コード（`common-usage-precondition` など）と、本文を置いた Private Evidence の digest である。
 
 この節は文書を code に合わせるだけで、skill 本文、code、台帳の event 形は変えない。取り消すときはこの節を消す。
+
+## 2026-10-26 追記: `lab.json` の scenario と前提の gate（#353、PR #577）
+
+PR #577 で Lab の scenario を削除したので、上の追記の「Lab に scenario … があればその値」の scenario は `lab.json` に入らなくなった（第 2 言語は残る）。同じ追記の検査 (a)(b) も分類の scenario 選択とともに無くなった。2026-10-21 注記と 2026-10-23 追記で #353 に残すとした scenario と plugin 別 adapter も同じ PR で削除した（[ADR 0026](0026-generic-lab-scenarios-no-verifier-browser.md) の 2026-10-26 追記）。

@@ -29,10 +29,7 @@ describe("Harness-owned WordPress precondition classification", () => {
       classifyWordPressPrecondition({
         configurationPrecondition: "A public post contains a block.",
       }),
-    ).toEqual({
-      preconditionClass: "common-usage",
-      reasonCode: "common-usage-scenario-missing",
-    });
+    ).toEqual({ preconditionClass: "common-usage" });
     expect(
       classifyWordPressPrecondition({
         configurationPrecondition: "A public slider is published.",
@@ -118,15 +115,12 @@ describe("Harness-owned WordPress precondition classification", () => {
     ).toBe("admin-configuration");
   });
 
-  it("selects an existing generic scenario for ordinary content", () => {
+  it("names no Lab scenario for ordinary content now that scenarios are removed (#353)", () => {
     expect(
       classifyWordPressPrecondition({
         configurationPrecondition: "A private post is missing.",
       }),
-    ).toMatchObject({
-      preconditionClass: "common-usage",
-      nextScenarioId: "private-post-v1",
-    });
+    ).toEqual({ preconditionClass: "unknown" });
   });
 
   it("preserves the TranslatePress default Finding and uses the attachment as an input", () => {

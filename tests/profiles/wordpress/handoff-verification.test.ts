@@ -20,7 +20,6 @@ import {
 } from "../../../src/profiles/wordpress/discovery/finding.js";
 import { readLabOwners } from "../../../src/infrastructure/lab-owner-record.js";
 import { openWordPressLab } from "../../../src/profiles/wordpress/lab/index.js";
-import { wordPressScenario } from "../../../src/profiles/wordpress/lab/scenarios.js";
 import { createWordPressScopeFacts } from "../../../src/profiles/wordpress/scope-facts.js";
 import {
   createWordpressScopeEvaluator,
@@ -164,7 +163,7 @@ type Scenario = {
   readonly victim?: unknown;
   /** Runs after `attack.json` with the connection `lab.json` named, before the six files. */
   readonly beforeFiles?: (lab: { readonly url: string }) => Promise<void>;
-  /** A latest-version attempt on a pinned ordinary Lab scenario, as scope needs. */
+  /** A latest-version attempt, as `review reverify` records it for scope. */
   readonly ordinaryLatestVersion?: boolean;
   /** The operator's `WBH_RECORD_VIDEO=1` (#549). */
   readonly recordVideo?: boolean;
@@ -435,18 +434,8 @@ async function verifyThroughHandoff(
         schemaVersion: 1,
         snapshotDigest: snapshot.digest,
         siteTitle: "Synthetic",
-        // The approved-comment scenario needs a first post to comment on.
-        initialPosts:
-          scenario.ordinaryLatestVersion === true ? ["Welcome"] : [],
+        initialPosts: [],
         customerRole: false,
-        ...(scenario.ordinaryLatestVersion === true
-          ? {
-              scenario: {
-                id: ORDINARY.id,
-                digest: ORDINARY.digest,
-              },
-            }
-          : {}),
       },
       campaignLabSetupDigest: sha("b"),
     }),
@@ -466,8 +455,6 @@ async function verifyThroughHandoff(
     ...observed,
   };
 }
-
-const ORDINARY = wordPressScenario("approved-comment-v1")!;
 
 const AWAITING = {
   status: "incomplete",
@@ -780,7 +767,7 @@ describe("handoff verification through the real transport and observer (#525)", 
     ).toMatchObject({ result: AWAITING });
   });
 
-  it("takes a human-observed result to a Submission Candidate and an exact authorization (#525)", async () => {
+  it("records a human-observed reproduction whose scope stays ambiguous without a Lab scenario record (#525, #353)", async () => {
     const { result, event, ledger, store, finding, snapshot } =
       await verifyThroughHandoff({ ordinaryLatestVersion: true });
     expect(result).toMatchObject(AWAITING);
@@ -886,40 +873,19 @@ describe("handoff verification through the real transport and observer (#525)", 
       humanReproduction: { result: "match" },
     });
 
+    // Since #353 no Lab scenario records the configuration, so scope reads the
+    // human basis but leaves the configuration unknown.
     const assessed = await review.assessScope({ ref });
-    expect(assessed.map((item) => [item.programmeId, item.status])).toEqual([
-      ["wordfence", "in-scope"],
-      ["patchstack", "in-scope"],
+    expect(
+      assessed.map((item) => [
+        item.programmeId,
+        item.status,
+        item.reason.split(";", 1)[0],
+      ]),
+    ).toEqual([
+      ["wordfence", "ambiguous", "version-or-configuration-unknown"],
+      ["patchstack", "ambiguous", "version-or-configuration-unknown"],
     ]);
-    const wordfence = assessed.find(
-      (item) => item.programmeId === "wordfence",
-    )!;
-    const draft = await review.saveDraft({
-      assessmentId: wordfence.id,
-      content: "Synthetic report reviewed by the owner",
-      preparedBy: "human",
-    });
-    expect(draft).toMatchObject({
-      candidateId: expect.stringMatching(/^sha256:/),
-      destination: "wordfence",
-    });
-    await review.recordDecision({
-      ref,
-      decision: "accept",
-      reasonCode: "manual-reproduction",
-      openedEvidence: [],
-      duplicate: { status: "no-match" },
-      decidedBy: "owner",
-    });
-    const exact = {
-      candidateId: draft.candidateId,
-      draftDigest: draft.digest,
-      destination: "wordfence",
-    };
-    await review.authorizeExternalAction({ ...exact, authorizedBy: "owner" });
-    expect(await review.admitExternalAction(exact)).toMatchObject({
-      status: "authorized",
-    });
     // The verification event is never rewritten into a confirmation.
     expect(
       ledger.read({ type: "verification-finished" }).at(-1)?.event,

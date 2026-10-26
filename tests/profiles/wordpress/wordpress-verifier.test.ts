@@ -222,7 +222,7 @@ describe("WordPressVerifier.attempt with a non-Codex transport", () => {
     },
   );
 
-  it("lets a setup-capable transport handle an ordinary missing Lab scenario", async () => {
+  it("lets a setup-capable transport handle an ordinary precondition", async () => {
     const f = await fixture({
       impact: "stored-xss",
       setupPreconditions: true,
@@ -259,19 +259,6 @@ describe("WordPressVerifier.attempt with a non-Codex transport", () => {
       reason: "recipe",
       nextStep: "setup-not-closed",
     });
-  });
-
-  it("keeps the missing-scenario gate for a transport without setup capability", async () => {
-    const f = await fixture({
-      impact: "stored-xss",
-      configurationPrecondition:
-        "A public form is placed on a published page with default settings.",
-    });
-    expect(await f.attempt()).toMatchObject({
-      status: "incomplete",
-      reason: "precondition",
-    });
-    expect(f.runs).toHaveLength(0);
   });
 
   it("lets a setup-capable transport resolve an unclassified precondition", async () => {

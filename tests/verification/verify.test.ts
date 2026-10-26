@@ -56,7 +56,6 @@ async function fixture(
     readonly omitFixedLineage?: boolean;
     /** Attempt a comparison against another frozen snapshot. */
     readonly latestVersion?: boolean;
-    readonly scenario?: { readonly id: string; readonly digest: string };
     /** Whole-Lab before / after capture around the Verifier run (#186); receives the fixture's store. */
     readonly stateObserver?: (
       store: PrivateArtifactStore,
@@ -155,7 +154,6 @@ async function fixture(
     snapshotDigest: options.labSnapshotDigest ?? findingSnapshotDigest,
     setupDigest,
     endpoint: "http://lab",
-    ...(options.scenario === undefined ? {} : { scenario: options.scenario }),
   };
   const lab: LabProvisioner<{ readonly name: string }, LabHandle> = {
     async provision() {
@@ -388,15 +386,6 @@ describe("verification public interface", () => {
     });
   });
 
-  it("records the digest-pinned scenario on a verification Lab event", async () => {
-    const scenario = { id: "ordinary-v1", digest: setupDigest };
-    const { ledger } = await fixture({ scenario });
-    expect(ledger.read({ type: "lab-provisioned" })[0]?.event).toMatchObject({
-      purpose: "verification",
-      scenario,
-    });
-  });
-
   it("keeps the Verifier's refutation beside the record without deciding from it", async () => {
     const { result } = await fixture({ refute: true });
     expect(result).toMatchObject({
@@ -545,27 +534,6 @@ describe("verification public interface", () => {
       nextStep: "Enable the synthetic setting",
     });
     expect(calls.observer).toBe(0);
-  });
-
-  it("records a known next scenario for the retry queue", async () => {
-    const { result, ledger } = await fixture({
-      verifier: async () => ({
-        status: "incomplete",
-        reason: "precondition",
-        nextStep: "Try the ordinary private post scenario",
-        nextScenarioId: "private-post-v1",
-      }),
-    });
-    expect(result).toMatchObject({
-      status: "incomplete",
-      reason: "precondition",
-      nextScenarioId: "private-post-v1",
-    });
-    expect(
-      ledger.read({ type: "verification-finished" })[0]?.event,
-    ).toMatchObject({
-      result,
-    });
   });
 
   it("does not wait for a human when the Lab is not removed", async () => {
