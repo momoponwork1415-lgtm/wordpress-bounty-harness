@@ -7,6 +7,7 @@ import { z } from "zod";
 import {
   assessTrialResume,
   assignDiscoveryRuntime,
+  DEFAULT_MAX_CHILDREN,
   DISCOVERY_LEFTOVER_PATTERNS,
   executeTrialResume,
   providerLimitedAutoResumeRefusal,
@@ -993,7 +994,19 @@ async function resumeWordPressRun(
     labBudget = { maxResets: recordedLab.maxResets, maxObservations };
   }
   const source = await boundaries.sourceFor(snapshot);
-  const runParameters = wordPressRunParameters(config, runtime.runtimeProfile);
+  // A segment enforces the values its Trial recorded, not the campaign's
+  // current ones, so the copied configuration stays true (#548). Trials from
+  // before #537 recorded none: their children were capped at the default,
+  // and their wall and floor stay the configuration's as before.
+  const recorded = started.configuration;
+  const runParameters: RunParameters = {
+    ...wordPressRunParameters(config, runtime.runtimeProfile),
+    wallMinutes: recorded.wallMinutes ?? config.runWallTimeMinutes,
+    minimumActiveMinutes:
+      recorded.minimumActiveMinutes ?? config.discovery.minimumActiveMinutes,
+    maxChildren: recorded.maxChildren ?? DEFAULT_MAX_CHILDREN,
+  };
+  const minimumActiveMs = runParameters.minimumActiveMinutes * 60_000;
   const promptWith = (
     lab: WordPressLabHandle | undefined,
     resumedLab?: WordPressLabUsed,
@@ -1032,7 +1045,7 @@ async function resumeWordPressRun(
     profile: runtime.runtimeProfile,
     coordination: "cooperative" as const,
     prompt,
-    maxChildren: config.discovery.maxChildren,
+    maxChildren: runParameters.maxChildren,
     resumePrompt,
     ...wordPressSourceMounts(source),
   };
@@ -1048,8 +1061,8 @@ async function resumeWordPressRun(
     prompt,
     resumePrompt,
     profileDigest: runtime.runtimeProfile.digest,
-    wallTimeMs: config.runWallTimeMinutes * 60_000,
-    minimumActiveMs: wordPressMinimumActiveMs(config),
+    wallTimeMs: runParameters.wallMinutes * 60_000,
+    minimumActiveMs,
     lab: attached,
     // A run whose host died is sealed first, then resumed like any other (ADR 0036).
     ...(recoverInterrupted === undefined
@@ -1067,10 +1080,7 @@ async function resumeWordPressRun(
                   ),
               },
               interrupted,
-              {
-                ...run,
-                minimumActiveMs: wordPressMinimumActiveMs(config),
-              },
+              { ...run, minimumActiveMs },
             ),
         }),
   });
