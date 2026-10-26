@@ -767,7 +767,7 @@ describe("handoff verification through the real transport and observer (#525)", 
     ).toMatchObject({ result: AWAITING });
   });
 
-  it("records a human-observed reproduction whose scope stays ambiguous without a Lab scenario record (#525, #353)", async () => {
+  it("takes a human-observed result to a Submission Candidate and an exact authorization (#525, #578)", async () => {
     const { result, event, ledger, store, finding, snapshot } =
       await verifyThroughHandoff({ ordinaryLatestVersion: true });
     expect(result).toMatchObject(AWAITING);
@@ -842,6 +842,11 @@ describe("handoff verification through the real transport and observer (#525)", 
       evidence: new TextEncoder().encode("screen recording notes"),
       result: "match",
       recordedBy: "owner",
+      // #578: the observer states the configuration; no Lab scenario does.
+      configuration: {
+        ordinaryPublicSite: true,
+        reason: "Plugin defaults on a fresh install; no setting changed",
+      },
     });
     // The observation alone is not the reviewer's reproduction.
     await expect(review.assessScope({ ref })).rejects.toThrow(
@@ -869,23 +874,48 @@ describe("handoff verification through the real transport and observer (#525)", 
       reason: "awaiting-human-observation",
     });
     expect(exported.review).toMatchObject({
-      manualObservation: { result: "match", evidenceStatus: "available" },
+      manualObservation: {
+        result: "match",
+        evidenceStatus: "available",
+        configuration: { ordinaryPublicSite: true },
+      },
       humanReproduction: { result: "match" },
     });
 
-    // Since #353 no Lab scenario records the configuration, so scope reads the
-    // human basis but leaves the configuration unknown.
     const assessed = await review.assessScope({ ref });
-    expect(
-      assessed.map((item) => [
-        item.programmeId,
-        item.status,
-        item.reason.split(";", 1)[0],
-      ]),
-    ).toEqual([
-      ["wordfence", "ambiguous", "version-or-configuration-unknown"],
-      ["patchstack", "ambiguous", "version-or-configuration-unknown"],
+    expect(assessed.map((item) => [item.programmeId, item.status])).toEqual([
+      ["wordfence", "in-scope"],
+      ["patchstack", "in-scope"],
     ]);
+    const wordfence = assessed.find(
+      (item) => item.programmeId === "wordfence",
+    )!;
+    const draft = await review.saveDraft({
+      assessmentId: wordfence.id,
+      content: "Synthetic report reviewed by the owner",
+      preparedBy: "human",
+    });
+    expect(draft).toMatchObject({
+      candidateId: expect.stringMatching(/^sha256:/),
+      destination: "wordfence",
+    });
+    await review.recordDecision({
+      ref,
+      decision: "accept",
+      reasonCode: "manual-reproduction",
+      openedEvidence: [],
+      duplicate: { status: "no-match" },
+      decidedBy: "owner",
+    });
+    const exact = {
+      candidateId: draft.candidateId,
+      draftDigest: draft.digest,
+      destination: "wordfence",
+    };
+    await review.authorizeExternalAction({ ...exact, authorizedBy: "owner" });
+    expect(await review.admitExternalAction(exact)).toMatchObject({
+      status: "authorized",
+    });
     // The verification event is never rewritten into a confirmation.
     expect(
       ledger.read({ type: "verification-finished" }).at(-1)?.event,

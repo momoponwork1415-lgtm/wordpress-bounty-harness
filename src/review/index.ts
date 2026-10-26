@@ -33,7 +33,9 @@ export {
   currentManualObservation,
   currentObservationVerification,
   MANUAL_LAB_RECEIPT_FILE,
+  MANUAL_OBSERVATION_CONFIGURATION_FILE,
   MANUAL_OBSERVATION_EVIDENCE_FILE,
+  manualObservationConfigurationSchema,
   manualObservationEvidenceStatus,
   recordManualObservation,
   recordManualObservationLabReady,
@@ -763,8 +765,12 @@ export class Review<TFacts = unknown> {
   }): Promise<readonly ScopeAssessment[]> {
     const ref = refSchema.parse(input.ref);
     const basis = this.#requireBasis(ref, "scope");
+    const observationIdentity = observationOf(basis);
+    // A new observation can state another configuration, so its facts are new.
     const existing = (await this.#scopeAssessments(ref)).filter(
-      (item) => item.policyDigest === this.#scopeEvaluator.policyDigest,
+      (item) =>
+        item.policyDigest === this.#scopeEvaluator.policyDigest &&
+        item.observationIdentity === observationIdentity,
     );
     if (existing.length > 0) {
       const byProgramme = new Map(
@@ -776,7 +782,7 @@ export class Review<TFacts = unknown> {
         if (!byProgramme.has(programmeId)) {
           byProgramme.set(
             programmeId,
-            await this.#persistAssessment(ref, {
+            await this.#persistAssessment(ref, observationIdentity, {
               programmeId,
               status: "incomplete",
               destination: programmeId,
@@ -820,7 +826,7 @@ export class Review<TFacts = unknown> {
     const assessments: ScopeAssessment[] = [];
     for (const item of results) {
       assessments.push(
-        await this.#persistAssessment(ref, {
+        await this.#persistAssessment(ref, observationIdentity, {
           programmeId: item.programmeId,
           status: failed ? "incomplete" : item.status,
           destination: item.destination,
@@ -833,6 +839,7 @@ export class Review<TFacts = unknown> {
 
   async #persistAssessment(
     ref: ReviewRef,
+    observationIdentity: string | undefined,
     item: {
       readonly programmeId: string;
       readonly status: ScopeAssessment["status"];
@@ -840,15 +847,19 @@ export class Review<TFacts = unknown> {
       readonly reason: string;
     },
   ): Promise<ScopeAssessment> {
+    const bound =
+      observationIdentity === undefined ? {} : { observationIdentity };
     const record = assessmentSchema.parse({
       id: canonicalDigest({
         ref,
         policyDigest: this.#scopeEvaluator.policyDigest,
         ...item,
+        ...bound,
       }),
       ref,
       policyDigest: this.#scopeEvaluator.policyDigest,
       ...item,
+      ...bound,
       assessedAt: this.#clock().toISOString(),
     });
     const artifactDigest = await this.#storeRecord(record);
@@ -889,6 +900,10 @@ export class Review<TFacts = unknown> {
         basis.reason === "superseded"
           ? "A current verification is required before drafting"
           : MISSING_BASIS,
+      );
+    if (assessment.observationIdentity !== observationOf(basis.basis))
+      throw new Error(
+        "An in-scope assessment of the current observation is required",
       );
     const prior = (await this.#allDrafts(assessment.ref)).filter(
       (item) => item.assessmentId === assessmentId,
@@ -1093,6 +1108,8 @@ export class Review<TFacts = unknown> {
       return basis.reason === "superseded"
         ? "stale-verification"
         : "manual-reproduction-required";
+    if (assessment.observationIdentity !== observationOf(basis.basis))
+      return "stale-verification";
     const manual = basis.basis.reproduction;
     if (manual === null) return "manual-reproduction-required";
 
@@ -1515,4 +1532,11 @@ export class Review<TFacts = unknown> {
         .map(({ event }) => this.#readRecord(event, "review-draft")),
     );
   }
+}
+
+/** The observation a human-observed basis rests on; judge-era bases have none. */
+function observationOf(basis: SubmissionBasis): string | undefined {
+  return basis.kind === "human-observed"
+    ? basis.observation.identity
+    : undefined;
 }

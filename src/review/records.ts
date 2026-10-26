@@ -46,6 +46,11 @@ export const assessmentSchema = z.strictObject({
   destination: id,
   reason: z.string().min(1).max(2000),
   assessedAt: z.iso.datetime(),
+  /**
+   * #578: the `manual-observation-recorded` identity a human-observed basis
+   * read its facts from. Absent on judge-era assessments and earlier records.
+   */
+  observationIdentity: id.optional(),
 });
 export const draftSchema = z.strictObject({
   assessmentId: digest,
