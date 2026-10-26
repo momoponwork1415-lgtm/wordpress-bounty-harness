@@ -4010,6 +4010,70 @@ describe("harness CLI vertical slice", () => {
       );
   });
 
+  it("refuses a campaign id too long for the ledger identities before running (#281)", async () => {
+    const { run, configPath, ledger, prompts } = await harness();
+    const tooLong = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "c".repeat(41),
+      "--config",
+      configPath,
+    );
+    expect(tooLong.code).toBe(2);
+    expect(tooLong.stderr).toContain(
+      "--campaign must be at most 40 characters",
+    );
+    expect(prompts).toHaveLength(0);
+    // The longest accepted id still writes both per-snapshot identities.
+    const campaignId = "c".repeat(40);
+    const longest = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      campaignId,
+      "--config",
+      configPath,
+    );
+    if (longest.stderr) throw new Error(longest.stderr);
+    expect(longest.code).toBe(0);
+    for (const type of ["target-selected", "snapshot-frozen"] as const)
+      expect(
+        ledger()
+          .read({ campaignId, type })
+          .map(({ event }) => event.identity.length),
+      ).toEqual([128]);
+    expect(ledger().read({ type: "target-skipped" })).toHaveLength(0);
+  });
+
+  it("exits non-zero when every target was skipped (#281)", async () => {
+    const { run, configPath, ledger } = await harness({
+      candidates: ["broken-plugin", "synthetic-plugin"],
+      failFreeze: "broken-plugin",
+    });
+    const campaign = await run(
+      "campaign",
+      "run",
+      "broken-plugin",
+      "--campaign",
+      "campaign-all-skipped",
+      "--config",
+      configPath,
+    );
+    expect(campaign.code).toBe(1);
+    expect(campaign.stderr).toContain(
+      "skipped wporg:broken-plugin 9.9.9 at freeze",
+    );
+    expect(
+      ledger().read({
+        campaignId: "campaign-all-skipped",
+        type: "target-skipped",
+      }),
+    ).toHaveLength(1);
+  });
+
   it("records a source freeze failure during selection without leaking diagnostics", async () => {
     const { run, configPath, ledger, store } = await harness({
       candidates: ["broken-plugin", "synthetic-plugin"],

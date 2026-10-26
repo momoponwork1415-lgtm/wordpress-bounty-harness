@@ -9,7 +9,9 @@ import {
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import { verificationResultV1Schema } from "../verification/reproduction-package.js";
 
-const id = z.string().min(1).max(128);
+/** The longest identity, campaign id or other id an event may carry. */
+export const LEDGER_ID_MAX_LENGTH = 128;
+const id = z.string().min(1).max(LEDGER_ID_MAX_LENGTH);
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const artifactRef = z.strictObject({ kind: id, digest });
 const base = z.strictObject({

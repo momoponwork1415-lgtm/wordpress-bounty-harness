@@ -7,7 +7,12 @@ import {
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import type { LabHandle, LabProvisioner, TrialLab } from "../lab/index.js";
 import { readFindingGroups } from "../ledger/finding-groups.js";
-import type { Ledger, LedgerEventV1, LedgerRecord } from "../ledger/index.js";
+import {
+  LEDGER_ID_MAX_LENGTH,
+  type Ledger,
+  type LedgerEventV1,
+  type LedgerRecord,
+} from "../ledger/index.js";
 import { humanReproducedBasis } from "../review/manual-observation.js";
 import { targetSelectionId, type TargetSelection } from "../selection/index.js";
 import type { Snapshot } from "../snapshot/index.js";
@@ -121,6 +126,21 @@ export type CampaignSummary = {
     }[];
   }[];
 };
+
+// A campaign's per-snapshot identities; their format stays fixed so older ledgers still read (#281).
+const targetSelectedIdentity = (campaignId: string, snapshotDigest: string) =>
+  `target-selected-${campaignId}-${snapshotDigest}`;
+const snapshotFrozenIdentity = (campaignId: string, snapshotDigest: string) =>
+  `snapshot-frozen-${campaignId}-${snapshotDigest}`;
+
+/** The longest campaign id whose identities still fit the ledger's id limit (#281). */
+export const MAXIMUM_CAMPAIGN_ID_LENGTH =
+  LEDGER_ID_MAX_LENGTH -
+  Math.max(
+    ...[targetSelectedIdentity, snapshotFrozenIdentity].map(
+      (identity) => identity("", `sha256:${"0".repeat(64)}`).length,
+    ),
+  );
 
 /** How often a target held by the live limit looks at the limit again. */
 export const TARGET_LIMIT_POLL_MS = 30_000;
@@ -439,7 +459,7 @@ export async function runCampaignPipeline<
       };
       await appendOnce({
         ...base,
-        identity: `target-selected-${campaignId}-${snapshot.digest}`,
+        identity: targetSelectedIdentity(campaignId, snapshot.digest),
         occurredAt: target.selectedAt,
         type: "target-selected",
         selectionId,
@@ -455,7 +475,7 @@ export async function runCampaignPipeline<
       });
       await appendOnce({
         ...base,
-        identity: `snapshot-frozen-${campaignId}-${snapshot.digest}`,
+        identity: snapshotFrozenIdentity(campaignId, snapshot.digest),
         occurredAt: at(),
         type: "snapshot-frozen",
         sourceDigest: snapshot.target.sourceDigest,
