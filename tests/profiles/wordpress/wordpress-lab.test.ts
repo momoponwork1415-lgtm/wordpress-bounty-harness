@@ -1936,7 +1936,9 @@ describe("WordPress gVisor Lab", () => {
     if (boundedFailure.status !== "unavailable")
       throw new Error("Expected bounded browser failure");
     expect(boundedFailure.privateDiagnostic?.length).toBe(16 * 1024);
-    database.browserFailureMessage = "Victim action left the Lab origin";
+    const navigationLine =
+      'Victim action left the Lab origin {"check":"url-origin","actionIndex":0}';
+    database.browserFailureMessage = `(node:1) warning\n${navigationLine}\n`;
     expect(
       await pages({
         role: "administrator",
@@ -1946,6 +1948,22 @@ describe("WordPress gVisor Lab", () => {
       status: "unavailable",
       phase: "victim-page",
       failureCode: "victim-navigation",
+      privateDiagnostic: Buffer.from(navigationLine),
+    });
+    // Page text inside the detail cannot rename the failure.
+    const notVisibleLine =
+      'Victim action not visible {"visibleText":"Victim login failed"}';
+    database.browserFailureMessage = notVisibleLine;
+    expect(
+      await pages({
+        role: "administrator",
+        paths: ["/wp-admin/admin.php?page=fixture"],
+      }),
+    ).toEqual({
+      status: "unavailable",
+      phase: "victim-page",
+      failureCode: "victim-action-not-visible",
+      privateDiagnostic: Buffer.from(notVisibleLine),
     });
     database.browserFailureAt = null;
 
@@ -2060,6 +2078,8 @@ describe("WordPress gVisor Lab", () => {
       openerAccessible?: boolean;
       extraPopup?: boolean;
       captureDiagnostic?: boolean;
+      hidden?: boolean;
+      clickText?: boolean;
     }): Promise<string> => {
       let onPage: ((tab: unknown) => void) | undefined;
       let resolvePopup: ((tab: unknown) => void) | undefined;
@@ -2091,8 +2111,10 @@ describe("WordPress gVisor Lab", () => {
         screenshot: async () => Buffer.from("89504e470d0a1a0a", "hex"),
       };
       const target = {
-        waitFor: async () => {},
-        count: async () => 1,
+        waitFor: async () => {
+          if (input.hidden) throw new Error("Timeout");
+        },
+        count: async () => (input.hidden ? 0 : 1),
         evaluate: async () => true,
         click: async () => {
           onPage?.(popup);
@@ -2121,8 +2143,11 @@ describe("WordPress gVisor Lab", () => {
         on() {},
         context: () => context,
         goto: async () => {},
-        url: () => "http://wordpress/?p=7",
+        url: () => "http://wordpress/?p=7&_wpnonce=private",
+        evaluate: async (read: () => unknown) => read(),
         locator: () => target,
+        getByText: (_text: string, options: { exact: boolean }) =>
+          options.exact ? target : { count: async () => 2 },
         waitForEvent: () =>
           new Promise<unknown>((resolve) => {
             resolvePopup = resolve;
@@ -2155,7 +2180,9 @@ describe("WordPress gVisor Lab", () => {
           env: {
             WBH_VISIT_PATH: "/?p=7",
             WBH_VISIT_ACTIONS: JSON.stringify([
-              { kind: "click", selector: "#open" },
+              input.clickText
+                ? { kind: "click-text", text: "Open", exact: true }
+                : { kind: "click", selector: "#open" },
             ]),
           },
           stdout: {
@@ -2173,6 +2200,7 @@ describe("WordPress gVisor Lab", () => {
         URL,
         HTMLImageElement: ImageElement,
         document: {
+          body: { innerText: `  Plugin   settings\n${"x".repeat(2000)}` },
           readyState: "complete",
           querySelectorAll: () => [
             new ImageElement(),
@@ -2204,18 +2232,82 @@ describe("WordPress gVisor Lab", () => {
         http4xxCount: 1,
       },
     });
+    const failure = (output: string, name: string): unknown => {
+      expect(output.startsWith(`${name} {`)).toBe(true);
+      return JSON.parse(output.slice(name.length + 1));
+    };
+    const leftOrigin = "Victim action left the Lab origin";
     expect(
-      await runPopupVisit({ url: "about:blank", browserOpener: false }),
-    ).toBe("Victim action left the Lab origin");
+      failure(
+        await runPopupVisit({ url: "about:blank", browserOpener: false }),
+        leftOrigin,
+      ),
+    ).toEqual({
+      check: "blank-opener-differs",
+      actionIndex: 0,
+      popup: true,
+      url: "about:blank",
+      expectedOrigin: "http://wordpress",
+    });
     expect(
-      await runPopupVisit({ url: "about:blank", effectiveOrigin: "null" }),
-    ).toBe("Victim action left the Lab origin");
+      failure(
+        await runPopupVisit({ url: "about:blank", effectiveOrigin: "null" }),
+        leftOrigin,
+      ),
+    ).toMatchObject({ check: "blank-origin-not-inherited" });
     expect(
-      await runPopupVisit({ url: "about:blank", openerAccessible: false }),
-    ).toBe("Victim action left the Lab origin");
-    expect(await runPopupVisit({ url: "https://outside.invalid/" })).toBe(
-      "Victim action left the Lab origin",
+      failure(
+        await runPopupVisit({ url: "about:blank", openerAccessible: false }),
+        leftOrigin,
+      ),
+    ).toMatchObject({ check: "blank-origin-not-inherited" });
+    expect(
+      failure(
+        await runPopupVisit({
+          url: "https://outside.invalid/path?token=private#frag",
+        }),
+        leftOrigin,
+      ),
+    ).toEqual({
+      check: "url-origin",
+      actionIndex: 0,
+      popup: true,
+      url: "https://outside.invalid/path",
+      expectedOrigin: "http://wordpress",
+    });
+    const notVisible = failure(
+      await runPopupVisit({ url: "about:blank", hidden: true }),
+      "Victim action not visible",
     );
+    expect(notVisible).toEqual({
+      check: "action-visible",
+      actionIndex: 0,
+      kind: "click",
+      selector: "#open",
+      url: "http://wordpress/",
+      attachedCount: 0,
+      visibleText: expect.stringMatching(/^Plugin settings x+$/),
+    });
+    expect((notVisible as { visibleText: string }).visibleText.length).toBe(
+      1024,
+    );
+    // An exact text that misses while looser text matches is told apart.
+    expect(
+      failure(
+        await runPopupVisit({
+          url: "about:blank",
+          hidden: true,
+          clickText: true,
+        }),
+        "Victim action not visible",
+      ),
+    ).toMatchObject({
+      kind: "click-text",
+      text: "Open",
+      exact: true,
+      attachedCount: 0,
+      looseTextCount: 2,
+    });
     expect(
       await runPopupVisit({
         url: "http://wordpress/?p=8",
