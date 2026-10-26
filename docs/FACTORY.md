@@ -66,7 +66,7 @@ flowchart TB
     G1["check<br/>pnpm check"] --- G2["build + CLI smoke<br/>prompt / policy の複製"] --- G3["private-guard<br/>Private Evidence・画像・鍵・canary"] --- G4["adr-guard<br/>守る path は owner-approved 必須"]
   end
   CI --> N{"探索に触る PR か"}
-  N -->|agent 入力| N1["再発見 case で 3 Trial<br/>completed と source 根拠付き候補"]
+  N -->|agent 入力| N1["開発セット 6 case × 各 3 run<br/>DEVELOPMENT 第 5 節の 6 段で採否"]
   N -->|配線・runtime・選定| N2["runner が流した異なる slug の<br/>初回 3 Trial（completed・wall・停止理由）"]
   N -->|触らない| N3["「なし」と書く"]
   N1 --> H
@@ -155,7 +155,7 @@ flowchart LR
 | 文脈 | AGENTS.md、GLOSSARY.md、ADR、LESSONS.md、knowledge/experiments.md |
 | spec | Issue 本文（振る舞い、受入条件）。大きな変更は報告 → 決定 → ADR |
 | 実装 run | branch 1 本、PR 1 本、500 行以内、5 項目 |
-| 検証 | CI 4 本、PR の「測った数字」、探索は 3 Trial |
+| 検証 | CI 4 本、PR の「測った数字」、探索は 6 case × 3 run の 6 段 |
 | review と delivery | 人間の merge、`owner-approved`、ruleset strict |
 | 証拠の保持 | 台帳（digest 参照）、Private Evidence（Git 外）、experiments.md |
 | monitor | 週末の数字、`docs/reviews/` の日付付き報告、#270 型の Issue 化 |
