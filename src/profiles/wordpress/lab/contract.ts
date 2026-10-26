@@ -147,7 +147,11 @@ export type WordPressVictimPagesObservation =
       readonly phase: WordPressVictimPagesFailurePhase;
       /** Bounded observer failure code; no browser stderr enters a ledger event. */
       readonly failureCode?: WordPressVictimPagesFailureCode;
-      /** Private Evidence only. Never copy these bytes into a ledger event. */
+      /**
+       * Private Evidence only. Never copy these bytes into a ledger event.
+       * For a named failure code, the one browser line that names it with the
+       * failed check and what the observer saw; otherwise bounded stderr.
+       */
       readonly privateDiagnostic?: Buffer;
     };
 
