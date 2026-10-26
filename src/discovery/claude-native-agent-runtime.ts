@@ -41,6 +41,7 @@ import type {
 } from "./provider-research-report.js";
 import {
   commandFromClaudeToolUse,
+  type LabCommandRule,
   type ObservedCommand,
 } from "./read-paths.js";
 import {
@@ -454,6 +455,8 @@ export class ClaudeNativeAgentRuntime {
     readonly broker: ProviderCredentialEgressBroker,
     readonly attachments: ProviderAttachmentStore,
     readonly sandboxImage: string,
+    /** The profile's rule for `observed.labRequests` / `dbQueries` (ADR 0011). */
+    readonly labCommands: LabCommandRule,
     readonly clock: () => Date = () => new Date(),
   ) {}
 
@@ -773,7 +776,11 @@ export class ClaudeNativeAgentRuntime {
         agentRole: "root",
         ...finalReportTimeline(rootTurns(events)),
         usage: rootUsage(events),
-        observed: observedFromCommands(commandsOf(events), mounts),
+        observed: observedFromCommands(
+          commandsOf(events),
+          mounts,
+          this.labCommands,
+        ),
         childThreadsObserved: childIds.size,
         childThreadsAdmitted: agentRuns.length,
         ...(brokerMetrics === undefined ? {} : { brokerMetrics }),
@@ -893,6 +900,7 @@ export class ClaudeNativeAgentRuntime {
           observed: observedFromCommands(
             commandsOf(transcript),
             dependencyMountPathsOf(run),
+            this.labCommands,
           ),
           grantReceiptDigest,
           ...(diagnostic === undefined

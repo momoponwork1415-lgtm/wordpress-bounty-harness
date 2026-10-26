@@ -22,6 +22,7 @@ import {
   type ProviderCredentialEgressGrantRequest,
 } from "../../src/discovery/index.js";
 import { reportJsonSchema } from "../../src/discovery/codex-native-agent-runtime.js";
+import { wordPressLabCommandRule } from "../../src/profiles/wordpress/discovery/lab-commands.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const image = `claude@${digest}`;
@@ -221,6 +222,7 @@ async function runtime(
       broker(requests),
       attachments,
       image,
+      wordPressLabCommandRule,
       () => new Date(start),
     ),
     commands,
@@ -283,6 +285,37 @@ describe("Claude native agent runtime", () => {
       subagentModel: "claude-opus-5-5",
     });
     expect(commands[0]?.subagentModel).toBe("claude-opus-5-5");
+  });
+
+  it("counts Lab requests and database queries by the profile's rule", async () => {
+    const bash = {
+      type: "assistant",
+      message: {
+        id: "m2",
+        model: "claude-opus-5-5",
+        content: [
+          {
+            type: "tool_use",
+            name: "Bash",
+            input: {
+              command:
+                "curl http://wordpress/health && mysql -h database -e SELECT",
+            },
+          },
+        ],
+      },
+    };
+    const { runtime: claude } = await runtime(
+      lines(readTool, bash, turn([{ claim: "first" }])),
+    );
+    const result = await claude.execute(run);
+    expect(result.receipt.observed).toEqual({
+      toolCalls: 2,
+      filesRead: 1,
+      uniqueFilesRead: 1,
+      labRequests: 1,
+      dbQueries: 1,
+    });
   });
 
   it("records each child's role, type and delegation digest and the Root's first report time (A2)", async () => {
