@@ -24,7 +24,7 @@
 | 選定方針 | `src/profiles/wordpress/policy/selection.json`（説明は同じ場所の `selection.md`）。インストール数の下限と上限、更新の鮮度、除外slug、公開履歴の重み・window・mirror の最大 age（ADR 0037） | 月1回程度 |
 | trust境界宣言 | `src/profiles/wordpress/prompts/trust-boundary-v1.md` をそのまま使う | ほぼ変えない |
 | 対象範囲の方針 | `src/profiles/wordpress/policy/programme-scope.md` を公式ページで見直す | 提出前と月1回 |
-| 履歴mirror | 第5節の手順で更新し、`history status` で鮮度を確かめる。mirror が方針 `maximumHistoryAgeDays` より古いと選定が止まる（ADR 0037。既定 2 日、2026-10-19 から一時的に 14 日、PR #383、戻しは #385）。日次更新は host の cron（19:10 UTC）が旧環境の `refresh_wordfence.py` を回す | 毎日と提出前 |
+| 履歴mirror | 第5節の手順で更新し、`history status` で鮮度を確かめる。mirror が方針 `maximumHistoryAgeDays` より古いと選定が止まる（ADR 0037。既定 2 日。2026-10-19 から一時的に 14 日にした PR #383 は #385 で戻した）。日次更新は host の cron（19:10 UTC）が旧環境の `refresh_wordfence.py` を回す | 毎日と提出前 |
 | 人手に数えない保守 | Step 1 の「人手介入 0」の判定で介入に数えないもの: 1 日 1 回の `continuous status`、ChatGPT の再ログイン（`waiting-login` からの再開）、Programme 写しの月 1 回の更新、提出前の mirror 更新、`docker system prune`（`-a` を付けない）、`lab cleanup`、レビュー batch の前後の `continuous stop` / `resume` / `run`。それ以外（下限の変更、設定変更、手動の `campaign run`、修正 PR）は介入に数える | 判定時 |
 
 ## 2. 週の流れ
@@ -246,7 +246,7 @@ harness ledger runtime [--campaign <id>]  # runが記録したmodel、effort、C
 - 更新は既存の正規化器で行う。旧環境で `python3 tools/refresh_wordfence.py --workspace /home/dev/wp-bounty-workspace` を実行する。API keyは `WORDFENCE_INTELLIGENCE_API_KEY` か `~/.config/wordfence/env` に置く。成功後30分以内の再取得は抑止される。
 - 更新後に `harness history status` を見る。照合口と同じ規則で、`fresh` / `stale`（既定24時間超、または前回更新の失敗）/ `unavailable`（stateが読めない、DBとstateが食い違う）を表示する。
 - `stale` / `unavailable` は「重複なし」を意味しない。詳細は [wordfence-history/README.md](../src/profiles/wordpress/wordfence-history/README.md)。
-- 選定は同じ mirror の件数を採点に使い、`last_successful_at` が方針 `maximumHistoryAgeDays`（既定 2 日、2026-10-19 から一時 14 日、#385 で戻す）を超えると `select` と runner の選定が止まる（ADR 0037）。日次更新は host の cron（19:10 UTC）で回す。
+- 選定は同じ mirror の件数を採点に使い、`last_successful_at` が方針 `maximumHistoryAgeDays`（既定 2 日。2026-10-19 からの一時値 14 日は #385 で戻した）を超えると `select` と runner の選定が止まる（ADR 0037）。日次更新は host の cron（19:10 UTC）で回す。
 
 ### 対象の自動選定
 
@@ -271,7 +271,7 @@ node scripts/export-legacy-slugs.mjs \
 
 旧 `scripts/prepare-pilot-selection.mjs` は 2026-10-19 に削除した。同じことは `harness --host <host.json> --state <state> select --config src/profiles/wordpress/policy/selection.json` で行う。
 
-スコア内訳、除外理由、候補一覧の取得元と観測時刻は標準出力と Git 外の `selection-report` に残る。最初の Snapshot 固定に失敗した候補は `snapshot-unavailable` として除外し、`target-skipped` から対象選定記録・選定レポート・Private Evidence の診断を digest 参照できるようにする。台帳の理由は短い定型コードだけにする。`target-selected` は固定済み Snapshot digest と `target-selection` の Private Evidence を参照する。次の `campaign run --all` は同じ方針 digest の最新バッチを使い、Snapshot が変われば止まる。公開履歴は host 設定 `wordfenceHistory` の mirror から slug 単位の件数と最新公開日だけを採点に使い（重みは上の列挙の段落と `policy/selection.md`。現行は `history: 0`、`historyPayingClass: 1`、`recordRecency: 1`）、記録の内容は読まず探索にも渡さない。mirror の `last_successful_at` が方針の `maximumHistoryAgeDays`（既定 2 日、一時 14 日）より古い、state と DB が食い違う、host に mirror が無いときは `select` が候補を観測せずに止まる。選定レポートと `target-selection.json` に mirror の時点と digest、件数、最新公開日が残る（ADR 0037）。
+スコア内訳、除外理由、候補一覧の取得元と観測時刻は標準出力と Git 外の `selection-report` に残る。最初の Snapshot 固定に失敗した候補は `snapshot-unavailable` として除外し、`target-skipped` から対象選定記録・選定レポート・Private Evidence の診断を digest 参照できるようにする。台帳の理由は短い定型コードだけにする。`target-selected` は固定済み Snapshot digest と `target-selection` の Private Evidence を参照する。次の `campaign run --all` は同じ方針 digest の最新バッチを使い、Snapshot が変われば止まる。公開履歴は host 設定 `wordfenceHistory` の mirror から slug 単位の件数と最新公開日だけを採点に使い（重みは上の列挙の段落と `policy/selection.md`。現行は `history: 0`、`historyPayingClass: 1`、`recordRecency: 1`）、記録の内容は読まず探索にも渡さない。mirror の `last_successful_at` が方針の `maximumHistoryAgeDays`（既定 2 日）より古い、state と DB が食い違う、host に mirror が無いときは `select` が候補を観測せずに止まる。選定レポートと `target-selection.json` に mirror の時点と digest、件数、最新公開日が残る（ADR 0037）。
 
 ### 子の最終JSONがschemaで失敗したとき
 
