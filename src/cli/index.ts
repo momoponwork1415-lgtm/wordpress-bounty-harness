@@ -1307,8 +1307,12 @@ const COMMANDS: readonly Command[] = [
           if (stored.status === "resolved")
             property = stored.value.brokenProperty;
         }
+        // #613: the declared enum values that parked it, next to the reason.
+        const declared = Object.entries(event.declaredPrecondition ?? {})
+          .map(([field, value]) => ` ${field}=${value}`)
+          .join("");
         print([
-          `parked  ${event.category}  ${event.findingId}  ${property}  reason: ${event.reason}`,
+          `parked  ${event.category}  ${event.findingId}  ${property}  reason: ${event.reason}${declared}`,
         ]);
       }
       return 0;
@@ -1322,7 +1326,8 @@ const COMMANDS: readonly Command[] = [
     ],
     options: { campaign: STR, finding: STR, reason: STR, by: STR },
     handler: async ({ values, state, environment, print }) => {
-      // #529 (ADR 0038 追記 8): append-only restore of a retired admission park.
+      // #529 (ADR 0038 追記 8): append-only restore of a retired admission park,
+      // and #613 (追記 13) of a park on the agent's declared precondition.
       const restore = environment.profile.restoreParked;
       if (restore === undefined)
         throw new UsageError("This profile cannot restore parked Findings");

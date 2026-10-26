@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   admitWordPressFinding,
   readWordPressFinding,
+  wordPressDeclaredPreconditionPark,
 } from "../../../src/profiles/wordpress/discovery/finding.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
@@ -146,4 +147,76 @@ it("reads a stored Finding back only when its identity matches its content", () 
   expect(() =>
     readWordPressFinding({ ...admitted, impact: "privesc-to-admin" }),
   ).toThrow();
+});
+
+// #613: optional declarations. Absence is undeclared and neither holds nor parks.
+describe("declared precondition fields", () => {
+  const context = {
+    runId: "run-1",
+    snapshotDigest: digest,
+    reportArtifactDigest: digest,
+  };
+
+  it("accepts both fields, either one, or neither, and reads each back", () => {
+    for (const declared of [
+      {},
+      { configurationClass: "ordinary-feature-use" },
+      { attackerInputPath: "public-third-party-content" },
+      { exploitTiming: "any-time" },
+      {
+        configurationClass: "admin-setting-change",
+        attackerInputPath: "vendor-controlled-data",
+        exploitTiming: "race",
+      },
+    ]) {
+      const admitted = admitWordPressFinding(
+        { ...candidate, ...declared },
+        context,
+      );
+      expect(admitted).toMatchObject(declared);
+      expect(
+        readWordPressFinding(JSON.parse(JSON.stringify(admitted)) as unknown),
+      ).toEqual(admitted);
+    }
+    // A Finding stored before #613 has neither field and keeps its identity.
+    expect(
+      "configurationClass" in admitWordPressFinding(candidate, context),
+    ).toBe(false);
+  });
+
+  it("rejects values outside the declared enums", () => {
+    for (const declared of [
+      { configurationClass: "admin-configuration" },
+      { attackerInputPath: "external-service" },
+      { exploitTiming: "transient-window" },
+      { configurationClass: "" },
+    ])
+      expect(() =>
+        admitWordPressFinding({ ...candidate, ...declared }, context),
+      ).toThrow();
+  });
+
+  it("names the declaration that parks and nothing for the rest", () => {
+    expect(wordPressDeclaredPreconditionPark({})).toBeUndefined();
+    expect(
+      wordPressDeclaredPreconditionPark({
+        configurationClass: "ordinary-feature-use",
+        attackerInputPath: "public-third-party-content",
+      }),
+    ).toBeUndefined();
+    expect(
+      wordPressDeclaredPreconditionPark({
+        configurationClass: "default",
+        attackerInputPath: "vendor-controlled-data",
+      }),
+    ).toEqual({
+      configurationClass: "default",
+      attackerInputPath: "vendor-controlled-data",
+    });
+    expect(
+      wordPressDeclaredPreconditionPark({
+        configurationClass: "developer-mode",
+      }),
+    ).toEqual({ configurationClass: "developer-mode" });
+  });
 });

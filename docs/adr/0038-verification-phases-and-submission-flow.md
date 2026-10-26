@@ -190,3 +190,25 @@ Programme Boundary を `wordfence-2026-10-26` 版にし、その節を次の文�
 - ADR 0040 の「名指しした人間が新しい review Lab で記録した」は、この追記で「検証 Lab か新しい review Lab で記録した」に読み替える。skill 本文（`wbh-verify`、`wbh-review`）の該当行は #595 で直す。
 
 消し方: この追記の PR を revert する。Lab は attempt の記録の前に消える経路に戻る。`labKind` を持つ `manual-observation-recorded` は旧版の台帳 schema では読めないので、revert の前に扱いを決める。
+
+## 2026-10-26 追記 13: 申告欄の値で出口 park する（#613）
+
+所有者決定 2026-10-26: (a) 偽陽性は探索プロンプトではなく出口の park で抑える。(b) 抑える型は 2 つある。「管理者が脆弱な設定を作らないと成立しない」型と、「sink はエスケープされていないが、攻撃者に入力の経路が無い」型である。(c) 外部サービスを経由する経路でも、攻撃者が公開の経路で書き込めれば対象に残す（所有者:「外部サービスでもいいが、SNS など書き込めればいい」）。所有者が以前に提出して報酬を得た Finding（custom-facebook-feed 4.13.0、[measurement.md](../agents/measurement.md) の表）は、誰でも書ける公開 Facebook ページのコメントが Graph API を通って管理画面の preview に入る経路だった。分けるのは「外部サービスに接続しているか」ではなく、攻撃者がそのサービスに公開の経路で書けるかどうかである。スキャナの結果、脆弱性データベース、API の応答本文のように、ベンダーや第三者だけが書くデータを握らないと届かない経路を「入力の経路が無い」型とする。(d) 文の規則は試して退けた。判断はエージェントが宣言した enum で行い、Harness は enum の値だけで park する。(e) 台帳で reject などになっているものが偽陽性である（所有者:「台帳で reject などになっているものが FP です」）。2026-10-18 以降の直近の reject 16 件のうち 6 件は、時間に頼る連鎖だった。transient の 24 分の窓、管理者の操作から 5 分の捕捉の窓、2 つの PHP worker の競合と、それぞれと根が同じ重複である（所有者の理由: `owner-excluded-24-minute-embed-precondition`、`five-minute-admin-capture-window`、`owner-excluded-race-dependent-precondition`）。Wordfence の先例で、競合やキャッシュに頼る XSS が受理された数は 0 である。これを 3 つ目の型とする。
+
+文の規則を退けた理由: `admin has created|authored|added …` の規則は本番の Finding 167 件のうち 28 件に当たった。そのうち 4 件は runtime-confirmed で、管理画面の列を足す、ポップアップに自前のショートコードを置く、スニペットに変数を置く、という管理者の通常の機能利用だった。Wordfence の先例でも「設定依存の XSS」として 63 回受理されている型である。外部サービスの規則（PR #615、閉じた）は「接続済み」「攻撃者が … API を握る必要がある」という同じ文で、公開のコメントが入る経路とベンダーのデータにしか入らない経路の両方に当たった。どちらの境も判断であり、Harness の規則にすると「判断の要らない処理だけをコードにする」（AGENTS.md の Harness と AI の責務）を越える。
+
+決定:
+
+- WordPress の Finding schema に、任意の申告欄を 3 つ足す。`configurationClass` は `default` / `ordinary-feature-use` / `admin-authored-unsafe-content` / `admin-setting-change` / `developer-mode` のどれか、`attackerInputPath` は `direct-request` / `own-account-data` / `public-third-party-content` / `vendor-controlled-data` のどれか、`exploitTiming` は `any-time` / `time-window` / `race` のどれかである。各値の 1 行の説明は schema に書き、出力契約の節（ADR 0019）はそこから生成する。目的プロンプトの本文は変えない。
+- 契約節は `wordpress-discovery-contract-v5` にする。新しい Trial を起こせる行（`wp2shell-bounty-v11`、`v16-wide`、candidate の `v15-wide`）は v5 を受け取る。archived の行（`v14-wide` を含む）は、記録した digest のとおり v4 のままにする。v1 / v2 / v4 は申告欄の無い schema から作るので、本文も digest も変わらない。過去 Trial の `contractDigest` はそのまま照合できる。
+- 出口では、Programme Boundary の park（`outside-programme-boundary`）を先に見る。その次に、`configurationClass` が `admin-authored-unsafe-content` / `admin-setting-change` / `developer-mode` の Finding、`attackerInputPath` が `vendor-controlled-data` の Finding、`exploitTiming` が `time-window` / `race` の Finding を、reason `declared-precondition` で `finding-parked` にする。`finding-parked` の `declaredPrecondition` には、申告した enum 値だけを残す（不変条件 8）。`ordinary-feature-use`、`public-third-party-content`、`any-time` の Finding は、従来どおりレビュー列に入る。
+- 欄は任意とする。申告の無い Finding は park も保留もしない（ADR 0018）。申告の無い Finding と旧 evidence は「未申告」として読む。enum に無い値を書いた候補は、ほかの欄と同じく `candidate-held` になる。
+- `declared-precondition` の park は、旧規則の park と同じく `review restore` で戻せる。`review parked` は reason の後に申告した値を並べる。`review export` は 3 つの欄を出す（申告が無ければ null）。
+
+追記 8 との関係: 追記 8 の「設定前提の文言では止めない」はそのまま残す。この追記で park するのは、エージェントが申告欄で選んだ値である。Harness は `configurationPrecondition` の文を読んで park しない。文言の分類（`default` / `common-usage` / `admin-configuration` / `unknown`）も変えない。
+
+変えないもの: 10 の impact 分類の park（ADR 0032 の 2026-10-17 節）、確定の根拠（ADR 0040 の人間の観測と `review decide --reproduced match`）、探索プロンプトの目的文（所有者 2026-10-26「広く報告して review で落とす」を上書きしない。park した Finding は `review parked` に残る）、`configurationPrecondition` の自由文。
+
+計測: 本番ランナーの再起動の後に、新しい Finding のうち 3 つの欄をすべて申告した割合と、`declared-precondition` の park の件数を見る。2026-10-26 の Finding 9 件を手で当てると、スキャナ / 脆弱性データベースの 4 件は `vendor-controlled-data`（park）、WAF ログの 2 件は攻撃者自身の要求が残るので `public-third-party-content`（レビュー列）、配信サービスの 3 件はエージェントの申告次第になる。時間に頼る 6 件の reject は、`time-window` か `race` を申告すれば park に回る。
+
+消し方: `candidate-admission.ts` の `declared-precondition` の分岐と `finding.ts` の `wordPressDeclaredPreconditionPark` を消し、`review restore` の受け入れを旧 reason だけに戻す。prompt 表の 3 行（`v11`、`v16-wide`、`v15-wide`）を v4 の契約に戻せば、エージェントに欄が渡らなくなる。schema の 3 つの欄は、記録済みの Finding を読むために optional のまま残す。台帳の enum の `declared-precondition` と `declaredPrecondition` も、park 済みの event を読み続けるために残す。

@@ -24,7 +24,15 @@ afterEach(async () => {
 async function fixture(input: {
   readonly precondition: string;
   readonly reason?:
-    "admin-configuration-precondition" | "outside-programme-boundary";
+    | "admin-configuration-precondition"
+    | "outside-programme-boundary"
+    | "declared-precondition";
+  /** #613: the agent's declaration, kept in the Finding and in the park. */
+  readonly declared?: {
+    readonly configurationClass?: "developer-mode";
+    readonly attackerInputPath?: "vendor-controlled-data";
+    readonly exploitTiming?: "race";
+  };
   readonly recordedBeforePark?: boolean;
   readonly verificationParkIdentity?: boolean;
 }) {
@@ -49,6 +57,7 @@ async function fixture(input: {
       sourceTrace: [{ file: "plugin.php", function: "render", line: 1 }],
       existingControls: "None",
       labObservations: "Synthetic evidence only",
+      ...input.declared,
     },
     {
       runId: "run-1",
@@ -87,6 +96,9 @@ async function fixture(input: {
     category: "stored-xss",
     reason: input.reason ?? "admin-configuration-precondition",
     preconditionClass: "admin-configuration",
+    ...(input.declared === undefined
+      ? {}
+      : { declaredPrecondition: input.declared }),
     artifacts: [{ kind: "finding", digest }],
   });
   return { ledger, evidence, finding, digest };
@@ -172,6 +184,46 @@ it("restores a setting park but refuses a Programme Boundary park", async () => 
       findingId: excluded.finding.findingId,
     }),
   ).rejects.toThrow("Programme Boundary parks cannot be restored here");
+});
+
+it("restores a park on the agent's declared precondition (#613)", async () => {
+  const declared = await fixture({
+    precondition: "default",
+    reason: "declared-precondition",
+    declared: {
+      configurationClass: "developer-mode",
+      attackerInputPath: "vendor-controlled-data",
+      exploitTiming: "race",
+    },
+  });
+  expect(declared.finding.configurationClass).toBe("developer-mode");
+  expect(
+    declared.ledger.activeParked({ campaignId: "campaign-1" }),
+  ).toMatchObject([
+    {
+      reason: "declared-precondition",
+      declaredPrecondition: {
+        configurationClass: "developer-mode",
+        attackerInputPath: "vendor-controlled-data",
+        exploitTiming: "race",
+      },
+    },
+  ]);
+  await expect(
+    restoreParkedWordPressFinding({
+      ...declared,
+      campaignId: "campaign-1",
+      findingId: declared.finding.findingId,
+    }),
+  ).resolves.toEqual({ status: "restored" });
+  expect(
+    declared.ledger.activeParked({ campaignId: "campaign-1" }),
+  ).toHaveLength(0);
+  expect(declared.ledger.read({ type: "finding-recorded" })).toMatchObject([
+    {
+      event: { findingId: declared.finding.findingId, category: "stored-xss" },
+    },
+  ]);
 });
 
 it("finishes a correction interrupted after recording but before the marker", async () => {

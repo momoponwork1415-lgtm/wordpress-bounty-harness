@@ -14,6 +14,8 @@ export const LEDGER_ID_MAX_LENGTH = 128;
 const id = z.string().min(1).max(LEDGER_ID_MAX_LENGTH);
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const artifactRef = z.strictObject({ kind: id, digest });
+/** An enum value a profile declared; never free text. */
+const declaredToken = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
 const base = z.strictObject({
   schemaVersion: z.literal(1),
   identity: id,
@@ -441,8 +443,20 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     reason: z.enum([
       "outside-programme-boundary",
       "admin-configuration-precondition",
+      "declared-precondition",
     ]),
     preconditionClass: id.optional(),
+    /**
+     * #613: the profile's declared values behind a `declared-precondition`
+     * park, enum tokens only (invariant 8). Absent on every other park.
+     */
+    declaredPrecondition: z
+      .strictObject({
+        configurationClass: declaredToken.optional(),
+        attackerInputPath: declaredToken.optional(),
+        exploitTiming: declaredToken.optional(),
+      })
+      .optional(),
   }),
   /** Correct an admission-time precondition park without deleting its audit event. */
   event({

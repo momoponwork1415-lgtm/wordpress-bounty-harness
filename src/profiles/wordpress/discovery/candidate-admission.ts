@@ -19,7 +19,11 @@ import {
 import { admitFindingGroup } from "../../../ledger/finding-groups.js";
 import type { Ledger } from "../../../ledger/index.js";
 import { classifyWordPressPrecondition } from "../verification/precondition-class.js";
-import { admitWordPressFinding, wordPressFindingGroupKeys } from "./finding.js";
+import {
+  admitWordPressFinding,
+  wordPressDeclaredPreconditionPark,
+  wordPressFindingGroupKeys,
+} from "./finding.js";
 import { admitWordPressLead, wordPressLeadSignature } from "./lead.js";
 import {
   classifyWordPressCandidate,
@@ -92,11 +96,19 @@ async function recordFinding(
     category: finding.impact,
     preconditionClass,
   };
-  // Programme Boundary の外にある効果だけを入口で止める。設定の受理可否は検証後に判断する。
-  const parkReason = !isWordPressProgrammeImpact(finding.impact)
-    ? "outside-programme-boundary"
-    : undefined;
-  if (parkReason !== undefined) {
+  // Programme Boundary の外にある効果を先に止める。次に、agent が申告欄で
+  // 管理者の脆弱な設定か、ベンダーだけが書けるデータを選んだ Finding を止める
+  // （#613、ADR 0038 追記 13）。文言からは判定しない（追記 8）。
+  const declared = wordPressDeclaredPreconditionPark(finding);
+  const park = !isWordPressProgrammeImpact(finding.impact)
+    ? { reason: "outside-programme-boundary" as const }
+    : declared !== undefined
+      ? {
+          reason: "declared-precondition" as const,
+          declaredPrecondition: declared,
+        }
+      : undefined;
+  if (park !== undefined) {
     const status = await appendEvent(
       options,
       "Parked finding identity conflict",
@@ -104,7 +116,7 @@ async function recordFinding(
         ...common,
         identity: `discovery-finding-parked-${finding.findingId}`,
         type: "finding-parked",
-        reason: parkReason,
+        ...park,
       },
     );
     return { kind: "finding", index, outcome: "parked", status };

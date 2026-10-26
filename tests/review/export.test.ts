@@ -118,6 +118,9 @@ async function fixture(
       impact: "options-update",
       brokenProperty: "Only administrators change site options",
       configurationPrecondition: "default",
+      configurationClass: "default",
+      attackerInputPath: "direct-request",
+      exploitTiming: "any-time",
       sourceTrace: [
         { file: "includes/handler.php", function: "save", line: 12 },
       ],
@@ -354,6 +357,10 @@ describe("review export", () => {
       impact: "options-update",
       brokenProperty: "Only administrators change site options",
       configurationPrecondition: "default",
+      // #613: the declared enum values travel with the Finding.
+      configurationClass: "default",
+      attackerInputPath: "direct-request",
+      exploitTiming: "any-time",
       sourceTrace: [
         { file: "includes/handler.php", function: "save", line: 12 },
       ],

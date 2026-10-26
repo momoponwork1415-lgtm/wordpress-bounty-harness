@@ -9,7 +9,9 @@ type Plan = ReturnType<typeof wordPressDiscoveryContractPlan>;
  * What main@d9c840d produced per prompt id from its `outputContractFor` and
  * `objectiveOnly` id comparisons with the entry index off. The index and its
  * coverage contract (v3) were deleted (ADR 0034), so the "index on" column is
- * gone; v5 / v6 keep the v2 contract they received without the index.
+ * gone; v5 / v6 keep the v2 contract they received without the index. The
+ * rows that can still start a Trial moved to the v5 contract with the
+ * declared-precondition fields (#613); archived rows keep v4.
  */
 const inline = (contract: Plan["contract"]): Plan => ({
   objectiveOnly: contract !== null,
@@ -36,14 +38,14 @@ const MAIN_PLANS: Record<string, Plan> = {
   "wp2shell-bounty-v7": inline("v2"),
   "wp2shell-bounty-v8": inline("v4"),
   "wp2shell-bounty-v10": inline("v4"),
-  "wp2shell-bounty-v11": inline("v4"),
+  "wp2shell-bounty-v11": inline("v5"),
   "wp2shell-bounty-v10-wide": inline("v4"),
   "wp2shell-bounty-v11-wide": inline("v4"),
   "wp2shell-bounty-v12-wide": inline("v4"),
   "wp2shell-bounty-v13-wide": inline("v4"),
   "wp2shell-bounty-v14-wide": inline("v4"),
-  "wp2shell-bounty-v15-wide": inline("v4"),
-  "wp2shell-bounty-v16-wide": inline("v4"),
+  "wp2shell-bounty-v15-wide": inline("v5"),
+  "wp2shell-bounty-v16-wide": inline("v5"),
   "wp2shell-whitebox-v1.7": inline("v2"),
 };
 

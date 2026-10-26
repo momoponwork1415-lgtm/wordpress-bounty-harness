@@ -36,6 +36,7 @@ import {
   wordPressDiscoveryOutputContract,
   wordPressDiscoveryOutputContractV2,
   wordPressDiscoveryOutputContractV4,
+  wordPressDiscoveryOutputContractV5,
 } from "../profiles/wordpress/discovery/output-contract.js";
 import type {
   WordPressLabHandle,
@@ -49,6 +50,7 @@ import {
   wordPressDiscoveryPrompt,
   WORDPRESS_TRUST_BOUNDARY,
   type WordPressDiscoveryAsset,
+  type WordPressOutputContractVersion,
 } from "../profiles/wordpress/prompts/index.js";
 import { createWordpressScopeEvaluator } from "../profiles/wordpress/scope-policy.js";
 import {
@@ -509,7 +511,7 @@ type WordPressDiscoveryContext = {
  */
 export function wordPressDiscoveryContractPlan(id: string): {
   readonly objectiveOnly: boolean;
-  readonly contract: "v1" | "v2" | "v4" | null;
+  readonly contract: WordPressOutputContractVersion | null;
 } {
   const record = wordPressDiscoveryPrompt(id);
   return {
@@ -564,6 +566,7 @@ function wordPressOutputContractFor(id: string) {
     v1: wordPressDiscoveryOutputContract,
     v2: wordPressDiscoveryOutputContractV2,
     v4: wordPressDiscoveryOutputContractV4,
+    v5: wordPressDiscoveryOutputContractV5,
   }[contract]();
 }
 

@@ -584,6 +584,40 @@ describe("Ledger public interface", () => {
     expect(ledger.read({ type: "finding-parked" })).toHaveLength(1);
   });
 
+  it("round-trips a declared-precondition park with enum tokens only (#613)", async () => {
+    const { ledger } = await fixture();
+    const park = {
+      schemaVersion: 1 as const,
+      identity: "parked-declared",
+      campaignId: "campaign-1",
+      snapshotDigest: `sha256:${"a".repeat(64)}`,
+      occurredAt: "2026-10-26T00:00:00Z",
+      artifacts: [],
+      type: "finding-parked" as const,
+      findingId: "finding-1",
+      runId: "run-1",
+      category: "stored-xss",
+      reason: "declared-precondition" as const,
+      declaredPrecondition: {
+        configurationClass: "ordinary-feature-use",
+        attackerInputPath: "vendor-controlled-data",
+        exploitTiming: "time-window",
+      },
+    };
+    expect(await ledger.append(park)).toEqual({ status: "appended" });
+    expect(ledger.read({ type: "finding-parked" })[0]?.event).toEqual(park);
+    expect(ledger.activeParked({ campaignId: "campaign-1" })).toEqual([park]);
+    await expect(
+      ledger.append({
+        ...park,
+        identity: "parked-free-text",
+        declaredPrecondition: {
+          configurationClass: "An administrator enables debug output",
+        },
+      }),
+    ).rejects.toThrow();
+  });
+
   it("restores only a matching precondition park after the Finding is recorded", async () => {
     const { ledger, artifactStore } = await fixture();
     const snapshot = `sha256:${"a".repeat(64)}`;

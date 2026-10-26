@@ -70,7 +70,8 @@
   - Programme Boundary の外にある 5 種: `other`、`csrf-to-write`、`missing-authz`、`idor`、`reflected-xss`
   - 所有者が 2026-10-17 に「重大かどうかの判別が付きにくい」として外した 5 種: `sensitive-object-access`、`content-deletion`、`options-update`、`privesc-to-contributor+`、`auth-bypass-non-admin`
 
-  これらは検証列、レビュー列、funnel の raw に入れない。この決定は、Q1 の `content-deletion` 復帰を上書きする（ADR 0032 の 2026-10-17 節）。探索プロンプトの目的文は変えず、出口で振り分ける。一覧は `review parked --campaign <id>` で見る。Lead は検証列に入らないが、`review leads --campaign <id>` で人間が全件を見る（所有者決定 2026-10-26: 探索は広く出し、落とすのはレビュー側で行う）。対象範囲内の Finding は、検証の結果に関係なく全件がレビュー列に出る（#185、ADR 0031）。
+  これらは検証列、レビュー列、funnel の raw に入れない。この決定は、Q1 の `content-deletion` 復帰を上書きする（ADR 0032 の 2026-10-17 節）。探索プロンプトの目的文は変えず、出口で振り分ける。一覧は `review parked --campaign <id>` で見る。
+  加えて、エージェントが申告欄で `configurationClass` に `admin-authored-unsafe-content` / `admin-setting-change` / `developer-mode` を、`attackerInputPath` に `vendor-controlled-data` を、または `exploitTiming` に `time-window` / `race` を選んだ Finding も、reason `declared-precondition` で park する。申告の無い Finding は park しない。文言からは判定しない。この park は `review restore` で戻せる（#613、ADR 0038 追記 13）。Lead は検証列に入らないが、`review leads --campaign <id>` で人間が全件を見る（所有者決定 2026-10-26: 探索は広く出し、落とすのはレビュー側で行う）。対象範囲内の Finding は、検証の結果に関係なく全件がレビュー列に出る（#185、ADR 0031）。
 
 - contributor 以上と、管理者が意図して付与する権限は、trust 境界の内側に置く。公開済み 7 件の再発見は配線と検証の確認であり、未知の発見率は示さない。プロンプトとシナリオに、対象固有の関数名、オプション名、URL、画面名を入れない。
 

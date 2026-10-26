@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import {
@@ -480,4 +480,129 @@ it("holds a candidate whose position names two roles and records the issue codes
       impact: "account-takeover",
     },
   );
+});
+
+// #613（ADR 0038 追記 13）: agent が申告欄で選んだ値だけで出口 park する。文言からは判定しない。
+describe("declared precondition park", () => {
+  const declared = (
+    configurationClass?: string,
+    attackerInputPath?: string,
+    exploitTiming?: string,
+    impact = "stored-xss",
+  ) => ({
+    ...finding,
+    claim: `Synthetic ${configurationClass ?? "none"} ${attackerInputPath ?? "none"} ${exploitTiming ?? "none"} ${impact}`,
+    impact,
+    ...declaration(configurationClass, attackerInputPath, exploitTiming),
+  });
+  const declaration = (
+    configurationClass?: string,
+    attackerInputPath?: string,
+    exploitTiming?: string,
+  ) => ({
+    ...(configurationClass === undefined ? {} : { configurationClass }),
+    ...(attackerInputPath === undefined ? {} : { attackerInputPath }),
+    ...(exploitTiming === undefined ? {} : { exploitTiming }),
+  });
+
+  it.each([
+    ["admin-authored-unsafe-content", undefined, undefined],
+    ["admin-setting-change", undefined, undefined],
+    ["developer-mode", undefined, undefined],
+    [undefined, "vendor-controlled-data", undefined],
+    ["default", "vendor-controlled-data", undefined],
+    ["admin-setting-change", "direct-request", undefined],
+    [undefined, undefined, "time-window"],
+    [undefined, undefined, "race"],
+    ["default", "direct-request", "race"],
+  ])(
+    "parks a Finding declared %s / %s / %s with reason declared-precondition",
+    async (configurationClass, attackerInputPath, exploitTiming) => {
+      const { events, report } = await recordDirectly([
+        declared(configurationClass, attackerInputPath, exploitTiming),
+      ]);
+      expect(report.candidates.map((candidate) => candidate.outcome)).toEqual([
+        "parked",
+      ]);
+      const parked = events.find((event) => event.type === "finding-parked");
+      expect(parked).toMatchObject({
+        category: "stored-xss",
+        reason: "declared-precondition",
+      });
+      // 台帳には申告の enum 値だけが残る（不変条件 8）。
+      expect(
+        parked?.type === "finding-parked" && parked.declaredPrecondition,
+      ).toEqual(
+        declaration(configurationClass, attackerInputPath, exploitTiming),
+      );
+      expect(events.some((event) => event.type === "finding-recorded")).toBe(
+        false,
+      );
+    },
+  );
+
+  it.each([
+    [undefined, undefined, undefined],
+    ["default", undefined, undefined],
+    ["ordinary-feature-use", undefined, undefined],
+    [undefined, "direct-request", undefined],
+    [undefined, "own-account-data", undefined],
+    ["ordinary-feature-use", "public-third-party-content", undefined],
+    [undefined, undefined, "any-time"],
+    ["default", "direct-request", "any-time"],
+  ])(
+    "records a Finding declared %s / %s / %s without parking it",
+    async (configurationClass, attackerInputPath, exploitTiming) => {
+      const { events, report } = await recordDirectly([
+        declared(configurationClass, attackerInputPath, exploitTiming),
+      ]);
+      expect(report.candidates.map((candidate) => candidate.outcome)).toEqual([
+        "recorded",
+      ]);
+      expect(events.some((event) => event.type === "finding-parked")).toBe(
+        false,
+      );
+    },
+  );
+
+  it("does not park on wording when nothing is declared", async () => {
+    const { report } = await recordDirectly([
+      {
+        ...finding,
+        impact: "stored-xss",
+        configurationPrecondition:
+          "An administrator has created a popup that contains their own shortcode; the vendor API response must carry the payload within a five-minute window.",
+      },
+    ]);
+    expect(report.candidates.map((candidate) => candidate.outcome)).toEqual([
+      "recorded",
+    ]);
+  });
+
+  it("keeps the Programme Boundary park first and without the declaration", async () => {
+    const { events } = await recordDirectly([
+      declared("developer-mode", "vendor-controlled-data", "race", "other"),
+    ]);
+    const parked = events.find((event) => event.type === "finding-parked");
+    expect(parked).toMatchObject({ reason: "outside-programme-boundary" });
+    expect(
+      parked?.type === "finding-parked" && parked.declaredPrecondition,
+    ).toBeUndefined();
+  });
+
+  it("holds a candidate whose declaration is not one of the values", async () => {
+    const { events, report } = await recordDirectly([
+      declared("admin-misconfiguration"),
+      declared(undefined, undefined, "sometimes"),
+    ]);
+    expect(report.candidates.map((candidate) => candidate.outcome)).toEqual([
+      "held",
+      "held",
+    ]);
+    expect(
+      events
+        .filter((event) => event.type === "candidate-held")
+        .map((event) => event.type === "candidate-held" && event.issuePaths),
+    ).toEqual([["configurationClass"], ["exploitTiming"]]);
+  });
 });
