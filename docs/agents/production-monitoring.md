@@ -23,7 +23,7 @@
 | mirror | 2026-10-14T01:39Z 時点。更新は cron 19:10 UTC、鍵は `~/.config/wordfence/env`（中身を読まない、表示しない） |
 | 標準出力 | `~/.local/state/wordpress-bounty-harness/continuous-20261019.out` |
 
-起動直後の 10 分は `holding-error`（2026-10-17 の孤立 batch が新しい方針 digest と合わない既知の挙動）。その後に新しい選定が走る。
+起動時に、前の方針で凍結した未消費の batch（または memo の campaign の batch）が今の方針 digest と合わなければ、runner は `selection-batch-discarded`（reason `policy-changed`）を台帳に書き、ログに `selection-batch-discarded batch=<id>` を 1 行出して、待たずに新しい選定へ進む（#302）。破棄した batch の対象は Trial を始めていないので、次の選定でまた選ばれうる。
 
 ## 3. 観測する
 
