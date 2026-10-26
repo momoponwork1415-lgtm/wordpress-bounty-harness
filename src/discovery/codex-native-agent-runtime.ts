@@ -32,7 +32,11 @@ import {
   ProviderAttachmentStore,
   type ProviderAttachmentRef,
 } from "./provider-research-report.js";
-import { commandsFromRollout, type ObservedCommand } from "./read-paths.js";
+import {
+  commandsFromRollout,
+  type LabCommandRule,
+  type ObservedCommand,
+} from "./read-paths.js";
 import {
   SANDBOX_RESEARCH_MOUNT_PATH,
   SANDBOX_SOURCE_MOUNT_PATH,
@@ -981,10 +985,14 @@ function sourcePath(
     posix.resolve(directory ?? "/", path),
   );
 }
-/** Counts reads of the target source and the run's dependency mounts. */
+/**
+ * Counts reads of the target source and the run's dependency mounts, and the
+ * commands the profile's rule says reached its Lab.
+ */
 export function observedFromCommands(
   commands: readonly (string | ObservedCommand)[],
   dependencyMounts: readonly string[],
+  labCommands: LabCommandRule,
 ): Observed {
   const mountedPath = mountedSourcePathPattern(dependencyMounts);
   const paths = new Set<string>();
@@ -1013,16 +1021,8 @@ export function observedFromCommands(
         filesRead++;
         paths.add(match[0]);
       }
-    if (
-      /(?:^|[\s;&|])(?:curl|wget|python|php)(?=\s|$)/.test(command) &&
-      /\bwordpress\b/.test(command)
-    )
-      labRequests++;
-    if (
-      /(?:^|[\s;&|])(?:mysql|mariadb)(?=\s|$)/.test(command) &&
-      /\bdatabase\b/.test(command)
-    )
-      dbQueries++;
+    if (labCommands.isLabRequest(command)) labRequests++;
+    if (labCommands.isDatabaseQuery(command)) dbQueries++;
   }
   return {
     toolCalls: commands.length,
@@ -1036,8 +1036,13 @@ export function observedFromCommands(
 function observedFromRollout(
   raw: string,
   dependencyMounts: readonly string[],
+  labCommands: LabCommandRule,
 ): Observed {
-  return observedFromCommands(commandsFromRollout(raw), dependencyMounts);
+  return observedFromCommands(
+    commandsFromRollout(raw),
+    dependencyMounts,
+    labCommands,
+  );
 }
 
 function usageFromTranscript(
@@ -1114,6 +1119,7 @@ function decodeTranscript(
   stdout: string,
   outputKind: "verification" | undefined,
   dependencyMounts: readonly string[],
+  labCommands: LabCommandRule,
 ):
   | {
       report:
@@ -1243,7 +1249,7 @@ function decodeTranscript(
       outputTokens: usage?.output_tokens ?? "unavailable",
       reasoningOutputTokens: usage?.reasoning_output_tokens ?? "unavailable",
     },
-    observed: observedFromCommands(commands, dependencyMounts),
+    observed: observedFromCommands(commands, dependencyMounts, labCommands),
   };
 }
 
@@ -1759,6 +1765,8 @@ export class CodexNativeAgentRuntime {
     readonly broker: ProviderCredentialEgressBroker,
     readonly attachments: ProviderAttachmentStore,
     readonly sandboxImage: string,
+    /** The profile's rule for `observed.labRequests` / `dbQueries` (ADR 0011). */
+    readonly labCommands: LabCommandRule,
     readonly clock: () => Date = () => new Date(),
   ) {}
 
@@ -2136,6 +2144,7 @@ export class CodexNativeAgentRuntime {
     state.rootObserved = observedFromRollout(
       rootRollout,
       dependencyMountPathsOf(state.run),
+      this.labCommands,
     );
     state.rootUsage ??= usageFromRollout(rootRollout);
     if (state.cooperative)
@@ -2286,6 +2295,7 @@ export class CodexNativeAgentRuntime {
       observed: observedFromCommands(
         child.commands,
         dependencyMountPathsOf(run),
+        this.labCommands,
       ),
       grantReceiptDigest,
       ...(diagnosticArtifactDigest === undefined
@@ -2313,6 +2323,7 @@ export class CodexNativeAgentRuntime {
             result.stdout,
             state.run.outputKind,
             dependencyMountPathsOf(state.run),
+            this.labCommands,
           )
         : undefined;
     const failure = this.#executionFailure(

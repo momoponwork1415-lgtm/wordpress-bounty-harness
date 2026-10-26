@@ -17,6 +17,7 @@ import {
   type DiscoveryTransportRun,
   type ProviderCredentialEgressBroker,
 } from "../../src/discovery/index.js";
+import { wordPressLabCommandRule } from "../../src/profiles/wordpress/discovery/lab-commands.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const image = `node@${digest}`;
@@ -243,6 +244,7 @@ describe("receipt session record (ADR 0036)", () => {
         broker(),
         attachments,
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       ).execute(run);
       expect(result.receipt.terminal).toBe("completed");
@@ -299,6 +301,7 @@ describe("receipt session record (ADR 0036)", () => {
         broker(),
         new ProviderAttachmentStore(root),
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       ).execute(run);
       expect(result.receipt.terminal).toBe("completed");
@@ -338,6 +341,7 @@ describe("receipt session record (ADR 0036)", () => {
         broker(),
         attachments,
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       ).execute({
         ...run,
@@ -413,6 +417,7 @@ describe("receipt session record (ADR 0036)", () => {
         broker(),
         new ProviderAttachmentStore(root),
         image,
+        wordPressLabCommandRule,
         () => new Date(now),
       );
       const resume = {
