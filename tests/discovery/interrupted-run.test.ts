@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { exploreTrials } from "../../src/cli/continuous.js";
 import {
@@ -29,6 +29,7 @@ import {
   type ProviderCredentialEgressBroker,
   type SandboxOwner,
 } from "../../src/discovery/index.js";
+import { executeTrial } from "../../src/discovery/execute-trial.js";
 import { canonicalDigest } from "../../src/infrastructure/canonical-json.js";
 import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-source-tree.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
@@ -208,8 +209,16 @@ async function fixture() {
     databasePath: join(root, "ledger.sqlite"),
     artifactStore: evidence,
   });
-  /** A sandbox of the process `owner` on its boot; `alive` answers for other pids. */
-  const sandbox = (owner: SandboxOwner, alive: (pid: number) => boolean) => {
+  /**
+   * A sandbox of the process `owner` on its boot; `alive` answers for other
+   * pids. Its CLI keeps working until cancelled, or exits once it has written
+   * when `exits` is set.
+   */
+  const sandbox = (
+    owner: SandboxOwner,
+    alive: (pid: number) => boolean,
+    exits = false,
+  ) => {
     let containerStarted: () => void = () => undefined;
     const started = new Promise<void>((resolve) => {
       containerStarted = resolve;
@@ -257,6 +266,13 @@ async function fixture() {
           await utimes(path, lastWrite, lastWrite);
         }
         containerStarted();
+        if (exits)
+          return {
+            kind: "exited" as const,
+            exitCode: 0,
+            stdout: "",
+            stderr: "",
+          };
         // The CLI keeps working until the host dies; only a test cleanup ends it.
         return new Promise((resolve) =>
           signal?.addEventListener("abort", () =>
@@ -327,18 +343,21 @@ async function fixture() {
     });
     expect(appended.status).toBe("appended");
   };
+  const HOST_A = { pid: 4242, bootId: "boot-a" };
+  let runtimeA: CodexNativeAgentRuntime | undefined;
   /** Host A starts run-1 and keeps it running; the test then treats host A as dead. */
   const startOnHostA = async (runProfile = profile) => {
     await recordStart("run-1");
-    const hostA = sandbox({ pid: 4242, bootId: "boot-a" }, () => true);
+    const hostA = sandbox(HOST_A, () => true);
     const controller = new AbortController();
-    const running = new CodexNativeAgentRuntime(
+    runtimeA = new CodexNativeAgentRuntime(
       hostA.instance,
       broker(),
       attachments,
       image,
       () => new Date(T0),
-    ).execute(
+    );
+    const running = runtimeA.execute(
       {
         ...run,
         profile: runProfile,
@@ -395,6 +414,36 @@ async function fixture() {
         recordInterruptedRun(context, runtime, started, run),
     });
   };
+  /** Host A runs run-1 as one planned Trial, through `executeTrial`, to its own end. */
+  const executeOnHostA = () =>
+    executeTrial(
+      {
+        ...context,
+        executor: new CodexNativeAgentRuntime(
+          sandbox(HOST_A, () => true, true).instance,
+          broker(),
+          attachments,
+          image,
+          () => new Date(T0),
+        ),
+        seen: new Set(),
+      },
+      {
+        trialId: "run-1",
+        trialOrdinal: 0,
+        explore: {
+          run: {
+            ...run,
+            runId: "run-1",
+            expiresAt: "2026-10-19T02:00:00.000Z",
+          },
+          configuration: {
+            promptVariant: "wp2shell-bounty-v8",
+            promptDigest,
+          },
+        },
+      },
+    );
   return {
     scratch,
     ledger,
@@ -403,6 +452,8 @@ async function fixture() {
     run,
     recordStart,
     startOnHostA,
+    executeOnHostA,
+    releaseOnHostA: (runId: string) => runtimeA!.release(runId),
     recover,
     resumeFrom,
   };
@@ -417,7 +468,7 @@ const leftovers = async (scratch: string) => ({
 const DEAD_HOST = { pid: 5151, bootId: "boot-b" };
 
 describe("run marker and leftovers of a dead host (ADR 0036, 2026-10-19 second addendum)", () => {
-  it("names the running run in a marker, and the run's own end removes it", async () => {
+  it("names the running run in a marker, kept past the run's own end until release (#512)", async () => {
     const t = await fixture();
     const stop = await t.startOnHostA();
     expect(await leftovers(t.scratch)).toEqual({
@@ -425,6 +476,14 @@ describe("run marker and leftovers of a dead host (ADR 0036, 2026-10-19 second a
       directories: 3,
     });
     await stop();
+    // The staging directory goes; the marker, sessions and notes wait for the finish.
+    expect(await leftovers(t.scratch)).toEqual({
+      markers: ["run-1.json"],
+      directories: 2,
+    });
+    await t.releaseOnHostA("run-2");
+    expect((await leftovers(t.scratch)).markers).toEqual(["run-1.json"]);
+    await t.releaseOnHostA("run-1");
     expect(await leftovers(t.scratch)).toEqual({ markers: [], directories: 0 });
   });
 
@@ -764,5 +823,54 @@ describe("runner restart after the host died (ADR 0036, 2026-10-19 addendum 3)",
     const runner = restart(t, { segment: "completed", refuse: true });
     expect((await runner.run()).runCount).toBe(1);
     expect(runner.executed).toEqual(["run-new"]);
+  });
+});
+
+describe("the marker outlives the run until its finish is in the ledger (#512)", () => {
+  const finishOf = (event: { type: string; runId?: string | undefined }) =>
+    event.type === "discovery-run-finished" && event.runId === "run-1";
+
+  it("still has the marker when the finish is appended, and removes it after", async () => {
+    const t = await fixture();
+    const append = t.ledger.append.bind(t.ledger);
+    const atFinish: Awaited<ReturnType<typeof leftovers>>[] = [];
+    vi.spyOn(t.ledger, "append").mockImplementation(async (event) => {
+      if (finishOf(event)) atFinish.push(await leftovers(t.scratch));
+      return append(event);
+    });
+    await t.executeOnHostA();
+    expect(atFinish).toEqual([{ markers: ["run-1.json"], directories: 2 }]);
+    expect(await leftovers(t.scratch)).toEqual({ markers: [], directories: 0 });
+  });
+
+  it("leaves the marker when the finish cannot be appended, and the run is later sealed as interrupted", async () => {
+    const t = await fixture();
+    const append = t.ledger.append.bind(t.ledger);
+    let failed = false;
+    vi.spyOn(t.ledger, "append").mockImplementation(async (event) => {
+      if (finishOf(event) && !failed) {
+        failed = true;
+        throw new Error("database is locked");
+      }
+      return append(event);
+    });
+    await expect(t.executeOnHostA()).rejects.toThrow("database is locked");
+    expect(await leftovers(t.scratch)).toEqual({
+      markers: ["run-1.json"],
+      directories: 2,
+    });
+    // Host A's process is gone; `campaign resume` in another process seals the run.
+    const assessment = await t.resumeFrom(DEAD_HOST, () => false);
+    expect(assessment).toMatchObject({
+      status: "resumable",
+      plan: { originalRunId: "run-1", resume: { threadId: ROOT_THREAD } },
+    });
+    expect(
+      t.ledger
+        .readAll({ campaignId: "campaign-1" })
+        .map(({ event }) => event)
+        .filter(finishOf),
+    ).toMatchObject([{ outcome: "failed", reason: "interrupted" }]);
+    expect(await leftovers(t.scratch)).toEqual({ markers: [], directories: 0 });
   });
 });

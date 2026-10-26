@@ -374,6 +374,8 @@ export interface CodexSandbox {
   ): Promise<CodexSandboxResult>;
   /** Reads back the directories of a run whose marker names `runId`. */
   leftover?(runId: string): Promise<CodexSandboxLeftover>;
+  /** Removes what a marked run of this process left, once its finish is recorded (#512). */
+  release?(runId: string): Promise<void>;
 }
 /** `recoverInterrupted`: the leftover sealed as an `interrupted` result, or why not. */
 export type InterruptedRunRecovery =
@@ -1921,6 +1923,14 @@ export class CodexNativeAgentRuntime {
       ),
       discard: () => leftover.discard(),
     };
+  }
+
+  /**
+   * The run's finish is in the ledger: its marker and directories are no
+   * longer needed to recover it (#512).
+   */
+  async release(runId: string): Promise<void> {
+    await this.sandbox.release?.(runId);
   }
 
   async #runWithBroker(
