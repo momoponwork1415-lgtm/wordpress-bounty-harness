@@ -3,7 +3,7 @@ name: wbh-screen
 description: Wordfence 向け Finding の検証前選別。公式規則で明白に除外されるものだけを分け、残りは未解決事項を付けて Lab 検証へ渡す。提出可否、重複、技術的な真偽は決めない。
 ---
 
-# wbh-screen v4.1
+# wbh-screen v4.2
 
 検証から提出までの段 1（ADR 0038）を行う。当面の提出先は Wordfence とする。各 Finding を `検証へ` または `明示除外` に分ける。`検証へ` は脆弱性の成立や報奨の見込みを意味しない。`明示除外` は Wordfence 向けの検証順から外す判断であり、Finding の否定、他の提出先の対象外、検証結果の `contradicted`、台帳の `reject` ではない。旧 v3.1 と v4 は `versions/` に残す。v4.1 は判断の基準を変えていないので、Finding ごとのメモの名前は v4 のままにする。
 
@@ -34,4 +34,4 @@ description: Wordfence 向け Finding の検証前選別。公式規則で明白
 
 報告には確認日時、campaign、読んだ規則の版、`検証へ` と `明示除外` の件数、既に段 3 以後の件数、旧 `reject` から復帰を要する件数を載せる。対象ごとの表には Finding ID、Snapshot digest、攻撃者、最終影響の主張、検証状態、今回の区分、規則の行または未解決事項、群の代表、次の一手を書く。未公開のペイロード、URL、関数名、再現手順は表に載せない。`明示除外` は根拠のない一言で済ませず、適用した規則の文と確認済みの事実を対応させる。
 
-`検証へ` の代表から `verify next --config <path> --campaign <id> --finding <id> --handoff <dir>` で進む。Harness の捕捉が残った検証は `incomplete(awaiting-human-observation)` になり、新しい検証は `runtime-confirmed` を出さない。確定の根拠は、名指しした人間が新しい review Lab で記録した `review observe` の `match` と `review decide --reproduced match` だけである（ADR 0040）。それ以外の `incomplete` なら理由と観測をレビュー列に残し、失敗した段の前提または手順を直して再試行する。検証後に通常構成、再現性、実害、最新版、重複、Wordfence の対象範囲を別々に評価する。
+`検証へ` の代表から `verify next --config <path> --campaign <id> --finding <id> --handoff <dir>` で進む。Harness の捕捉が残った検証は `incomplete(awaiting-human-observation)` になり、新しい検証は `runtime-confirmed` を出さない。確定の根拠は、名指しした人間が保持された検証 Lab か新しい review Lab で記録した `review observe` の `match` と `review decide --reproduced match` だけである（ADR 0040）。それ以外の `incomplete` なら理由と観測をレビュー列に残し、失敗した段の前提または手順を直して再試行する。検証後に通常構成、再現性、実害、最新版、重複、Wordfence の対象範囲を別々に評価する。
