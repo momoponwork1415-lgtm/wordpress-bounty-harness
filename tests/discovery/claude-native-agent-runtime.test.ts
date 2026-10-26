@@ -791,6 +791,97 @@ describe("Claude native agent runtime", () => {
     );
   });
 
+  describe("reads the contract's JSON object from a child's final message (#609)", () => {
+    const lead = { summary: "synthetic lead", sourceTrace: [{ line: 1 }] };
+    const childJson = {
+      findings: [],
+      leads: [lead],
+      examined: "synthetic slice",
+      unexamined: "none",
+    };
+    const compact = JSON.stringify(childJson);
+    const pretty = JSON.stringify(childJson, null, 2);
+    const prose = "Verdict: one route.\nSee /workspace/research/x.md {notes}.";
+    const childText = (text: string) =>
+      lines(
+        { type: "user", timestamp: start, message: { content: "Slice." } },
+        {
+          type: "assistant",
+          timestamp: end,
+          message: {
+            id: "c1",
+            model: "claude-opus-5-5",
+            content: [{ type: "text", text }],
+          },
+        },
+      );
+    const childRun = async (text: string) => {
+      const { runtime: claude, attachments } = await runtime(
+        lines(turn([]), ...childEvents),
+        {
+          transcripts: [
+            {
+              path: "-workspace-main/s1/subagents/agent-agent1.jsonl",
+              content: childText(text),
+            },
+          ],
+        },
+      );
+      const child = (await claude.execute(run)).agentRuns?.[0];
+      const stored =
+        child?.attachment === undefined
+          ? undefined
+          : await attachments.readByDigest("findings", child.attachment.digest);
+      return {
+        receipt: child?.receipt,
+        report:
+          stored?.status === "resolved"
+            ? (JSON.parse(stored.bytes.toString()) as unknown)
+            : undefined,
+      };
+    };
+
+    it.each([
+      // Shapes that already passed stay as they were.
+      ["compact JSON", compact],
+      ["pretty-printed JSON", pretty],
+      ["a json fence only", `\`\`\`json\n${pretty}\n\`\`\``],
+      ["a bare fence only", `\`\`\`\n${pretty}\n\`\`\`\n`],
+      // Shapes that failed as child-final-message-not-report.
+      ["prose then a json fence", `${prose}\n\n\`\`\`json\n${pretty}\n\`\`\``],
+      ["prose then raw JSON", `${prose}\n\n${pretty}`],
+      [
+        "a short label then a json fence",
+        `Final report:\n\`\`\`json\n${compact}\n\`\`\``,
+      ],
+      [
+        "a json fence then a trailing sentence",
+        `\`\`\`json\n${pretty}\n\`\`\`\n\nThe file has the details.`,
+      ],
+    ])("completes on %s", async (_shape, text) => {
+      const { receipt, report } = await childRun(text);
+      expect(receipt).toMatchObject({ terminal: "completed" });
+      expect(report).toEqual(childJson);
+    });
+
+    it.each([
+      // Malformed JSON is not repaired.
+      [
+        "an unescaped backslash",
+        `${prose}\n\n${compact.replace("synthetic lead", "Vendor\\Plugin lead")}`,
+      ],
+      ["prose only", prose],
+    ])("still fails as schema on %s", async (_shape, text) => {
+      const { receipt, report } = await childRun(text);
+      expect(receipt).toMatchObject({
+        terminal: "incomplete",
+        reason: "schema",
+        reasonDetail: "child-final-message-not-report",
+      });
+      expect(report).toBeUndefined();
+    });
+  });
+
   it("does not accept a final report before the active wall floor", async () => {
     const { runtime: claude } = await runtime(lines(turn([])), {
       completedAt: "2026-10-19T00:10:00.000Z",
