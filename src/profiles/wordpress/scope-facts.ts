@@ -4,6 +4,7 @@ import type { PrivateArtifactStore } from "../../infrastructure/private-artifact
 import type { Ledger } from "../../ledger/index.js";
 import type { ScopeFactsProvider } from "../../review/index.js";
 import { retiredWordPressScenario } from "./lab/retired-scenarios.js";
+import { LAB_BROWSER_OBSERVATION_FILE } from "./verification/attempt-observer.js";
 import type { WordpressScopeInput } from "./scope-policy.js";
 
 const attackerRole = z.enum(["unauthenticated", "subscriber", "customer"]);
@@ -309,7 +310,7 @@ export function createWordPressScopeFacts(options: {
             ? undefined
             : await options.store.readJson(
                 evidenceDigest,
-                "lab-browser-observation.json",
+                LAB_BROWSER_OBSERVATION_FILE,
                 labBrowserSchema,
                 64 * 1024,
               );

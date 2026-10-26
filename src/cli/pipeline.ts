@@ -17,7 +17,6 @@ import {
   LEDGER_ID_MAX_LENGTH,
   type Ledger,
   type LedgerEventV1,
-  type LedgerRecord,
 } from "../ledger/index.js";
 import { humanReproducedBasis } from "../review/manual-observation.js";
 import { targetSelectionId, type TargetSelection } from "../selection/index.js";
@@ -74,33 +73,6 @@ type FinishedVerification = Extract<
   { type: "verification-finished" }
 >;
 type VerificationRecord = { sequence: number; event: FinishedVerification };
-
-function scenarioForVerification(
-  previous: VerificationRecord,
-  labs: readonly LedgerRecord[],
-  snapshotDigest: string,
-): string | null | undefined {
-  const verificationLab = labs.find(
-    ({ event }) =>
-      event.identity === `verification-lab-${previous.event.verificationId}`,
-  );
-  if (verificationLab?.event.type === "lab-provisioned")
-    return verificationLab.event.scenario?.id ?? null;
-  // A precondition can fail before a verification Lab exists. Its discovery
-  // Lab records the selected scenario before that attempt.
-  const discoveryLab = labs
-    .filter(
-      ({ sequence, event }) =>
-        sequence < previous.sequence &&
-        event.type === "lab-provisioned" &&
-        event.snapshotDigest === snapshotDigest &&
-        event.purpose === "discovery",
-    )
-    .at(-1);
-  return discoveryLab?.event.type === "lab-provisioned"
-    ? (discoveryLab.event.scenario?.id ?? null)
-    : undefined;
-}
 
 export type CampaignSummary = {
   readonly campaignId: string;
@@ -808,7 +780,6 @@ export async function verifyNextFinding<
     ...scope,
     type: "verification-finished",
   });
-  const labs = options.ledger.readAll({ ...scope, type: "lab-provisioned" });
   const parked = new Set(
     options.ledger
       .activeParked(scope)
@@ -871,44 +842,17 @@ export async function verifyNextFinding<
           reason,
         },
       );
-      const previousScenarioId = scenarioForVerification(
-        previous,
-        labs,
-        event.snapshotDigest,
-      );
-      // Scenario-dependent retries are decided after loading the same pinned Snapshot.
       if (
         !shouldAutomaticallyRetryVerification({
           reason,
           attemptsForReason,
           sameLabSetup: true,
-          previousScenarioId,
-          currentScenarioId: previousScenarioId,
-        }) &&
-        reason !== "precondition"
+        })
       )
         continue;
     }
     const snapshot = await options.loadSnapshot(event.snapshotDigest);
     const setup = options.setupFor(snapshot);
-    if (
-      options.only === undefined &&
-      previous?.event.result.status === "incomplete" &&
-      previous.event.result.reason === "precondition" &&
-      !shouldAutomaticallyRetryVerification({
-        reason: "precondition",
-        attemptsForReason: 1,
-        sameLabSetup: true,
-        previousScenarioId: scenarioForVerification(
-          previous,
-          labs,
-          event.snapshotDigest,
-        ),
-        // Lab scenarios were removed in #353; a Lab now has none.
-        currentScenarioId: null,
-      })
-    )
-      continue;
     const verificationId = options.newId();
     const result = await options.verification.verify({
       campaignId: event.campaignId,

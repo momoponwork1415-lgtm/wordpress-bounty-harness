@@ -1320,7 +1320,7 @@ describe("review queue and decisions", () => {
     );
   });
 
-  it("never predicts a precondition retry: the runner alone sees a scenario change", async () => {
+  it("never predicts a precondition retry, even for a past record that names a next scenario", async () => {
     const { review, ledger } = await queueFixture();
     for (const [findingId, nextScenarioId] of [
       ["finding-2", undefined],

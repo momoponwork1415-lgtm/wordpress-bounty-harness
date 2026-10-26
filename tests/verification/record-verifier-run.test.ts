@@ -54,7 +54,6 @@ describe("recordVerifierRun", () => {
       findingId: "finding-1",
       promptDigest: snapshotDigest,
       receipt,
-      canaryIssued: "script",
     });
     const events = ledger.read({ type: "verifier-run-finished" });
     expect(events).toHaveLength(1);
@@ -69,7 +68,6 @@ describe("recordVerifierRun", () => {
       runId: "verify-finding-1-run",
       promptDigest: snapshotDigest,
       terminal: "incomplete",
-      canaryIssued: "script",
       providerLimit: "quota",
       artifacts: [{ kind: "native-run-receipt", digest: event.receiptDigest }],
     });
@@ -103,7 +101,8 @@ describe("recordVerifierRun", () => {
     await recordVerifierRun(input);
     const event = ledger.read({ type: "verifier-run-finished" })[0]?.event;
     if (event?.type !== "verifier-run-finished") throw new Error("missing");
-    expect(event.canaryIssued).toBeUndefined();
+    // Canaries were removed with the judges (ADR 0040); old events keep the field.
+    expect(event).not.toHaveProperty("canaryIssued");
     expect(event.providerLimit).toBeUndefined();
     await expect(
       recordVerifierRun({ ...input, promptDigest: receiptDigest }),

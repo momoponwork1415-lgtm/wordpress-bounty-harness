@@ -84,7 +84,6 @@ export async function recordVerifierRun(input: {
   readonly findingId: string;
   readonly promptDigest: string;
   readonly receipt: VerifierRunReceipt;
-  readonly canaryIssued?: VerifierRunEvent["canaryIssued"];
 }): Promise<void> {
   const { receipt } = input;
   const receiptDigest = await input.store.putFiles({
@@ -102,9 +101,6 @@ export async function recordVerifierRun(input: {
     promptDigest: input.promptDigest,
     receiptDigest,
     terminal: receipt.terminal,
-    ...(input.canaryIssued === undefined
-      ? {}
-      : { canaryIssued: input.canaryIssued }),
     ...(receipt.providerLimit === undefined
       ? {}
       : { providerLimit: receipt.providerLimit }),

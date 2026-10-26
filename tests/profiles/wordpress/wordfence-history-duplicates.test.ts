@@ -352,6 +352,70 @@ describe("Wordfence duplicate lookup for review", () => {
     expect(await xss.inspect(query)).toEqual({ status: "no-match" });
   });
 
+  it("finds the Finding's target selection after more than 1,000 in the campaign", async () => {
+    const paths = mirror([
+      {
+        id: "match",
+        title: "Synthetic SQLi",
+        slug: "target",
+        signals: ["sql-injection"],
+        ranges: RANGE,
+      },
+    ]);
+    const directory = mkdtempSync(join(tmpdir(), "wbh-dedupe-ledger-"));
+    directories.push(directory);
+    const ledger = new Ledger({
+      databasePath: join(directory, "ledger.sqlite"),
+      artifactStore: new PrivateArtifactStore({
+        rootDirectory: join(directory, "evidence"),
+        maxEntries: 1,
+        maxBytes: 1,
+      }),
+    });
+    const base = {
+      schemaVersion: 1 as const,
+      campaignId: "campaign-1",
+      occurredAt: "2026-10-08T00:00:00Z",
+    };
+    const snapshotDigest = `sha256:${"a".repeat(64)}`;
+    // 1,000 earlier selections fill one `read` page; the Finding's own comes after them.
+    for (let index = 0; index < 1000; index++)
+      await ledger.append({
+        ...base,
+        identity: `selected-${index}`,
+        snapshotDigest: `sha256:${index.toString(16).padStart(64, "0")}`,
+        type: "target-selected",
+        selectionId: `wporg:other-${index}@1.0`,
+      });
+    await ledger.append({
+      ...base,
+      identity: "selected",
+      snapshotDigest,
+      type: "target-selected",
+      selectionId: "wporg:target@1.5",
+    });
+    await ledger.append({
+      ...base,
+      identity: "finding",
+      snapshotDigest,
+      type: "finding-recorded",
+      findingId: "finding-1",
+      runId: "run-1",
+      category: "sqli",
+    });
+    const lookup = createWordfenceDuplicateLookup({
+      ledger,
+      history: paths,
+      clock: () => NOW,
+    });
+    expect(
+      await lookup.inspect({
+        campaignId: "campaign-1",
+        findingId: "finding-1",
+      }),
+    ).toEqual({ status: "possible-match", reference: "match" });
+  }, 30_000);
+
   it("does not infer no-match from a stale mirror or an unknown finding", async () => {
     const stale = mirror([], "2026-10-01T00:00:00Z");
     const lookup = createWordfenceDuplicateLookup({

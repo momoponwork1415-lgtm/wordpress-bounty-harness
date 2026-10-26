@@ -47,6 +47,7 @@ import {
   WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS,
   wordPressDiscoveryModeOf,
   wordPressDiscoveryPrompt,
+  WORDPRESS_TRUST_BOUNDARY,
   type WordPressDiscoveryAsset,
 } from "../profiles/wordpress/prompts/index.js";
 import { createWordpressScopeEvaluator } from "../profiles/wordpress/scope-policy.js";
@@ -1023,7 +1024,7 @@ async function resumeWordPressRun(
         };
   const [objective, trustBoundary] = await Promise.all([
     loadWordPressDiscoveryAsset(config.promptId),
-    loadWordPressDiscoveryAsset("trust-boundary-v1"),
+    loadWordPressDiscoveryAsset(WORDPRESS_TRUST_BOUNDARY.id),
   ]);
   const resumePrompt = wordPressResumeParagraph(objective);
   // The Snapshot the run was frozen on; the sandbox re-verifies every tree digest at mount.
@@ -1427,7 +1428,7 @@ async function runWordPressCampaign(
   }
   const [objective, trustBoundary] = await Promise.all([
     loadWordPressDiscoveryAsset(config.promptId),
-    loadWordPressDiscoveryAsset("trust-boundary-v1"),
+    loadWordPressDiscoveryAsset(WORDPRESS_TRUST_BOUNDARY.id),
   ]);
   return runCampaignPipeline({
     campaignId: input.campaignId,
@@ -1975,10 +1976,9 @@ export function createWordPressCliProfile(
             let capturedSourcePin: WordPressTargetSelection["targetSourcePin"];
             if (sameOriginalVersion) {
               const originalSelectionEvent = state.ledger
-                .read({
+                .readAll({
                   campaignId: input.campaignId,
                   type: "target-selected",
-                  limit: 1000,
                 })
                 .map(({ event }) => event)
                 .find(

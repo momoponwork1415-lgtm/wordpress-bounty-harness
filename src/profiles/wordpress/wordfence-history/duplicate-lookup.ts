@@ -26,7 +26,7 @@ export function createWordfenceDuplicateLookup(options: {
       if (finding?.type !== "finding-recorded")
         return { status: "unavailable" };
       const selected = options.ledger
-        .read({ campaignId, type: "target-selected", limit: 1000 })
+        .readAll({ campaignId, type: "target-selected" })
         .map(({ event }) => event)
         .find((event) => event.snapshotDigest === finding.snapshotDigest);
       const match =

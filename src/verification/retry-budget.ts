@@ -15,17 +15,15 @@ type FinishedVerification = Extract<
  * review queue (which predicts what they will do). Counts include the attempt
  * that produced the current reason. `recipe` gets two automatic retries on the
  * same Lab Setup, `provision` one re-provision, `provider` one retry on resume
- * (2026-10-14 addendum), `precondition` only when the scenario id changed;
- * every other reason goes to a human without retry. `observation` came from
- * the deleted judges and no longer retries (#525, ADR 0040).
+ * (2026-10-14 addendum); every other reason goes to a human without retry.
+ * `precondition` retried only on a changed Lab scenario, and scenarios were
+ * removed in #353. `observation` came from the deleted judges and no longer
+ * retries (#525, ADR 0040).
  */
 export function shouldAutomaticallyRetryVerification(input: {
   readonly reason: IncompleteReason;
   readonly attemptsForReason: number;
   readonly sameLabSetup: boolean;
-  /** null is a recorded default scenario; undefined means no scenario record. */
-  readonly previousScenarioId?: string | null | undefined;
-  readonly currentScenarioId?: string | null | undefined;
 }): boolean {
   switch (input.reason) {
     case "recipe":
@@ -33,12 +31,6 @@ export function shouldAutomaticallyRetryVerification(input: {
     case "provision":
     case "provider":
       return input.sameLabSetup && input.attemptsForReason < 2;
-    case "precondition":
-      return (
-        input.previousScenarioId !== undefined &&
-        input.currentScenarioId !== undefined &&
-        input.previousScenarioId !== input.currentScenarioId
-      );
     default:
       return false;
   }
