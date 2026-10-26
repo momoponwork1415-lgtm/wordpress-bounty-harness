@@ -194,6 +194,21 @@ export async function readLabOwners(directory = LAB_OWNER_DIRECTORY): Promise<{
   return { live, dead };
 }
 
+/** The pid of `labId`'s recorded owner while that process lives; null otherwise (#592). */
+export async function liveLabOwner(
+  labId: string,
+  directory = LAB_OWNER_DIRECTORY,
+): Promise<number | null> {
+  if (!labIdPattern.test(labId)) return null;
+  const parsed = recordSchema.safeParse(
+    await readJson(recordPath(directory, labId)),
+  );
+  if (!parsed.success || parsed.data.labId !== labId) return null;
+  return (await ownerAlive(parsed.data.owner, await bootId()))
+    ? parsed.data.owner.pid
+    : null;
+}
+
 /** Removes the records of Labs whose owner died, after their resources were removed. */
 export async function forgetLabOwners(
   labIds: Iterable<string>,

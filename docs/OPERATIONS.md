@@ -311,7 +311,8 @@ harness lab down [--config <path>]
 ```
 
 - 手で再現する Lab は `lab up --for-review` で立てる（上の review の表の 7 行目）。`--config` を取る旧形の `lab up` は 2026-10-19 に削除した。
-- `lab down` は旧形の `lab up` が記録した 1 つの Lab の container / network / volume だけを削除し、残存が 0 でなければ終了コード 1 で残りを列挙する。同時に動く campaign の Lab には触らない。
+- review Lab は、空いていれば host の `127.0.0.1:80` に出る（#592）。ブラウザで開くには、hosts に `127.0.0.1 wordpress` を 1 行足して `http://wordpress/` を開く。80 が塞がっているときは空きポートに出る。その場合、出力に表示される `--host-resolver-rules` を付けて Chrome を起動する。
+- `lab up --for-review` は state dir の `review-lab.json` に Lab を記録する。1 つの state dir で記録できる review Lab は 1 つだけである。`lab down` は、まずこの記録を読む。持ち主の `lab up` が生きていれば SIGTERM を送り、持ち主が公開を外して Lab を消すのを待つ。その後、残ったものを Lab id で削除する。記録が無いときは、旧形の `lab up` が記録した 1 つの Lab の container / network / volume だけを削除する。どちらの場合も、残存が 0 でなければ終了コード 1 で残りを列挙する。同時に動く campaign の Lab には触らない。
 
 ### Lab / brokerの残骸
 

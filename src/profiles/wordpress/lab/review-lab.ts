@@ -1,7 +1,13 @@
+import { readFile, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
+import { z } from "zod";
+
+import { liveLabOwner } from "../../../infrastructure/lab-owner-record.js";
 import type { PrivateArtifactStore } from "../../../infrastructure/private-artifact-store.js";
 import { openLabReconstruction } from "../../../review/reproduction-package.js";
 import type { SnapshotReader } from "../../../snapshot/index.js";
-import type { WordPressLab } from "./index.js";
+import { hostGatewayName, type WordPressLab } from "./index.js";
 import { setupSchema } from "./provision-input.js";
 
 /** The Lab operations a human review session uses; observation stays with verification. */
@@ -29,8 +35,13 @@ export interface WordPressReviewLabSession {
     readonly password: string;
   };
   readonly browserImage: string;
+  readonly labId: string;
   /** The Lab on host loopback for a human's browser and curl, as the handoff Lab (#586). */
-  readonly host: { readonly url: string; readonly hostHeader: string };
+  readonly host: {
+    readonly url: string;
+    readonly hostHeader: string;
+    readonly port: number;
+  };
   /** Removes the Lab; a second call is a no-op. The caller decides when. */
   close(): Promise<void>;
 }
@@ -85,11 +96,17 @@ export async function openWordPressReviewLab(input: {
     const receiverIp = input.lab.reviewReceiverIp(handle);
     if (receiverIp === null)
       throw new Error("Review Lab receiver is unavailable");
-    // A free loopback port, so a review Lab never collides with a handoff Lab (#432).
-    const exposed = await input.lab.exposeToHost(handle, {
-      httpPort: 0,
+    // WordPress redirects to its own address without a port, so only port 80
+    // opens in a browser (#592); when it is taken, a free port still serves curl.
+    let exposed = await input.lab.exposeToHost(handle, {
+      httpPort: 80,
       via: "recorder",
     });
+    if (exposed.status !== "exposed")
+      exposed = await input.lab.exposeToHost(handle, {
+        httpPort: 0,
+        via: "recorder",
+      });
     if (exposed.status !== "exposed")
       throw new Error(
         `The review Lab could not be published on the host: ${exposed.diagnostic}`,
@@ -102,9 +119,11 @@ export async function openWordPressReviewLab(input: {
       attackerAccounts: handle.attackerAccounts,
       administrator,
       browserImage: input.browserImage,
+      labId: handle.id,
       host: {
         url: `http://127.0.0.1:${exposed.httpPort}`,
         hostHeader: new URL(handle.endpoint).host,
+        port: exposed.httpPort,
       },
       close,
     };
@@ -114,4 +133,117 @@ export async function openWordPressReviewLab(input: {
     await input.lab.teardown(handle);
     throw error;
   }
+}
+
+/** The review Lab a foreground `lab up --for-review` holds; `lab down` reads it (#592). */
+const reviewLabRecordSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  labId: z.string().regex(/^[0-9a-f-]{36}$/),
+  network: z.string().min(1),
+  gateway: z.string().min(1),
+  httpPort: z.number().int().min(1).max(65535),
+  startedAt: z.iso.datetime(),
+});
+const reviewLabRecordPath = (stateDirectory: string) =>
+  join(stateDirectory, "review-lab.json");
+
+async function readReviewLabRecord(stateDirectory: string) {
+  try {
+    return reviewLabRecordSchema.parse(
+      JSON.parse(
+        await readFile(reviewLabRecordPath(stateDirectory), "utf8"),
+      ) as unknown,
+    );
+  } catch {
+    return null;
+  }
+}
+
+/** Opens a review Lab and records it in the state directory until it is closed. */
+export async function openRecordedWordPressReviewLab(
+  input: Parameters<typeof openWordPressReviewLab>[0] & {
+    readonly stateDirectory: string;
+    readonly clock: () => Date;
+  },
+): Promise<WordPressReviewLabSession> {
+  const path = reviewLabRecordPath(input.stateDirectory);
+  if ((await readFile(path).catch(() => null)) !== null)
+    throw new Error(
+      "A review Lab is already recorded in this state directory; run lab down first",
+    );
+  const session = await openWordPressReviewLab(input);
+  try {
+    await writeFile(
+      path,
+      JSON.stringify(
+        reviewLabRecordSchema.parse({
+          schemaVersion: 1,
+          labId: session.labId,
+          network: session.networkName,
+          gateway: hostGatewayName(session.labId),
+          httpPort: session.host.port,
+          startedAt: input.clock().toISOString(),
+        }),
+      ),
+      { flag: "wx", mode: 0o600 },
+    );
+  } catch (error) {
+    await session.close();
+    throw error;
+  }
+  return {
+    ...session,
+    async close() {
+      await session.close();
+      await rm(path, { force: true });
+    },
+  };
+}
+
+/**
+ * `lab down` for a recorded review Lab: asks its living foreground owner to
+ * close it (withdraw, then teardown), then removes by Lab id whatever is left,
+ * the host gateway first. Null when no review Lab is recorded.
+ */
+export async function wordPressReviewLabDown(input: {
+  readonly stateDirectory: string;
+  readonly lab: Pick<WordPressLab, "cleanupLeftovers">;
+  readonly ownerOf?: (labId: string) => Promise<number | null>;
+  readonly signal?: (pid: number) => void;
+  readonly waitMs?: number;
+}) {
+  const record = await readReviewLabRecord(input.stateDirectory);
+  if (record === null) return null;
+  const ownerOf = input.ownerOf ?? ((labId) => liveLabOwner(labId));
+  const owner = await ownerOf(record.labId);
+  if (owner !== null) {
+    (input.signal ?? ((pid) => process.kill(pid, "SIGTERM")))(owner);
+    const deadline = Date.now() + (input.waitMs ?? 180_000);
+    while (
+      Date.now() < deadline &&
+      (await readReviewLabRecord(input.stateDirectory)) !== null &&
+      (await ownerOf(record.labId)) !== null
+    )
+      await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  const removed = await input.lab.cleanupLeftovers({
+    remove: true,
+    labId: record.labId,
+  });
+  const remaining = await input.lab.cleanupLeftovers({
+    remove: false,
+    labId: record.labId,
+  });
+  if (
+    remaining.containers.length === 0 &&
+    remaining.networks.length === 0 &&
+    remaining.volumes.length === 0
+  )
+    await rm(reviewLabRecordPath(input.stateDirectory), { force: true });
+  return {
+    labId: record.labId,
+    ...(owner === null ? {} : { ownerStopped: owner }),
+    removed,
+    remaining,
+  };
 }

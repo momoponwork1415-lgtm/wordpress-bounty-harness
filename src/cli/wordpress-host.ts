@@ -45,7 +45,10 @@ import { mountedWordPressSourcePack } from "../profiles/wordpress/acquisition/mo
 import { wordPressLabCommandRule } from "../profiles/wordpress/discovery/lab-commands.js";
 import { openWordPressLab } from "../profiles/wordpress/lab/index.js";
 import { observedReviewLabPackage } from "../profiles/wordpress/lab/observed-review-lab.js";
-import { openWordPressReviewLab } from "../profiles/wordpress/lab/review-lab.js";
+import {
+  openRecordedWordPressReviewLab,
+  wordPressReviewLabDown,
+} from "../profiles/wordpress/lab/review-lab.js";
 import { loadWordpressScopePolicy } from "../profiles/wordpress/scope-policy.js";
 import {
   createWordPressSelection,
@@ -617,6 +620,22 @@ export async function createWordPressHostProfile(options: {
     };
   };
 
+  /** The Lab a review session opens and `lab down` removes; no campaign config needed. */
+  const reviewLabs = () =>
+    openWordPressLab({
+      dockerExecutablePath: host.dockerExecutablePath,
+      images: {
+        database: host.images.database,
+        wordpress: host.images.wordpress,
+        wordpressCli: host.images.wordpressCli,
+        browser: host.images.browser,
+        recorder: host.images.broker,
+      },
+      source: openMaterializedSources({
+        rootDirectory: directories.sources,
+      }),
+    });
+
   const profile = createWordPressCliProfile({
     boundaries,
     selectionBoundaries,
@@ -638,27 +657,26 @@ export async function createWordPressHostProfile(options: {
     },
     /** `lab up --for-review`: a fresh Lab from a sealed package, no discovery. */
     reviewLab: (state, input) =>
-      openWordPressReviewLab({
+      openRecordedWordPressReviewLab({
         ...input,
         store: state.store,
+        stateDirectory: state.stateDirectory,
+        clock: state.clock,
         snapshots: openSnapshotReader({
           storageDirectory: directories.snapshots,
         }),
-        lab: openWordPressLab({
-          dockerExecutablePath: host.dockerExecutablePath,
-          images: {
-            database: host.images.database,
-            wordpress: host.images.wordpress,
-            wordpressCli: host.images.wordpressCli,
-            browser: host.images.browser,
-            recorder: host.images.broker,
-          },
-          source: openMaterializedSources({
-            rootDirectory: directories.sources,
-          }),
-        }),
+        lab: reviewLabs(),
         browserImage: host.images.browser,
       }),
+    /** A review Lab recorded by `lab up --for-review` first, then an earlier `lab up` (#592). */
+    async labDown(state, input) {
+      return (
+        (await wordPressReviewLabDown({
+          stateDirectory: state.stateDirectory,
+          lab: reviewLabs(),
+        })) ?? profile.labDown(state, input)
+      );
+    },
     reviewLabPackage: (state, ref) =>
       observedReviewLabPackage({
         ledger: state.ledger,
