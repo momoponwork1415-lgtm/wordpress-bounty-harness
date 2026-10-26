@@ -9,6 +9,7 @@ node dist/cli/main.js --state <state> --host <host.json> ledger funnel --campaig
 node dist/cli/main.js --state <state> --host <host.json> ledger runtime --campaign <id>   # model / CLI / catalog / run 数
 node dist/cli/main.js --state <state> --host <host.json> ledger usage --campaign <id>     # UTC 日別の token
 node dist/cli/main.js --state <state> --host <host.json> review parked --campaign <id>    # Programme 外で止めた Finding
+node dist/cli/main.js --state <state> --host <host.json> review leads --campaign <id>     # Lead の一覧（検証列には入らない。人間が読む）
 ```
 
 `--host` が無いと「A host configuration is required」で止まる。
