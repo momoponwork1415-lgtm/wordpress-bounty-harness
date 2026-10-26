@@ -311,7 +311,7 @@ export async function assessTrialResume(options: {
   readonly runId: string;
   /** The Snapshot the operator's campaign configuration froze again. */
   readonly snapshotDigest: string;
-  /** The current objective prompt's digest and text; the resume paragraph must be part of it. */
+  /** The objective's digest and the rebuilt text; the resume paragraph must be part of it. */
   readonly promptDigest: string;
   readonly prompt: string;
   readonly resumePrompt: string;

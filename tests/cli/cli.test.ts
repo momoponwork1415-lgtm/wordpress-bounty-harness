@@ -3537,6 +3537,82 @@ describe("harness CLI vertical slice", () => {
     expect(transportRuns).toHaveLength(2);
   });
 
+  it("resumes with the objective the Trial recorded after the campaign moves to another prompt version, and refuses one the registry lacks (#548)", async () => {
+    const { run, configPath, transportRuns, ledger } = await harness({
+      refuseOnCalls: [1],
+      refusalSession: true,
+      zeroFindings: true,
+      config: {
+        promptId: "wp2shell-bounty-v15-wide",
+        discovery: { lab: "none", mode: "wide", maxChildren: 3 },
+      },
+    });
+    const campaign = "campaign-resume-recorded-prompt";
+    const command = ["--campaign", campaign, "--config", configPath];
+    expect((await run("campaign", "run", "--all", ...command)).code).toBe(0);
+    const first = transportRuns[0]!;
+    // Between the segments the campaign moves to the current wide version and 6 children.
+    const written = JSON.parse(await readFile(configPath, "utf8"));
+    written.promptId = "wp2shell-bounty-v17-wide";
+    written.discovery = { lab: "none", mode: "wide", maxChildren: 6 };
+    await writeFile(configPath, JSON.stringify(written));
+
+    const resumed = await run(
+      "campaign",
+      "resume",
+      "--run",
+      first.runId,
+      ...command,
+    );
+    expect(resumed.code).toBe(0);
+    const segment = transportRuns[1]!;
+    expect(segment.maxChildren).toBe(3);
+    expect(segment.resumePrompt).toBe(first.resumePrompt);
+    expect(segment.prompt).toBe(first.prompt);
+    const starts = ledger()
+      .read({ campaignId: campaign, type: "discovery-run-started" })
+      .map(({ event }) => event);
+    const original = starts[0];
+    if (original?.type !== "discovery-run-started")
+      throw new Error("Missing recorded run");
+    const v15 = await loadWordPressDiscoveryAsset("wp2shell-bounty-v15-wide");
+    expect(original.configuration).toMatchObject({
+      promptVariant: "wp2shell-bounty-v15-wide",
+      promptDigest: v15.digest,
+    });
+    expect(starts[1]).toMatchObject({
+      resumesRun: first.runId,
+      configuration: {
+        promptVariant: "wp2shell-bounty-v15-wide",
+        promptDigest: v15.digest,
+        maxChildren: 3,
+      },
+    });
+
+    // A recorded version the registry does not hold cannot be rebuilt.
+    await ledger().append({
+      ...original,
+      identity: "unknown-prompt",
+      runId: "unknown-prompt",
+      configuration: {
+        ...original.configuration,
+        promptVariant: "wp2shell-bounty-v99-wide",
+      },
+    });
+    const unknown = await run(
+      "campaign",
+      "resume",
+      "--run",
+      "unknown-prompt",
+      ...command,
+    );
+    expect(unknown.code).toBe(3);
+    expect(unknown.stderr).toBe(
+      "not resumable: prompt-version-differs (wp2shell-bounty-v99-wide is not in the prompt registry)",
+    );
+    expect(transportRuns).toHaveLength(2);
+  });
+
   it("resumes a refused Claude run on the Claude runtime it recorded, and lists the segment in `ledger resumes`", async () => {
     const { run, configPath, transportRuns, ledger } = await harness({
       claude: true,

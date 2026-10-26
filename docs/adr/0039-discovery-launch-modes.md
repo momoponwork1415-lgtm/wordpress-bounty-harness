@@ -147,7 +147,7 @@ PR #537 のレビューで、再開（ADR 0036）が子の上限・最低時間�
 
 - 再開 segment は、元の run の `configuration` にある `maxChildren`、`minimumActiveMinutes`、`wallMinutes` を強制し、`## Run parameters` 節も同じ値で組む。今の設定は使わない。
 - 追記 3 より前の run には記録が無い。子の上限は当時の固定値 4 を使い、最低時間と wall は従来どおり今の設定から取る。
-- 目的文・Snapshot・runtime profile・Lab 予算が違えば拒否する規則（`prompt-version-differs` など）は変えない。
+- 目的文・Snapshot・runtime profile・Lab 予算が違えば拒否する規則（`prompt-version-differs` など）は変えない。※ 目的文は 2026-10-27 に、記録した版で組むよう改めた（ADR 0036 の 2026-10-27 追記）。
 - 消し方: この節と #548 の差分を戻す。再開はまた今の設定から組み直す。
 
 ## 2026-10-26 追記 7: 本番の既定を `wide` にする（所有者決定）

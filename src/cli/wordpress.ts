@@ -45,6 +45,7 @@ import type {
 import {
   loadWordPressDiscoveryAsset,
   WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID,
+  WORDPRESS_DISCOVERY_PROMPT_IDS,
   WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS,
   wordPressDiscoveryModeOf,
   wordPressDiscoveryPrompt,
@@ -1033,8 +1034,20 @@ async function resumeWordPressRun(
           runtimeProfile: boundaries.runtimeProfile,
           executor: boundaries.executor,
         };
+  // A segment continues the objective its Trial recorded, not the campaign's
+  // current one (#548, ADR 0036 addendum 2026-10-27). Archived versions stay
+  // in the registry; a version the registry no longer has cannot be rebuilt.
+  const recordedPrompt = WORDPRESS_DISCOVERY_PROMPT_IDS.find(
+    (id) => id === started.configuration.promptVariant,
+  );
+  if (recordedPrompt === undefined)
+    return {
+      status: "refused",
+      reason: "prompt-version-differs",
+      detail: `${started.configuration.promptVariant} is not in the prompt registry`,
+    };
   const [objective, trustBoundary] = await Promise.all([
-    loadWordPressDiscoveryAsset(config.promptId),
+    loadWordPressDiscoveryAsset(recordedPrompt),
     loadWordPressDiscoveryAsset(WORDPRESS_TRUST_BOUNDARY.id),
   ]);
   const resumePrompt = wordPressResumeParagraph(objective);
