@@ -99,3 +99,14 @@ PR #415 は handoff の接続と同時に、host 単位の検証 Lab lease（`sr
 ### 消し方
 
 この節と #432 の PR を revert する。lease が戻り、検証 Lab は再び 1 host 1 枠になり、port は `--port 8080` / `--db-port 3307` の既定に戻る。
+
+## 2026-10-26 追記: `lab.json` と `attack.json`、`abort` の理由、前提の gate（#431、所有者の委任で AI）
+
+PR #415 のレビュー指摘 4 への対応。決定の本文は #415 より前の設計のまま残し、今の code の動きをここに書く。決定の本文にある「`lab.json` に攻撃者位置の資格と canary の節を書く」と「`abort` は `incomplete(recipe)`」は、#415 の実装と食い違っていた。canary の節は ADR 0040 で無くなった（2026-10-25 注記）。
+
+- **`lab.json`（前提作りの側）。** Harness は Lab を host に公開した直後にこれを置く。中身は、skill の版、`runId`・`findingId`・`snapshotDigest`、Lab 内の接続先、host から使う URL と Host header、前提作り専用の設定管理者の資格、Lab に scenario や第 2 言語があればその値、review export の path、受け渡しに使う file の path（`setup-done`、`observation-ready`、`attack.json`、`abort`、6 file）、wall の期限である。攻撃者位置の資格と DB account は入れない。
+- **`attack.json`（攻撃者の側）。** `setup-done` が置かれた後、Harness は設定管理者を無効化し、HTTP 捕捉の起点と Lab 状態の基線を取り直す。無効化と捕捉の起点の取り直しができたときだけ `observation-ready` を置き、続けて `attack.json` を書く。中身は、`runId`・`findingId`・`snapshotDigest`、Finding の `attackerPosition` に当たる account 1 つ（`unauthenticated` なら空）、読み取り専用の DB account とその port、参照の route である。DB account は、Lab に DB があり host に公開できたときだけ入れる。`sensitive-object-access` の Finding には入れない。参照の route は、再検証が前の attempt の route を参照にするときだけ入れる。取り直しに失敗した attempt では `attack.json` を出さず、`incomplete(recipe)`（次の手は `setup-boundary`）にする。
+- **`abort` の理由。** Harness は `abort` の 1 行目を理由コードとして読む。そのうち `precondition-unavailable` だけを `incomplete(precondition)` にする。ほかのコード（`route-unavailable`、`observer-unavailable`、`handoff-interrupted`、どれにも当たらない値は `unspecified`）と wall 超過は、従来どおり `incomplete(recipe)` にする。次の手は `abort-<コード>:<digest>` の形で、skill が `abort` の前に書いた `<dir>/precondition` の本文は Private Evidence に置き、台帳には digest だけを残す。
+- **前提の gate を通さない。** SPEC 第 7 節の前提の分類は handoff でも行い、記録済みの分類と違うときと `admin-configuration` のときは `finding-precondition-classified` を記録する。ただし handoff の transport は、前提作りを自分で受け持つと宣言している（`preconditionSetup: "transport"`）。そのため、分類から `incomplete(precondition)` で早く終える次の 3 つの検査を飛ばす。(a) 分類が次の scenario ID を名指しするとき、run の前に返す。(b) 分類が理由コード `common-usage-scenario-missing` を返すとき、run の前に返す。(c) 6 file が揃った後、Finding の前提が `unknown` に分類されていたときに返す（「catalogue に無い前提」）。飛ばす理由は、本 ADR で前提作りを skill に移したことにある。scenario catalogue に無い前提も、skill が `setup-done` の前に Lab の通常機能で作る。作れなければ、skill は手順どおり `precondition-unavailable` で abort する。6 file の `precondition` が空でないときは、handoff でも `incomplete(precondition)` にする。次の手は、分類から決めた理由コード（`common-usage-precondition` など）と、本文を置いた Private Evidence の digest である。
+
+この節は文書を code に合わせるだけで、skill 本文、code、台帳の event 形は変えない。取り消すときはこの節を消す。
