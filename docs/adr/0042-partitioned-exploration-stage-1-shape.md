@@ -22,7 +22,7 @@ amends: 0029（単一協調 Trial の主経路）と 0039（探索の mode）に
 
 - `discovery.mode` に `partitioned` を足す。`deep` と `wide` は変えない。
 - 1 対象の Trial は、列挙役の run 1 つと、区画ごとの追跡役の run からなる。Root は置かない。どの役も入力 1 つ・出力 1 つで、子を起こさない。
-- 列挙役は、固定ソースと、読み取り専用で `/workspace/tools` に置いた道具（hook の登録を拾う script、出口の呼び出しを拾う script、本体の固定一覧）を受け取る。script は列挙役が自分で走らせて点検する。Harness は先に走らせず、出力を床として渡さない（所有者の指摘 2026-10-27: 床があると列挙役は何も足さない）。列挙役は行 id と `origin`（`script` / `agent`）付きの inventory と、区画の案を返す。
+- 列挙役は、固定ソースと、読み取り専用で `/workspace/tools` に置いた道具（hook の登録を拾う script、出口の呼び出しを拾う script）を受け取る。script は列挙役が自分で走らせて点検する。Harness は先に走らせず、出力を床として渡さない（所有者の指摘 2026-10-27: 床があると列挙役は何も足さない）。列挙役は行 id と `origin`（`script` / `agent`）付きの inventory と、区画の案を返す。
 - Harness は inventory と区画の案の形だけを検査する。schema、同じ内容の行のまとめ、未知の行 id、どの区画にも無い行、複数の区画にある行、1 区画の行数と区画数の上限。超えた案は切り分けずに、理由の一覧を添えて差し戻す。差し戻しは `maxResubmits` まで。尽きたら Trial は理由付きの `incomplete` で終わり、候補 0 件には数えない。
 - 追跡役は自分の区画の JSON、目的文 `objective-partition-v1`、契約 v4 の solo 描画、trust 境界、Programme Boundary を受け取り、Finding / Lead を返す。出力は既存の受け口（正規化、保留、park、群）をそのまま通り、Finding / Lead に `partition` が付く。
 - 組合せ役と Lead の群は段階 2 以降。
@@ -32,7 +32,7 @@ amends: 0029（単一協調 Trial の主経路）と 0039（探索の mode）に
 - 役の定義は Markdown（frontmatter: `role`、`version`、`output` ＋ 本文）。`src/profiles/wordpress/prompts/agents/enumerator-v1.md`、`tracer-v1.md`。汎用の parser は `src/discovery/role-definition.ts`。定義の digest は Trial ごとの割り当て（区画の JSON）の digest と別に記録する。
 - 道具は `src/profiles/wordpress/discovery/tools/` に置き、`WORDPRESS_ENUMERATION_TOOLS` で id と digest を固定する。道具の組の digest が `toolsDigest`。
 - 目的文 `objective-partition-v1` は、現行の目的文がすでに持つ段落だけで組む（task-v15、first-principles-v11、sources-v8）。strategy、coordination、persistence の段落は持たない。区画が strategy で、協調する相手がいないからである。
-- 契約 v4 の solo 描画（`wordpress-discovery-contract-v4-solo`）は、v4 から Root 宛ての段落 1 つを抜いたもので、ほかは byte 単位で同じ。新しい契約の版とは数えない（契約 v5 の教訓: Harness が足した文は探索を縮める。ADR 0038 追記 15）。
+- 契約 v4 の solo 描画（`wordpress-discovery-contract-v4-solo`）は、v4 から Root 宛ての段落 1 つと、子の報告と Root の最終報告に触れる 2 文を抜いたもので、ほかは byte 単位で同じ（所有者決定 2026-10-28）。新しい契約の版とは数えない（契約 v5 の教訓: Harness が足した文は探索を縮める。ADR 0038 追記 15）。
 - 役の本文、目的文、道具の文は agent に渡る文章なので、`owner-approved` の規則（DEVELOPMENT 第 5 節）に従う。型の一覧、判断の基準、対象固有の名前、攻撃の手順は書かない。
 
 ### 設定
@@ -40,15 +40,15 @@ amends: 0029（単一協調 Trial の主経路）と 0039（探索の mode）に
 ```json
 "discovery": {
   "mode": "partitioned",
-  "enumerator": { "runtime": "claude", "model": "…", "effort": "high", "wallMinutes": 15,
-                  "tools": ["enumerate-hooks-v1", "enumerate-sinks-v1", "core-fixed-list-v1"], "rowSource": "agent" },
+  "enumerator": { "runtime": "claude", "model": "…", "effort": "high", "wallMinutes": 20,
+                  "tools": ["enumerate-hooks-v1", "enumerate-sinks-v1"], "rowSource": "agent" },
   "partition":  { "maxEntriesPerPartition": 60, "maxPartitions": 8, "maxResubmits": 2 },
-  "tracer":     { "runtime": "claude", "model": "…", "effort": "high", "wallMinutes": 20, "maxParallel": 1 }
+  "tracer":     { "runtime": "claude", "model": "…", "effort": "high", "wallMinutes": 45, "maxParallel": 2 }
 }
 ```
 
 - 3 つの節は `partitioned` のときだけ書ける。省略した値は既定値になる。段階 1 の runtime は Claude だけ。
-- 1 対象の最悪時間（列挙 × (1 + 差し戻し) + ceil(区画数 / 並列) × 追跡）は 240 分以内。並列の追跡役は memory 予算の discovery run 数以内。
+- 1 対象の最悪時間（列挙 × (1 + 差し戻し) + ceil(区画数 / 並列) × 追跡）は 240 分以内。並列の追跡役は memory 予算 ÷ (一発の sandbox 4,096 MiB + broker 512 MiB) 以内（所有者決定 2026-10-28、本番の予算 10,752 MiB なら 2）。
 - `rowSource: "script-only"` は段階 3 の比較の腕で、Harness が script を先に走らせ、列挙役は区画の案だけ出す。測定にだけ使う。
 - 例は `examples/campaign-partitioned.json`。
 

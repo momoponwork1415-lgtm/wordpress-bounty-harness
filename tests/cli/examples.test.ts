@@ -256,12 +256,8 @@ describe("partitioned example (ADR 0042 stage 1, shape only)", () => {
           runtime: "claude",
           model: "claude-opus-5-5",
           effort: "high",
-          wallMinutes: 15,
-          tools: [
-            "enumerate-hooks-v1",
-            "enumerate-sinks-v1",
-            "core-fixed-list-v1",
-          ],
+          wallMinutes: 20,
+          tools: ["enumerate-hooks-v1", "enumerate-sinks-v1"],
           rowSource: "agent",
         },
         partition: {
@@ -269,7 +265,7 @@ describe("partitioned example (ADR 0042 stage 1, shape only)", () => {
           maxPartitions: 8,
           maxResubmits: 2,
         },
-        tracer: { runtime: "claude", wallMinutes: 20, maxParallel: 1 },
+        tracer: { runtime: "claude", wallMinutes: 45, maxParallel: 2 },
       },
     });
   });
@@ -283,13 +279,13 @@ describe("partitioned example (ADR 0042 stage 1, shape only)", () => {
     });
     expect(bare.promptId).toBe("objective-partition-v1");
     expect(bare.discovery).toMatchObject({
-      enumerator: { runtime: "claude", wallMinutes: 15, rowSource: "agent" },
+      enumerator: { runtime: "claude", wallMinutes: 20, rowSource: "agent" },
       partition: {
         maxEntriesPerPartition: 60,
         maxPartitions: 8,
         maxResubmits: 2,
       },
-      tracer: { runtime: "claude", wallMinutes: 20, maxParallel: 1 },
+      tracer: { runtime: "claude", wallMinutes: 45, maxParallel: 2 },
     });
     const wide = wordpressCampaignConfigSchema.safeParse({
       ...source,
@@ -322,7 +318,7 @@ describe("partitioned example (ADR 0042 stage 1, shape only)", () => {
       wordpressCampaignConfigSchema
         .safeParse(candidate)
         .error?.issues.map((issue) => issue.path.join("."));
-    // 15 × 3 + 8 × 25 = 245 > 240.
+    // 20 × 3 + 8 × 25 = 260 > 240.
     expect(
       paths({
         ...source,
@@ -332,13 +328,13 @@ describe("partitioned example (ADR 0042 stage 1, shape only)", () => {
         },
       }),
     ).toEqual(["discovery.tracer.wallMinutes"]);
-    // Two tracers at once need two discovery runs of memory.
+    // A tracer run is 4,096 + 512 MiB; the 10,752 MiB budget holds two, not three.
     expect(
       paths({
         ...source,
         discovery: {
           ...discovery,
-          tracer: { wallMinutes: 20, maxParallel: 2 },
+          tracer: { wallMinutes: 20, maxParallel: 3 },
         },
       }),
     ).toEqual(["discovery.tracer.maxParallel"]);
@@ -347,11 +343,11 @@ describe("partitioned example (ADR 0042 stage 1, shape only)", () => {
         ...source,
         discovery: {
           ...discovery,
-          tracer: { wallMinutes: 20, maxParallel: 2 },
+          tracer: { wallMinutes: 20, maxParallel: 3 },
         },
         resources: {
           ...(source.resources as object),
-          memoryBudgetMiB: 2 * 10752,
+          memoryBudgetMiB: 3 * (4096 + 512),
         },
       }),
     ).toBeUndefined();

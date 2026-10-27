@@ -68,6 +68,7 @@ export {
 } from "./claude-session.js";
 export {
   CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB,
+  CLAUDE_ONE_SHOT_SANDBOX_MEMORY_MIB,
   GvisorClaudeSandbox,
   type ClaudeSandbox,
   type ClaudeSandboxCommand,

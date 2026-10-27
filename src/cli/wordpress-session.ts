@@ -6,6 +6,7 @@ import {
   assignDiscoveryRuntime,
   claudeEffortSchema,
   claudeModelSchema,
+  CLAUDE_ONE_SHOT_SANDBOX_MEMORY_MIB,
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB,
   DEFAULT_MAX_CHILDREN,
   MAX_CHILDREN_LIMIT,
@@ -93,6 +94,9 @@ const WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES = {
  * one target inside the sandbox ceiling with one tracer at a time.
  */
 const PARTITIONED_TARGET_CEILING_MINUTES = 240;
+/** One tracer run: the one-shot sandbox plus its broker (design 2026-10-28 §6 Q2). */
+export const PARTITIONED_TRACER_RUN_MEMORY_MIB =
+  CLAUDE_ONE_SHOT_SANDBOX_MEMORY_MIB + EGRESS_BROKER_MEMORY_MIB;
 const partitionedRoleFields = {
   runtime: z.literal("claude").default("claude"),
   model: claudeModelSchema.optional(),
@@ -100,7 +104,7 @@ const partitionedRoleFields = {
 };
 const enumeratorSchema = z.strictObject({
   ...partitionedRoleFields,
-  wallMinutes: z.number().int().min(5).max(60).default(15),
+  wallMinutes: z.number().int().min(5).max(60).default(20),
   /** The tool files mounted read-only at /workspace/tools; the enumerator runs them itself. */
   tools: z
     .array(z.enum(WORDPRESS_ENUMERATION_TOOL_IDS))
@@ -119,8 +123,8 @@ const partitionSchema = z.strictObject({
 });
 const tracerSchema = z.strictObject({
   ...partitionedRoleFields,
-  wallMinutes: z.number().int().min(5).max(120).default(20),
-  maxParallel: z.number().int().min(1).max(4).default(1),
+  wallMinutes: z.number().int().min(5).max(120).default(45),
+  maxParallel: z.number().int().min(1).max(4).default(2),
 });
 
 /**
@@ -262,15 +266,18 @@ export const wordpressCampaignConfigSchema = z
           path: ["discovery", "tracer", "wallMinutes"],
           message: `One target may take ${minutes} minutes; the ceiling is ${PARTITIONED_TARGET_CEILING_MINUTES}`,
         });
+      // A tracer starts no children, so its sandbox is the one-shot size.
       const sandboxes = Math.max(
         1,
-        Math.floor(config.resources.memoryBudgetMiB / DISCOVERY_RUN_MEMORY_MIB),
+        Math.floor(
+          config.resources.memoryBudgetMiB / PARTITIONED_TRACER_RUN_MEMORY_MIB,
+        ),
       );
       if (tracer.maxParallel > sandboxes)
         context.addIssue({
           code: "custom",
           path: ["discovery", "tracer", "maxParallel"],
-          message: `The memory budget holds ${sandboxes} discovery run(s) at once`,
+          message: `The memory budget holds ${sandboxes} tracer run(s) at once`,
         });
     }
     const floor =

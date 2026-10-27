@@ -53,6 +53,13 @@ import {
 /** The same budget as a cooperative Codex Trial, so campaign memory math holds. */
 export const CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB =
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB;
+/**
+ * A one-shot role of a partitioned Trial (ADR 0042) starts no children, so
+ * its sandbox is sized for one agent; the campaign memory budget admits
+ * `budget / (this + broker)` tracers at once. The runner applies it in stage
+ * 1's runtime PR.
+ */
+export const CLAUDE_ONE_SHOT_SANDBOX_MEMORY_MIB = 4096;
 /** Two CPUs per Claude container, as before candidate 9; the Codex sandbox keeps one. */
 const CLAUDE_SANDBOX_CPUS = 2;
 const CLAUDE_CONFIG_MOUNT = "/tmp/claude";

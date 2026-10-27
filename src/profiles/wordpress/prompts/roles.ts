@@ -28,7 +28,7 @@ export const WORDPRESS_ROLE_DEFINITIONS = [
     id: "enumerator-v1",
     role: "enumerator",
     digest:
-      "sha256:973ee230571afb5daa8b1c2394456235dcaef66a191d346425443516129dd31e",
+      "sha256:e51bc576cdfaea0bacb2ce5cf2af31f24cca6cf7fe34f39070248cedb419da54",
     status: "current",
   },
   {

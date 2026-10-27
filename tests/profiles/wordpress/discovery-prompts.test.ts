@@ -281,20 +281,26 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
     );
   });
 
-  it("renders the solo v4 contract for a tracer as v4 without the Root-addressed paragraph only (ADR 0042)", () => {
+  it("renders the solo v4 contract for a tracer as v4 without the Root paragraph and the child/Root sentences (ADR 0042, owner 2026-10-28)", () => {
     const v4 = wordPressDiscoveryOutputContractV4();
     const solo = wordPressDiscoveryOutputContractV4Solo();
     expect(solo.id).toBe("wordpress-discovery-contract-v4-solo");
     const paragraphs = v4.text.split("\n\n");
     expect(paragraphs[1]).toMatch(/^As Root, include this complete contract/);
+    expect(paragraphs[2]).toMatch(/strings\. A child reports direct Finding/);
     expect(solo.text).toBe(
-      [paragraphs[0], ...paragraphs.slice(2)].join("\n\n"),
+      [
+        paragraphs[0],
+        "Return `findings`, `leads`, `examined`, and `unexamined`. The last two are strings.",
+        ...paragraphs.slice(3),
+      ].join("\n\n"),
     );
-    expect(solo.text).not.toContain("As Root,");
+    expect(solo.text).not.toContain("Root");
+    expect(solo.text).not.toContain("child");
     expect(solo.text).toContain("Finding schema:");
     expect(solo.text).toContain("Lead schema:");
     expect(solo.digest).toBe(
-      "sha256:86c0c90755b93a43b49b61d35b3538bdb85a744fbc733d4659f6f5fe5156c35a",
+      "sha256:620d4a05037fc42ac532b6a38e37579f7e8c1febaba571e0ed2d1e586a50bfd8",
     );
   });
 });

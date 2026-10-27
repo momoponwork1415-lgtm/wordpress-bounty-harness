@@ -32,13 +32,6 @@ export const WORDPRESS_ENUMERATION_TOOLS = [
       "sha256:957be12aa7a8e250d40edfa6b637b7c65cd111abf8f6af42d28c90117d7605ea",
     status: "current",
   },
-  {
-    id: "core-fixed-list-v1",
-    file: "core-fixed-list-v1.md",
-    digest:
-      "sha256:2217d7fd822401e21b01577e8afddddc2c9e06c99eb00da8c2cf9300da949715",
-    status: "current",
-  },
 ] as const satisfies readonly WordPressEnumerationToolRecord[];
 
 export type WordPressEnumerationToolId =
