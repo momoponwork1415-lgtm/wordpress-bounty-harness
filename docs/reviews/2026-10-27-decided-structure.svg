@@ -1,0 +1,223 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1700" height="1120" viewBox="0 0 1700 1120" font-family="'Noto Sans JP','Hiragino Sans','Yu Gothic','Meiryo',sans-serif">
+  <defs>
+    <marker id="ar" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L12,6 L0,12 z" fill="#555"/>
+    </marker>
+  </defs>
+  <rect width="1700" height="1120" fill="#ffffff"/>
+  <text x="850" y="42" text-anchor="middle" font-size="28" font-weight="bold" fill="#222">決めた構造（2026-10-27）</text>
+  <text x="850" y="70" text-anchor="middle" font-size="16" fill="#666">外側は変えない。内側は Harness が 4 つの役を順に起こす。組み合わせは輪に入れず、人間が名指ししたときだけ動かす。</text>
+
+  <!-- outer loop -->
+  <rect x="30" y="92" width="1640" height="150" rx="14" fill="#f3f6fa" stroke="#7f9bb8" stroke-width="2"/>
+  <text x="50" y="122" font-size="18" font-weight="bold" fill="#2b4a6b">外側の Harness　24 時間の輪（変えない）</text>
+  <g stroke="#2b4a6b" stroke-width="2" fill="#ffffff">
+    <rect x="60" y="140" width="250" height="70" rx="10"/>
+    <rect x="360" y="140" width="250" height="70" rx="10"/>
+    <rect x="660" y="140" width="250" height="70" rx="10"/>
+    <rect x="960" y="140" width="290" height="70" rx="10"/>
+    <rect x="1300" y="140" width="340" height="70" rx="10"/>
+  </g>
+  <g font-size="16" fill="#333" text-anchor="middle" font-weight="bold">
+    <text x="185" y="182">対象を選ぶ</text>
+    <text x="485" y="182">版と digest で固定する</text>
+    <text x="785" y="182">調べる（↓ 内側）</text>
+    <text x="1105" y="182">ふるい分けて確かめる</text>
+    <text x="1470" y="182">台帳に残す → 次の選定へ</text>
+  </g>
+  <g stroke="#555" stroke-width="2" fill="none" marker-end="url(#ar)">
+    <line x1="310" y1="175" x2="358" y2="175"/>
+    <line x1="610" y1="175" x2="658" y2="175"/>
+    <line x1="910" y1="175" x2="958" y2="175"/>
+    <line x1="1250" y1="175" x2="1298" y2="175"/>
+    <path d="M1470,210 L1470,228 L185,228 L185,212"/>
+  </g>
+
+  <!-- inner -->
+  <rect x="30" y="262" width="1240" height="560" rx="14" fill="#ffffff" stroke="#4a2b6b" stroke-width="2"/>
+  <text x="50" y="292" font-size="18" font-weight="bold" fill="#4a2b6b">内側の Harness　プラグイン 1 本の中（つくるもの）。順序は Harness が決め、AI は飛ばせない</text>
+
+  <!-- lane labels -->
+  <rect x="50" y="340" width="90" height="180" rx="8" fill="#e8eef5" stroke="#9fb3c8"/>
+  <text x="95" y="420" text-anchor="middle" font-size="17" font-weight="bold" fill="#2b4a6b">Harness</text>
+  <text x="95" y="444" text-anchor="middle" font-size="12" fill="#2b4a6b">形・上限・記録</text>
+  <rect x="50" y="560" width="90" height="220" rx="8" fill="#efe8f5" stroke="#b39fc8"/>
+  <text x="95" y="660" text-anchor="middle" font-size="17" font-weight="bold" fill="#4a2b6b">AI</text>
+  <text x="95" y="684" text-anchor="middle" font-size="12" fill="#4a2b6b">中身・判断</text>
+
+  <!-- step headers -->
+  <g font-size="17" font-weight="bold" fill="#222" text-anchor="middle">
+    <text x="300" y="325">① 洗い出す</text>
+    <text x="580" y="325">② 区画ごとに読む</text>
+    <text x="860" y="325">③ 別の体が読み直す</text>
+    <text x="1130" y="325">④ Lab で再現し、人が見る</text>
+  </g>
+
+  <!-- harness boxes -->
+  <g stroke="#2b4a6b" stroke-width="2" fill="#ffffff">
+    <rect x="160" y="340" width="260" height="180" rx="10"/>
+    <rect x="440" y="340" width="260" height="180" rx="10"/>
+    <rect x="720" y="340" width="260" height="180" rx="10"/>
+    <rect x="1000" y="340" width="260" height="180" rx="10"/>
+  </g>
+  <g font-size="14" fill="#333">
+    <text x="175" y="366">script を道具として置く</text>
+    <text x="175" y="388">（床は先に渡さない）</text>
+    <text x="175" y="416">案の形と上限を検査</text>
+    <text x="175" y="438">超えれば差し戻す（切らない）</text>
+    <text x="175" y="470" fill="#777">記録: script の行、AI の行、</text>
+    <text x="175" y="490" fill="#777">差し戻しの回数、一覧の digest</text>
+
+    <text x="455" y="366">区画ごとに 1 体を起こす</text>
+    <text x="455" y="388">（上限の中で並列、使い捨て）</text>
+    <text x="455" y="416">出力の形をそろえる</text>
+    <text x="455" y="438">範囲外は脇、同じ経路は群に</text>
+    <text x="455" y="470" fill="#777">記録: 区画と担当、読んだ file、</text>
+    <text x="455" y="490" fill="#777">時間、token、Finding / Lead</text>
+
+    <text x="735" y="366">成立したものだけ Lab の列へ</text>
+    <text x="735" y="388">不成立は理由付きで reject</text>
+    <text x="735" y="416">未決は不足事実 1 つを添えて</text>
+    <text x="735" y="438">保留（棄却しない）</text>
+    <text x="735" y="470" fill="#777">記録: 答えと理由</text>
+
+    <text x="1015" y="366">Lab を立て canary を播く</text>
+    <text x="1015" y="388">要求を捕捉し観測を記録</text>
+    <text x="1015" y="416">人が送った 1 本の結果を</text>
+    <text x="1015" y="438">台帳に残す</text>
+    <text x="1015" y="470" fill="#777">記録: やり取り、観測、</text>
+    <text x="1015" y="490" fill="#777">人の確認</text>
+  </g>
+
+  <!-- AI boxes -->
+  <g stroke="#4a2b6b" stroke-width="2" fill="#f6f1fa">
+    <rect x="160" y="560" width="260" height="220" rx="10"/>
+    <rect x="452" y="572" width="260" height="220" rx="10"/>
+    <rect x="446" y="566" width="260" height="220" rx="10"/>
+    <rect x="440" y="560" width="260" height="220" rx="10"/>
+    <rect x="720" y="560" width="260" height="220" rx="10"/>
+    <rect x="1012" y="572" width="260" height="220" rx="10"/>
+    <rect x="1006" y="566" width="260" height="220" rx="10"/>
+    <rect x="1000" y="560" width="260" height="220" rx="10"/>
+  </g>
+  <g font-size="14" fill="#333">
+    <text x="290" y="588" text-anchor="middle" font-weight="bold" font-size="16">列挙役　1 体</text>
+    <text x="175" y="616">script を自分で走らせ点検する</text>
+    <text x="175" y="638">拾えない物を足す（動的な hook、</text>
+    <text x="175" y="660">後から組み立てる処理）</text>
+    <text x="175" y="690">区画の切り方を提案する</text>
+    <text x="175" y="728" fill="#777">安い model でよい</text>
+    <text x="175" y="750" fill="#777">定義は Markdown、版と digest</text>
+
+    <text x="570" y="588" text-anchor="middle" font-weight="bold" font-size="16">追跡役　区画ごと 1 体</text>
+    <text x="455" y="616">自分の区画だけ読む</text>
+    <text x="455" y="638">他の体と話さない</text>
+    <text x="455" y="668">入口から出口までつながれば</text>
+    <text x="455" y="690">Finding、途中なら Lead</text>
+    <text x="455" y="728" fill="#777">基準は渡さない（広く報告）</text>
+    <text x="455" y="750" fill="#777">目的文は wp2shell の形のまま</text>
+
+    <text x="850" y="588" text-anchor="middle" font-weight="bold" font-size="16">段 1b　別の体</text>
+    <text x="735" y="616">追跡役の文脈を持たない</text>
+    <text x="735" y="638">固定したソースだけ読む</text>
+    <text x="735" y="668">問 1: 低い権限で値を置けるか</text>
+    <text x="735" y="690">問 2: ふつうの設定で届くか</text>
+    <text x="735" y="728" fill="#777">成立 / 不成立 / 未決</text>
+    <text x="735" y="750" fill="#777">model は追跡役と別でよい</text>
+
+    <text x="1130" y="588" text-anchor="middle" font-weight="bold" font-size="16">検証役 ＋ 人</text>
+    <text x="1015" y="616">検証役: 前提を作り、経路を</text>
+    <text x="1015" y="638">再現し、file に書く。判定しない</text>
+    <text x="1015" y="668">人: 用意された要求 1 本を送り、</text>
+    <text x="1015" y="690">自分のブラウザで見る</text>
+    <text x="1015" y="728" fill="#777">これが logic bug の oracle</text>
+    <text x="1015" y="750" fill="#777">公開実装は持っていない部分</text>
+  </g>
+
+  <!-- arrows between lanes -->
+  <g stroke="#555" stroke-width="2" fill="none" marker-end="url(#ar)">
+    <line x1="290" y1="520" x2="290" y2="558"/>
+    <path d="M420,640 L430,640 L430,430 L438,430"/>
+    <line x1="570" y1="520" x2="570" y2="558"/>
+    <path d="M700,640 L710,640 L710,430 L718,430"/>
+    <line x1="850" y1="520" x2="850" y2="558"/>
+    <path d="M980,640 L990,640 L990,430 L998,430"/>
+    <line x1="1130" y1="520" x2="1130" y2="558"/>
+  </g>
+  <g font-size="12" fill="#2b4a6b">
+    <text x="298" y="545">固定ソース + script</text>
+    <text x="578" y="545">自分の区画</text>
+    <text x="858" y="545">Finding 1 件</text>
+    <text x="1138" y="545">Lab + Finding 1 件</text>
+    <text x="426" y="470" transform="rotate(-90 426,470)">一覧と区画の案</text>
+    <text x="706" y="470" transform="rotate(-90 706,470)">Finding / Lead</text>
+    <text x="986" y="470" transform="rotate(-90 986,470)">答えと理由</text>
+  </g>
+
+  <!-- named-only composer -->
+  <rect x="1290" y="262" width="380" height="560" rx="14" fill="#fffaf0" stroke="#c9a227" stroke-width="2" stroke-dasharray="8 6"/>
+  <text x="1480" y="292" text-anchor="middle" font-size="18" font-weight="bold" fill="#6b5200">名指しの段　組み合わせる</text>
+  <text x="1480" y="316" text-anchor="middle" font-size="13" fill="#6b5200">24 時間の輪には入れない</text>
+  <g stroke="#6b5200" stroke-width="2" fill="#ffffff">
+    <rect x="1320" y="340" width="320" height="80" rx="10"/>
+    <rect x="1320" y="450" width="320" height="90" rx="10"/>
+    <rect x="1320" y="570" width="320" height="130" rx="10"/>
+    <rect x="1320" y="730" width="320" height="70" rx="10"/>
+  </g>
+  <g font-size="14" fill="#333">
+    <text x="1480" y="366" text-anchor="middle" font-weight="bold">人が対象を名指しする</text>
+    <text x="1335" y="394">多段の発見は人が「対象、方向、証明の要求」を担う</text>
+    <text x="1480" y="476" text-anchor="middle" font-weight="bold">Harness</text>
+    <text x="1335" y="500">その対象の Lead を全件そろえて渡す</text>
+    <text x="1335" y="522">組むかは決めない。読ませた一覧を記録</text>
+    <text x="1480" y="596" text-anchor="middle" font-weight="bold">組合せ役　1 体（AI）</text>
+    <text x="1335" y="622">一覧を読み、組めるものを自分で選ぶ</text>
+    <text x="1335" y="644">1 本につながれば Finding</text>
+    <text x="1335" y="666">組んだ Lead の番号と理由を書く</text>
+    <text x="1335" y="688" fill="#777">記録: 組んだ Lead、結果、理由</text>
+    <text x="1480" y="758" text-anchor="middle" font-weight="bold">③ → ④ へ合流</text>
+    <text x="1480" y="782" text-anchor="middle" fill="#777">成立の判断は Lab で人が見る</text>
+  </g>
+  <g stroke="#6b5200" stroke-width="2" fill="none" marker-end="url(#ar)">
+    <line x1="1480" y1="420" x2="1480" y2="448"/>
+    <line x1="1480" y1="540" x2="1480" y2="568"/>
+    <line x1="1480" y1="700" x2="1480" y2="728"/>
+  </g>
+  <path d="M1320,765 L1290,765 L1290,850 L850,850 L850,830" stroke="#6b5200" stroke-width="2" fill="none" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+
+  <!-- bottom band -->
+  <rect x="30" y="870" width="520" height="230" rx="12" fill="#e8eef5" stroke="#9fb3c8"/>
+  <rect x="570" y="870" width="420" height="230" rx="12" fill="#efe8f5" stroke="#b39fc8"/>
+  <rect x="1010" y="870" width="660" height="230" rx="12" fill="#fff4d6" stroke="#c9a227"/>
+  <g font-size="14" fill="#333">
+    <text x="50" y="898" font-size="16" font-weight="bold" fill="#2b4a6b">Harness の code に残す 7 つ</text>
+    <text x="50" y="926">1 隔離（gVisor、broker）　2 固定（版と digest）</text>
+    <text x="50" y="950">3 割り当て（区画ごとに 1 体、順序）</text>
+    <text x="50" y="974">4 出力構造の強制（schema、正規化、保留）</text>
+    <text x="50" y="998">5 同一性の鍵（群。候補であって判定ではない）</text>
+    <text x="50" y="1022">6 上限（体数、時間、件数、差し戻し回数）</text>
+    <text x="50" y="1046">7 記録（台帳、Private Evidence）</text>
+    <text x="50" y="1078" fill="#777">中身を先に作らない。自由文を分類しない。</text>
+
+    <text x="590" y="898" font-size="16" font-weight="bold" fill="#4a2b6b">AI が持つ</text>
+    <text x="590" y="926">入口と出口の洗い出し、区画の切り方</text>
+    <text x="590" y="950">区画の中の読み順、仮説</text>
+    <text x="590" y="974">Finding にするか Lead にするか</text>
+    <text x="590" y="998">読み直しの答え、どの Lead を組むか</text>
+    <text x="590" y="1022">Lab での前提作りと経路の再現</text>
+    <text x="590" y="1054" fill="#777">model に依らない: agent loop は Claude Code 1 本、</text>
+    <text x="590" y="1076" fill="#777">役は Markdown、model は profile で役ごとに差し替え</text>
+
+    <text x="1030" y="898" font-size="16" font-weight="bold" fill="#6b5200">採る考え方（所有者決定）</text>
+    <text x="1030" y="926" font-weight="bold">Cloudflare</text>
+    <text x="1130" y="926">自分の宿題を採点させない。未決には不足事実 1 つ。</text>
+    <text x="1130" y="948">共有 file は親だけが書く。model は交換部品。</text>
+    <text x="1030" y="978" font-weight="bold">AVDH</text>
+    <text x="1130" y="978">段の順序は決定論で、AI は飛ばせない。</text>
+    <text x="1130" y="1000">列挙は安い model で並列。threat model は人が承認。</text>
+    <text x="1030" y="1030" font-weight="bold">Anthropic</text>
+    <text x="1130" y="1030">制約は prompt でなく code。発見と検証は欲しい物が逆。</text>
+    <text x="1130" y="1052">bug の型を列挙しない（形を言う）。出力は report でなく lead。</text>
+    <text x="1130" y="1074">重複の判断は AI、判断が行われたことの強制は Harness。</text>
+  </g>
+</svg>
