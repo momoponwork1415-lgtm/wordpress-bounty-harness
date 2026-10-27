@@ -125,7 +125,7 @@ const partitionSchema = z.strictObject({
 const tracerSchema = z.strictObject({
   ...partitionedRoleFields,
   wallMinutes: z.number().int().min(5).max(120).default(45),
-  maxParallel: z.number().int().min(1).max(4).default(2),
+  maxParallel: z.number().int().min(1).max(8).default(2),
 });
 
 /**

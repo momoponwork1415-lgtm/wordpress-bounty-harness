@@ -91,3 +91,9 @@ amends: 0029（単一協調 Trial の主経路）と 0039（探索の mode）に
 ## 消し方
 
 `discovery.mode` を既定（`deep`）に戻すか `wide` にすれば、現行の協調 Trial のまま。役の Markdown、道具、`objective-partition-v1` の行、新しい event と `partition` 欄、設定の 3 節は残しても読まれない。消すときは、この ADR と GLOSSARY の 4 行、measurement.md の 5a 節、reviews/README の参照を revert し、`src/discovery/role-definition.ts`、`partition.ts`、`prompts/roles.ts`、`prompts/agents/`、`discovery/tools.ts`、`discovery/tools/`、`examples/campaign-partitioned.json` と test を消す。台帳の既存 event は消さない。
+
+## 追記 2（2026-10-28）: 追跡役の並列の上限を 8 にする
+
+所有者決定（2026-10-28）。機械は 64 GB で、Ubuntu への割り当てを 56 GB に上げられる。追跡役は区画ごとに 1 体なので、区画の上限 8 と同じ 8 まで並べられるように `tracer.maxParallel` の schema の上限を 4 から 8 にする。既定値 2 は変えない。memory の検査（1 対象あたり、対象をまたいで）はそのまま効くので、予算 `memoryBudgetMiB` を上げなければ並列は増えない。本番の最初の構成は、追跡役 8 並列（4,608 MiB × 8 = 36,864 MiB）と Codex の v14-wide 1 本とする。
+
+消し方: `max(8)` を `max(4)` に戻す。
