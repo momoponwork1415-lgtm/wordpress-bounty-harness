@@ -18,6 +18,7 @@ import type {
   DiscoveryTransportResult,
   InterruptedRunRecovery,
   DiscoveryTransportRun,
+  OneShotExecutor,
   ProviderAttachmentStore,
 } from "../discovery/index.js";
 import type { ExpectedSourceTree } from "../infrastructure/canonical-source-tree.js";
@@ -152,9 +153,6 @@ const discoveryLabSchema = z
     maxResets: maxResets ?? 2,
     maxObservations: maxObservations ?? 20,
   }));
-
-export const PARTITIONED_RUNTIME_PENDING =
-  "The partitioned mode has no runtime yet (ADR 0042 stage 1, PR 2); unset discovery.mode";
 
 export const LEGACY_VERIFIER_RETIRED =
   "The legacy Codex Verifier is retired; a verification skill handoff must be explicitly requested";
@@ -392,10 +390,15 @@ export interface WordPressCampaignBoundaries {
     /** Removes a run's marker and directories once its finish is appended (#512). */
     release?(runId: string): Promise<void>;
   };
-  /** The Claude discovery runtime, present when the host configures it and the campaign's share uses it. */
+  /**
+   * The Claude discovery runtime, present when the host configures it and the
+   * campaign's share uses it or its mode is `partitioned`. `oneShot` runs the
+   * roles of a partitioned Trial (ADR 0042).
+   */
   readonly claude?: {
     readonly runtimeProfile: AgentRuntimeProfile;
     readonly executor: WordPressCampaignBoundaries["executor"];
+    readonly oneShot?: OneShotExecutor;
   };
   readonly attachments: ProviderAttachmentStore;
   /** Legacy injected adapters may provide one; the real host no longer does. */
@@ -455,11 +458,6 @@ export async function readWordPressCampaignConfig(
     throw new Error(
       `The memory budget is below one discovery run (${DISCOVERY_RUN_MEMORY_MIB} MiB)`,
     );
-  // ADR 0042 stage 1 lands in two PRs: the shape first, the runtime next. A
-  // config in this mode parses, so it can be written and checked, but a
-  // session refuses it until the role runs exist.
-  if (config.discovery.mode === "partitioned")
-    throw new Error(PARTITIONED_RUNTIME_PENDING);
   return config;
 }
 

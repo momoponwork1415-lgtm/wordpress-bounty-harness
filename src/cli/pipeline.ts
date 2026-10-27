@@ -56,6 +56,8 @@ export interface CampaignPipeline<
     readonly concurrency?: number;
     readonly runWallTimeMs?: number;
     readonly executor: DiscoveryOptions["executor"];
+    /** ADR 0042: present when the planned Trials are partitioned. */
+    readonly oneShotExecutor?: NonNullable<DiscoveryOptions["oneShotExecutor"]>;
     readonly attachments: DiscoveryOptions["attachments"];
     readonly recordReport: DiscoveryOptions["recordReport"];
     readonly resumeInterrupted?: NonNullable<

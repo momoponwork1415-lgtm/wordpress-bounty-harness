@@ -19,11 +19,14 @@ export const claudeRunnerChildLimitDenial = (maxChildren: number): string =>
  * reach stdout; full transcripts stay in the mounted Claude config directory.
  * With `resumeSessionId`, the first turn resumes that restored session with
  * the pinned directive instead of sending the objective again (ADR 0036).
+ * With `oneShot`, it runs one turn of one agent (ADR 0042): `maxChildren`
+ * is 0, the Agent tool is not offered, and `outputSchema` may be absent for
+ * a role that writes files instead of a report.
  */
 export const CLAUDE_RUNNER_SOURCE = String.raw`
 import { query } from "@anthropic-ai/claude-agent-sdk";
 
-const TOOLS = ["Read", "Glob", "Grep", "Bash", "Write", "Edit", "Agent"];
+const ALL_TOOLS = ["Read", "Glob", "Grep", "Bash", "Write", "Edit", "Agent"];
 // The SDK gives the Root this tool for the json_schema report; children answer in text.
 const REPORT_TOOL = "StructuredOutput";
 const MAX_FINAL_MESSAGE = 64 * 1024;
@@ -35,17 +38,28 @@ const now = () => new Date().toISOString();
 let raw = "";
 for await (const chunk of process.stdin) raw += chunk.toString();
 const config = JSON.parse(raw);
+// A one-shot role run (ADR 0042): one turn, no children, no resume, and a
+// report schema only when the role answers under one.
+const ONE_SHOT = config.oneShot === true;
 if (
   typeof config.prompt !== "string" || config.prompt.length === 0 ||
-  typeof config.resumePrompt !== "string" || config.resumePrompt.length === 0 ||
-  !Number.isSafeInteger(config.minimumActiveMs) || config.minimumActiveMs < 0 ||
-  !Number.isSafeInteger(config.maxChildren) || config.maxChildren < 1 ||
+  (ONE_SHOT
+    ? config.resumePrompt !== undefined || config.minimumActiveMs !== 0 ||
+      config.maxChildren !== 0 || config.resumeSessionId !== undefined ||
+      config.resumeNotice !== undefined
+    : typeof config.resumePrompt !== "string" || config.resumePrompt.length === 0 ||
+      !Number.isSafeInteger(config.minimumActiveMs) || config.minimumActiveMs < 0 ||
+      !Number.isSafeInteger(config.maxChildren) || config.maxChildren < 1 ||
+      typeof config.outputSchema !== "object" || config.outputSchema === null) ||
   typeof config.model !== "string" || typeof config.effort !== "string" ||
-  typeof config.outputSchema !== "object" || config.outputSchema === null ||
+  (config.outputSchema !== undefined &&
+    (typeof config.outputSchema !== "object" || config.outputSchema === null)) ||
   (config.resumeSessionId !== undefined &&
     (typeof config.resumeSessionId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(config.resumeSessionId)))
 ) process.exit(2);
 const MAX_CHILDREN = config.maxChildren;
+// Without children the Agent tool is not offered at all; the hook still denies it.
+const TOOLS = MAX_CHILDREN === 0 ? ALL_TOOLS.filter((tool) => tool !== "Agent") : ALL_TOOLS;
 const CHILD_LIMIT = DENIALS.childLimit.replace("{n}", String(MAX_CHILDREN));
 
 let pending = 0;
@@ -62,7 +76,7 @@ const preToolUse = async (input) => {
     return input.agent_id === undefined ? {} : deny(DENIALS.outsideSurface);
   if (!TOOLS.includes(input.tool_name)) return deny(DENIALS.outsideSurface);
   if (input.tool_name !== "Agent") return {};
-  if (input.agent_id !== undefined) return deny(DENIALS.outsideSurface);
+  if (input.agent_id !== undefined || MAX_CHILDREN === 0) return deny(DENIALS.outsideSurface);
   if (pending + live.size >= MAX_CHILDREN) {
     emit({ type: "harness.child-decision", at: now(), decision: "child-limit", live: live.size, pending });
     return deny(CHILD_LIMIT);
@@ -139,7 +153,9 @@ async function turn(prompt) {
       persistSession: true,
       strictMcpConfig: true,
       mcpServers: {},
-      outputFormat: { type: "json_schema", schema: config.outputSchema },
+      ...(config.outputSchema === undefined
+        ? {}
+        : { outputFormat: { type: "json_schema", schema: config.outputSchema } }),
       hooks: {
         PreToolUse: [{ hooks: [preToolUse] }],
         SubagentStart: [{ hooks: [subagentStart] }],

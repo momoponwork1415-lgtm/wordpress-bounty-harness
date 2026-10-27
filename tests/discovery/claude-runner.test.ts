@@ -53,11 +53,37 @@ export async function* query({ options }) {
 }
 `;
 
+/** A stand-in SDK that reports the tools it was offered and the hook's answer to an Agent call. */
+const ONE_SHOT_SDK = `
+export async function* query({ options }) {
+  const hook = options.hooks.PreToolUse[0].hooks[0];
+  const agent = await hook({ tool_name: "Agent" });
+  yield {
+    type: "result", subtype: "success", is_error: false, session_id: "s",
+    tools: options.tools, allowedTools: options.allowedTools,
+    outputFormat: options.outputFormat ?? null,
+    agentDecision: agent.hookSpecificOutput?.permissionDecisionReason ?? "allow",
+  };
+}
+`;
+
 async function runWith(
   sdkSource: string,
   minimumActiveMs = 1,
   maxChildren = 4,
 ) {
+  return runWithConfig(sdkSource, {
+    prompt: "p",
+    resumePrompt: "r",
+    minimumActiveMs,
+    maxChildren,
+    model: "m",
+    effort: "high",
+    outputSchema: { type: "object" },
+  });
+}
+
+async function runWithConfig(sdkSource: string, config: unknown) {
   root = await mkdtemp(join(tmpdir(), "claude-runner-"));
   const sdk = join(root, "node_modules", "@anthropic-ai", "claude-agent-sdk");
   await mkdir(sdk, { recursive: true });
@@ -72,17 +98,7 @@ async function runWith(
   await writeFile(join(sdk, "index.js"), sdkSource);
   await writeFile(join(root, "runner.mjs"), CLAUDE_RUNNER_SOURCE);
   const child = run(process.execPath, [join(root, "runner.mjs")]);
-  child.child.stdin?.end(
-    JSON.stringify({
-      prompt: "p",
-      resumePrompt: "r",
-      minimumActiveMs,
-      maxChildren,
-      model: "m",
-      effort: "high",
-      outputSchema: { type: "object" },
-    }),
-  );
+  child.child.stdin?.end(JSON.stringify(config));
   const { stdout } = await child;
   return stdout
     .split("\n")
@@ -154,5 +170,55 @@ describe("Claude runner", () => {
 
   it("refuses to start without a positive maxChildren", async () => {
     await expect(runWith(FAKE_SDK, 0, 0)).rejects.toThrow();
+  });
+
+  it("runs a one-shot role as one turn without the Agent tool and without a report schema (ADR 0042)", async () => {
+    const events = await runWithConfig(ONE_SHOT_SDK, {
+      prompt: "p",
+      minimumActiveMs: 0,
+      maxChildren: 0,
+      oneShot: true,
+      model: "m",
+      effort: "high",
+    });
+    const result = events.find((event) => event.type === "result");
+    expect(result?.tools).toEqual([
+      "Read",
+      "Glob",
+      "Grep",
+      "Bash",
+      "Write",
+      "Edit",
+    ]);
+    expect(result?.allowedTools).not.toContain("Agent");
+    expect(result?.outputFormat).toBeNull();
+    expect(result?.agentDecision).toBe(CLAUDE_RUNNER_DENIALS.outsideSurface);
+    expect(
+      events.filter((event) => event.type === "harness.turn"),
+    ).toHaveLength(1);
+  });
+
+  it("refuses a one-shot config that still names children or a resume prompt", async () => {
+    await expect(
+      runWithConfig(ONE_SHOT_SDK, {
+        prompt: "p",
+        minimumActiveMs: 0,
+        maxChildren: 1,
+        oneShot: true,
+        model: "m",
+        effort: "high",
+      }),
+    ).rejects.toThrow();
+    await expect(
+      runWithConfig(ONE_SHOT_SDK, {
+        prompt: "p",
+        resumePrompt: "r",
+        minimumActiveMs: 0,
+        maxChildren: 0,
+        oneShot: true,
+        model: "m",
+        effort: "high",
+      }),
+    ).rejects.toThrow();
   });
 });

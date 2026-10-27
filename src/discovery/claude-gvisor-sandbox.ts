@@ -44,8 +44,21 @@ import {
 } from "./gvisor-container.js";
 import type { ProviderCredentialEgressGrant } from "./provider-credential-egress-broker.js";
 import {
+  admittedOneShotFiles,
+  ONE_SHOT_MAX_FILES,
+  ONE_SHOT_MAX_INPUT_BYTES,
+  ONE_SHOT_MAX_OUTPUT_BYTES,
+  ONE_SHOT_MAX_TOOL_BYTES,
+  ONE_SHOT_MAX_WALL_MS,
+  type OneShotFile,
+  type OneShotToolFile,
+} from "./one-shot-run.js";
+import {
+  SANDBOX_INPUT_MOUNT_PATH,
+  SANDBOX_OUTPUT_MOUNT_PATH,
   SANDBOX_RESEARCH_MOUNT_PATH,
   SANDBOX_SOURCE_MOUNT_PATH,
+  SANDBOX_TOOLS_MOUNT_PATH,
   dependencyMountPathsAreDisjoint,
   isDependencyMountPath,
 } from "./sandbox-layout.js";
@@ -56,8 +69,7 @@ export const CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB =
 /**
  * A one-shot role of a partitioned Trial (ADR 0042) starts no children, so
  * its sandbox is sized for one agent; the campaign memory budget admits
- * `budget / (this + broker)` tracers at once. The runner applies it in stage
- * 1's runtime PR.
+ * `budget / (this + broker)` tracers at once. Both roles run at this size.
  */
 export const CLAUDE_ONE_SHOT_SANDBOX_MEMORY_MIB = 4096;
 /** Two CPUs per Claude container, as before candidate 9; the Codex sandbox keeps one. */
@@ -94,13 +106,17 @@ export interface ClaudeSandboxCommand {
   /** What the runner reads on stdin; the prompt texts are the Codex path's, unchanged. */
   readonly input: {
     readonly prompt: string;
-    readonly resumePrompt: string;
+    /** Required for a cooperative run; absent on a one-shot run, which has one turn. */
+    readonly resumePrompt?: string;
     readonly minimumActiveMs: number;
-    /** The PreToolUse hook's ceiling on live children. */
+    /** The PreToolUse hook's ceiling on live children; 0 on a one-shot run. */
     readonly maxChildren: number;
     readonly model: string;
     readonly effort: string;
-    readonly outputSchema: object;
+    /** Absent only on a one-shot run whose role writes files instead of a report. */
+    readonly outputSchema?: object;
+    /** ADR 0042: one turn of one agent; `oneShot` below carries its files. */
+    readonly oneShot?: true;
     /** Resume this restored session; the first turn is the pinned directive (ADR 0036). */
     readonly resumeSessionId?: string;
     /** With `resumeSessionId`: Harness-generated facts sent before the directive on the first turn. */
@@ -113,6 +129,17 @@ export interface ClaudeSandboxCommand {
   readonly subagentModel: string;
   /** Present exactly when `input.resumeSessionId` is. */
   readonly resume?: ClaudeSandboxResumeSeed;
+  /**
+   * Present exactly when `input.oneShot` is: the Harness's input files
+   * (read-only at `/workspace/input`), the tool files (read-only at
+   * `/workspace/tools`) and the run's own wall, which replaces the sandbox's
+   * configured timeout for this run.
+   */
+  readonly oneShot?: {
+    readonly inputFiles: readonly OneShotFile[];
+    readonly toolFiles: readonly OneShotToolFile[];
+    readonly wallMs: number;
+  };
   readonly sourceMount: Mount;
   readonly dependencyMounts: readonly (Mount & { readonly path: string })[];
   readonly labHost?: { readonly name: string; readonly ipv4: string };
@@ -139,6 +166,9 @@ export interface ClaudeSandboxResult {
   readonly transcriptFailure?: "capture-failed";
   readonly research?: { readonly archive: Buffer; readonly truncated: boolean };
   readonly researchFailure?: "capture-failed";
+  /** One-shot runs only: every `*.json` directly under `/workspace/output`, by name. */
+  readonly outputFiles?: readonly OneShotFile[];
+  readonly outputFailure?: "capture-failed";
   readonly isolation: {
     readonly backend: "gvisor";
     readonly runtime: "runsc";
@@ -247,6 +277,66 @@ async function collectTranscripts(
   return transcripts;
 }
 
+/**
+ * The JSON files a one-shot run left directly under its output directory,
+ * bounded; a link, a subdirectory entry or an oversize file fails the capture.
+ */
+async function collectOutputFiles(directory: string): Promise<OneShotFile[]> {
+  const files: OneShotFile[] = [];
+  const entries = await readdir(directory, { withFileTypes: true });
+  for (const entry of entries.sort((left, right) =>
+    left.name.localeCompare(right.name),
+  )) {
+    if (entry.isSymbolicLink()) throw new Error("Claude output link");
+    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+    const path = join(directory, entry.name);
+    if ((await stat(path)).size > ONE_SHOT_MAX_OUTPUT_BYTES)
+      throw new Error("Claude output evidence limit exceeded");
+    files.push({ name: entry.name, content: await readFile(path, "utf8") });
+    if (files.length > ONE_SHOT_MAX_FILES)
+      throw new Error("Claude output count limit exceeded");
+  }
+  return files;
+}
+
+/** Writes a one-shot run's files into fresh directories; tool files are executable. */
+async function stageOneShotFiles(
+  input: string,
+  tools: string,
+  files: NonNullable<ClaudeSandboxCommand["oneShot"]>,
+): Promise<void> {
+  for (const file of files.inputFiles)
+    await writeFile(join(input, file.name), file.content, {
+      flag: "wx",
+      mode: 0o400,
+    });
+  for (const file of files.toolFiles)
+    await writeFile(join(tools, file.name), file.content, {
+      flag: "wx",
+      mode: 0o500,
+    });
+}
+
+/** A one-shot command's own shape (ADR 0042); the cooperative shape is the other branch. */
+function admittedOneShot(command: ClaudeSandboxCommand): boolean {
+  const { input, oneShot } = command;
+  if (oneShot === undefined) return input.oneShot === undefined;
+  return (
+    input.oneShot === true &&
+    input.maxChildren === 0 &&
+    input.minimumActiveMs === 0 &&
+    input.resumePrompt === undefined &&
+    input.resumeSessionId === undefined &&
+    input.resumeNotice === undefined &&
+    command.resume === undefined &&
+    Number.isSafeInteger(oneShot.wallMs) &&
+    oneShot.wallMs > 0 &&
+    oneShot.wallMs <= ONE_SHOT_MAX_WALL_MS &&
+    admittedOneShotFiles(oneShot.inputFiles, ONE_SHOT_MAX_INPUT_BYTES) &&
+    admittedOneShotFiles(oneShot.toolFiles, ONE_SHOT_MAX_TOOL_BYTES)
+  );
+}
+
 export class GvisorClaudeSandbox implements ClaudeSandbox {
   readonly #options: GvisorClaudeSandboxOptions;
   readonly #user: string;
@@ -281,10 +371,11 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
 
   #runArgs(
     container: Pick<GvisorContainer, "entrypoint" | "command" | "agent">,
+    memoryMiB = CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB,
   ): string[] {
     return gvisorRunArgs({
       user: this.#user,
-      memoryMiB: CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB,
+      memoryMiB,
       cpus: CLAUDE_SANDBOX_CPUS,
       image: this.#options.image,
       ...container,
@@ -333,9 +424,16 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
           command.input.resumeNotice.length > 4_096)) ||
       (command.resume === undefined
         ? command.input.resumeSessionId !== undefined
-        : !admittedResumeSeed(command.resume, command.input.resumeSessionId))
+        : !admittedResumeSeed(command.resume, command.input.resumeSessionId)) ||
+      !admittedOneShot(command) ||
+      (command.oneShot === undefined &&
+        (command.input.resumePrompt === undefined ||
+          command.input.outputSchema === undefined ||
+          command.input.maxChildren < 1))
     )
       throw new Error("Claude sandbox command is not admitted");
+    const oneShot = command.oneShot;
+    const wallMs = oneShot?.wallMs ?? this.#options.timeoutMs;
     const mountOf = async (mount: Mount): Promise<string> => {
       const directory = await realpath(mount.directory);
       if (
@@ -368,11 +466,27 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
     const containerName = `claude-agent-${randomUUID()}`;
     const created: string[] = [];
     try {
-      for (const prefix of ["claude-run-", "claude-home-", "claude-research-"])
+      for (const prefix of [
+        "claude-run-",
+        "claude-home-",
+        "claude-research-",
+        ...(oneShot === undefined
+          ? []
+          : ["claude-input-", "claude-tools-", "claude-output-"]),
+      ])
         created.push(await mkdtemp(join(scratch, prefix)));
-      const [staging, home, research] = created as [string, string, string];
+      const [staging, home, research, input, tools, output] = created as [
+        string,
+        string,
+        string,
+        string | undefined,
+        string | undefined,
+        string | undefined,
+      ];
       if (command.resume !== undefined)
         await seedResume(home, research, command.resume);
+      if (oneShot !== undefined)
+        await stageOneShotFiles(input!, tools!, oneShot);
       await writeFile(join(staging, "runner.mjs"), CLAUDE_RUNNER_SOURCE, {
         flag: "wx",
         mode: 0o600,
@@ -385,50 +499,62 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
         target: string,
         readonly: boolean,
       ): ContainerOption => ({ mount: { source, target, readonly } });
-      const args = this.#runArgs({
-        agent: {
-          name: containerName,
-          network: grant.dockerNetworkName,
-          hosts: command,
-          options: [
-            ...verified.map(({ directory, path }) =>
-              mount(directory, path, true),
-            ),
-            mount(research, SANDBOX_RESEARCH_MOUNT_PATH, false),
-            mount(staging, "/opt/claude-support", true),
-            mount(home, CLAUDE_CONFIG_MOUNT, false),
-            { workdir: SANDBOX_SOURCE_MOUNT_PATH },
-            { env: "HOME", value: "/tmp" },
-            { env: "CLAUDE_CONFIG_DIR", value: CLAUDE_CONFIG_MOUNT },
-            { env: "ANTHROPIC_BASE_URL", value: grant.baseUrl },
-            // A Trial-scoped grant the broker swaps for the owner's token; the
-            // docker client passes the value on by name so it stays out of argv.
-            { env: "ANTHROPIC_AUTH_TOKEN" },
-            // The Root and its side requests name the Root model; every child
-            // names the subagent model. The broker admits exactly these two.
-            { env: "ANTHROPIC_MODEL", value: model },
-            { env: "ANTHROPIC_DEFAULT_HAIKU_MODEL", value: model },
-            { env: "ANTHROPIC_SMALL_FAST_MODEL", value: model },
-            { env: "CLAUDE_CODE_SUBAGENT_MODEL", value: subagentModel },
-            // Claude Code 2.1.257 and newer: a `model` the Root passes to the
-            // Agent tool does not override the subagent model.
-            { env: "CLAUDE_CODE_SUBAGENT_MODEL_FORCE", value: "1" },
-            { env: "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", value: "1" },
-            { env: "DISABLE_AUTOUPDATER", value: "1" },
-            // The advisor is a server tool the broker refuses; keep Claude Code from offering it.
-            { env: "CLAUDE_CODE_DISABLE_ADVISOR_TOOL", value: "1" },
-            // On a refusal Claude Code would switch the session to another model;
-            // the owner chose to stop there instead (2026-10-19). The broker still
-            // refuses any other model with 403 model-not-admitted.
-            { env: "CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK", value: "1" },
-            { env: "CLAUDE_CODE_NO_MODEL_FALLBACK", value: "1" },
-            // Claude Code's nested bubblewrap cannot run under runsc (owner, 2026-10-14).
-            { env: "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", value: "0" },
-          ],
+      const args = this.#runArgs(
+        {
+          agent: {
+            name: containerName,
+            network: grant.dockerNetworkName,
+            hosts: command,
+            options: [
+              ...verified.map(({ directory, path }) =>
+                mount(directory, path, true),
+              ),
+              mount(research, SANDBOX_RESEARCH_MOUNT_PATH, false),
+              ...(oneShot === undefined
+                ? []
+                : [
+                    mount(input!, SANDBOX_INPUT_MOUNT_PATH, true),
+                    mount(tools!, SANDBOX_TOOLS_MOUNT_PATH, true),
+                    mount(output!, SANDBOX_OUTPUT_MOUNT_PATH, false),
+                  ]),
+              mount(staging, "/opt/claude-support", true),
+              mount(home, CLAUDE_CONFIG_MOUNT, false),
+              { workdir: SANDBOX_SOURCE_MOUNT_PATH },
+              { env: "HOME", value: "/tmp" },
+              { env: "CLAUDE_CONFIG_DIR", value: CLAUDE_CONFIG_MOUNT },
+              { env: "ANTHROPIC_BASE_URL", value: grant.baseUrl },
+              // A Trial-scoped grant the broker swaps for the owner's token; the
+              // docker client passes the value on by name so it stays out of argv.
+              { env: "ANTHROPIC_AUTH_TOKEN" },
+              // The Root and its side requests name the Root model; every child
+              // names the subagent model. The broker admits exactly these two.
+              { env: "ANTHROPIC_MODEL", value: model },
+              { env: "ANTHROPIC_DEFAULT_HAIKU_MODEL", value: model },
+              { env: "ANTHROPIC_SMALL_FAST_MODEL", value: model },
+              { env: "CLAUDE_CODE_SUBAGENT_MODEL", value: subagentModel },
+              // Claude Code 2.1.257 and newer: a `model` the Root passes to the
+              // Agent tool does not override the subagent model.
+              { env: "CLAUDE_CODE_SUBAGENT_MODEL_FORCE", value: "1" },
+              { env: "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", value: "1" },
+              { env: "DISABLE_AUTOUPDATER", value: "1" },
+              // The advisor is a server tool the broker refuses; keep Claude Code from offering it.
+              { env: "CLAUDE_CODE_DISABLE_ADVISOR_TOOL", value: "1" },
+              // On a refusal Claude Code would switch the session to another model;
+              // the owner chose to stop there instead (2026-10-19). The broker still
+              // refuses any other model with 403 model-not-admitted.
+              { env: "CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK", value: "1" },
+              { env: "CLAUDE_CODE_NO_MODEL_FALLBACK", value: "1" },
+              // Claude Code's nested bubblewrap cannot run under runsc (owner, 2026-10-14).
+              { env: "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", value: "0" },
+            ],
+          },
+          entrypoint: "node",
+          command: ["/opt/claude-support/runner.mjs"],
         },
-        entrypoint: "node",
-        command: ["/opt/claude-support/runner.mjs"],
-      });
+        oneShot === undefined
+          ? CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB
+          : CLAUDE_ONE_SHOT_SANDBOX_MEMORY_MIB,
+      );
       // Before the container exists, so another runner's sweep never names it (#550).
       const owner = await recordDiscoveryOwner({
         resource: containerName,
@@ -441,17 +567,14 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
         controller.abort(signal?.reason === "operator" ? "operator" : "wall");
       signal?.addEventListener("abort", onAbort, { once: true });
       if (signal?.aborted) onAbort();
-      const wallTimer = setTimeout(
-        () => controller.abort("wall"),
-        this.#options.timeoutMs,
-      );
+      const wallTimer = setTimeout(() => controller.abort("wall"), wallMs);
       const startedAt = clock().toISOString();
       let result: NativeModelProcessResult;
       try {
         const client = runDocker(
           args,
           JSON.stringify(command.input),
-          this.#options.timeoutMs,
+          wallMs,
           controller.signal,
           { ANTHROPIC_AUTH_TOKEN: token },
         );
@@ -497,6 +620,13 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
         (value) => ({ research: value }),
         () => ({ researchFailure: "capture-failed" as const }),
       );
+      const outputs =
+        output === undefined
+          ? {}
+          : await collectOutputFiles(output).then(
+              (value) => ({ outputFiles: value }),
+              () => ({ outputFailure: "capture-failed" as const }),
+            );
       return {
         status: result.kind === "exited" ? "exited" : "failed",
         exitCode: result.kind === "exited" ? result.exitCode : -1,
@@ -509,6 +639,7 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
         cliVersion,
         ...transcripts,
         ...notes,
+        ...outputs,
         isolation: GVISOR_ISOLATION,
       };
     } finally {

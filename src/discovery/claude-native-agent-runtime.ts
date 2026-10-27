@@ -80,7 +80,7 @@ const contentOf = (event: Event): Event[] => {
 };
 
 /** Tool calls as the command records `observedFromCommands` counts. */
-function commandsOf(events: readonly Event[]): ObservedCommand[] {
+export function commandsOf(events: readonly Event[]): ObservedCommand[] {
   return events
     .filter((event) => event.type === "assistant")
     .flatMap(contentOf)
@@ -89,7 +89,7 @@ function commandsOf(events: readonly Event[]): ObservedCommand[] {
 }
 
 /** Models the assistant messages report; Claude Code's own error turns are left out. */
-function reportedModels(events: readonly Event[]): Set<string> {
+export function reportedModels(events: readonly Event[]): Set<string> {
   return new Set(
     events.flatMap((event) => {
       const model = object(event.message)?.model;
@@ -245,7 +245,7 @@ export function claudeProviderFailure(
  * named. On a resumed segment only what this segment appended counts; the
  * restored part ended in the earlier segment's stop.
  */
-function rootTranscript(
+export function rootTranscript(
   events: readonly Event[],
   transcripts: ClaudeSandboxResult["transcripts"],
   restored: ReadonlyMap<string, string> = new Map(),
@@ -267,7 +267,7 @@ function rootTranscript(
 }
 
 /** Each Root turn's report text, timed by the runner's `harness.turn` record after it. */
-function rootTurns(events: readonly Event[]) {
+export function rootTurns(events: readonly Event[]) {
   const turns: { at?: unknown; message: string }[] = [];
   for (const event of events)
     if (event.type === "result") {
@@ -282,7 +282,7 @@ function rootTurns(events: readonly Event[]) {
 }
 
 /** Every Root turn's structured report, merged as the Codex path merges turns. */
-function rootReport(events: readonly Event[]) {
+export function rootReport(events: readonly Event[]) {
   return mergeTurnReports(rootTurns(events).map((turn) => turn.message));
 }
 
@@ -324,7 +324,7 @@ function delegationFields(text: string | undefined) {
       };
 }
 
-function rootUsage(events: readonly Event[]): NativeRunReceipt["usage"] {
+export function rootUsage(events: readonly Event[]): NativeRunReceipt["usage"] {
   const results = events.flatMap((event) => {
     const usage = event.type === "result" ? object(event.usage) : undefined;
     return usage === undefined ? [] : [usage];

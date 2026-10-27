@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -131,6 +131,139 @@ describe("Claude gVisor sandbox", () => {
         new Set([name?.slice("--name=".length)]),
       );
       expect((await readDiscoveryOwners(ownerDirectory)).live.size).toBe(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("runs a one-shot role at the one-shot memory size with its input, tool and output mounts and its own wall (ADR 0042)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "gvisor-claude-one-shot-"));
+    try {
+      const source = join(root, "source");
+      await mkdir(source);
+      await writeFile(join(source, "fixed.php"), "<?php");
+      const tree = await measureCanonicalSourceTree(source, {
+        maxEntries: 10,
+        maxBytes: 1024,
+      });
+      const calls: {
+        args: string[];
+        stdin: string | undefined;
+        timeoutMs: number;
+      }[] = [];
+      const seen: Record<string, string> = {};
+      const sandbox = new GvisorClaudeSandbox({
+        dockerExecutablePath: "/usr/bin/docker",
+        image: `claude@sha256:${"a".repeat(64)}`,
+        scratchRootDirectory: root,
+        ownerDirectory: join(root, "owners"),
+        maxOutputBytes: 1024 * 1024,
+        timeoutMs: 60_000,
+        runDocker: async (args, stdin, timeoutMs) => {
+          calls.push({ args: [...args], stdin, timeoutMs });
+          const mountOf = (target: string) =>
+            args
+              .find(
+                (arg) =>
+                  arg.endsWith(`dst=${target}`) ||
+                  arg.includes(`dst=${target},`),
+              )
+              ?.replace(/^--mount=type=bind,src=/, "")
+              .replace(/,dst=.*$/, "");
+          const output = mountOf("/workspace/output");
+          if (output !== undefined) {
+            seen.input = await readFile(
+              join(mountOf("/workspace/input")!, "partition.json"),
+              "utf8",
+            );
+            seen.tool = await readFile(
+              join(mountOf("/workspace/tools")!, "tool.sh"),
+              "utf8",
+            );
+            await writeFile(join(output, "inventory.json"), '{"rows":[]}');
+            await writeFile(join(output, "notes.txt"), "ignored");
+          }
+          return {
+            kind: "exited",
+            exitCode: 0,
+            stdout: args.includes("--version") ? "2.1.296 (Claude Code)\n" : "",
+            stderr: "",
+          };
+        },
+      });
+      const result = await sandbox.execute({
+        grant: {
+          baseUrl: "http://172.20.0.5:8080",
+          authorization: `Bearer ${"t".repeat(43)}`,
+          dockerNetworkName: "trial-internal",
+          model: "claude-opus-5-5",
+          protocol: "anthropic-messages",
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+        input: {
+          prompt: "Role.",
+          minimumActiveMs: 0,
+          maxChildren: 0,
+          model: "claude-opus-5-5",
+          effort: "high",
+          oneShot: true,
+        },
+        oneShot: {
+          inputFiles: [{ name: "partition.json", content: '{"id":"p1"}' }],
+          toolFiles: [{ name: "tool.sh", content: Buffer.from("#!/bin/sh\n") }],
+          wallMs: 20 * 60_000,
+        },
+        subagentModel: "claude-opus-5-5",
+        sourceMount: { directory: source, expectedTree: tree },
+        dependencyMounts: [],
+      });
+      expect(result.outputFiles).toEqual([
+        { name: "inventory.json", content: '{"rows":[]}' },
+      ]);
+      expect(seen).toEqual({ input: '{"id":"p1"}', tool: "#!/bin/sh\n" });
+      const agent = calls.find(({ args }) =>
+        args.includes("--network=trial-internal"),
+      )!;
+      expect(agent.timeoutMs).toBe(20 * 60_000);
+      expect(agent.args).toEqual(
+        expect.arrayContaining([
+          "--memory=4096m",
+          expect.stringMatching(/dst=\/workspace\/input,readonly$/),
+          expect.stringMatching(/dst=\/workspace\/tools,readonly$/),
+          expect.stringMatching(/dst=\/workspace\/output$/),
+          expect.stringMatching(/dst=\/workspace\/main,readonly$/),
+        ]),
+      );
+      expect(JSON.parse(agent.stdin ?? "{}")).toMatchObject({
+        oneShot: true,
+        maxChildren: 0,
+        minimumActiveMs: 0,
+      });
+      // A one-shot command that still names children is refused before anything starts.
+      await expect(
+        sandbox.execute({
+          grant: {
+            baseUrl: "http://172.20.0.5:8080",
+            authorization: `Bearer ${"t".repeat(43)}`,
+            dockerNetworkName: "trial-internal",
+            model: "claude-opus-5-5",
+            protocol: "anthropic-messages",
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          },
+          input: {
+            prompt: "Role.",
+            minimumActiveMs: 0,
+            maxChildren: 4,
+            model: "claude-opus-5-5",
+            effort: "high",
+            oneShot: true,
+          },
+          oneShot: { inputFiles: [], toolFiles: [], wallMs: 1000 },
+          subagentModel: "claude-opus-5-5",
+          sourceMount: { directory: source, expectedTree: tree },
+          dependencyMounts: [],
+        }),
+      ).rejects.toThrow("Claude sandbox command is not admitted");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
