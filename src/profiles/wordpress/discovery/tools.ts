@@ -5,7 +5,8 @@ import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
 
 /**
  * The tool files a partitioned Trial mounts read-only at `/workspace/tools`
- * for the enumerator (ADR 0042). They are tools the agent runs and reads
+ * for the enumerator and, from the runtime PR on, the tracers (ADR 0042;
+ * the core list: owner decision 2026-10-28, #632). They are tools the agent runs and reads
  * itself, not Harness preprocessing: the Harness never runs them first and
  * never hands their output to the agent as a floor (design 2026-10-27 §4).
  * Each file is pinned by digest, and `toolsDigest` of a run names the set.
@@ -30,6 +31,13 @@ export const WORDPRESS_ENUMERATION_TOOLS = [
     file: "enumerate-sinks-v1.sh",
     digest:
       "sha256:957be12aa7a8e250d40edfa6b637b7c65cd111abf8f6af42d28c90117d7605ea",
+    status: "current",
+  },
+  {
+    id: "core-fixed-list-v1",
+    file: "core-fixed-list-v1.md",
+    digest:
+      "sha256:b76388a3f6cb93e1beb2dae0e1ac84f09ed479373128b6ef6adf237ef815d82c",
     status: "current",
   },
 ] as const satisfies readonly WordPressEnumerationToolRecord[];

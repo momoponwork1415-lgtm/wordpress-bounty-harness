@@ -28,6 +28,8 @@ AI に「調べて報告」を頼んだときの成果物を、日付付きで�
 - [2026-10-18-operating-policy-gap-report.md](2026-10-18-operating-policy-gap-report.md): 2026-10-18 の運用方針と現状の対照。
 - [2026-10-19-selection-statistics.md](2026-10-19-selection-statistics.md): 公開統計から決めた選定の基準。
 - [2026-10-27-partitioned-exploration-design.md](2026-10-27-partitioned-exploration-design.md): 区画分配型の探索の設計。役、責務の線（中身は AI、形は Harness）、設定と台帳、測り方、段階。図は同日付の [overview](2026-10-27-partitioned-exploration-overview.svg)、[target-flow](2026-10-27-partitioned-exploration-target-flow.svg)、[decided-structure](2026-10-27-decided-structure.svg)。[ADR 0042](../adr/0042-partitioned-exploration-stage-1-shape.md) の出典。
+- [2026-10-28-adopted-design-for-approval.md](2026-10-28-adopted-design-for-approval.md): 区画分配型の探索の承認用の要約。部分ごとの採否と出典、所有者の決定、問答で決めた 15 点（§6）。図は [architecture](2026-10-28-architecture.svg)。ADR 0042 追記 1 の出典。
+- [2026-10-28-core-feature-abuse-precedents.md](2026-10-28-core-feature-abuse-precedents.md): 本体の機能の悪用の先例を Wordfence mirror で数えた導出。`core-fixed-list-v1.md` の件数の出典（ADR 0042 追記 1）。
 - [2026-10-27-pipeline-records-and-primitive-architecture.md](2026-10-27-pipeline-records-and-primitive-architecture.md): いまの 11 段で出る JSON と記録、Finding / Lead の欄、primitive を組み合わせる構成。
 - [2026-10-27-established-harness-responsibility-split.md](2026-10-27-established-harness-responsibility-split.md): 4 社の記事から読んだ Harness と AI の分け方。同日午後に repo 比較で訂正した。
 - [2026-10-27-public-harness-repos-responsibility-split.md](2026-10-27-public-harness-repos-responsibility-split.md): 公開 repo 3 本（Anthropic / Google Mantis / Cloudflare）を行で読んだ分け方と、Shopify / AVDH の記事、過去 6 本の調査との関係。
