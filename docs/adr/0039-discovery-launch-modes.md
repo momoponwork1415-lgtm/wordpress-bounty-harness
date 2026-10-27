@@ -192,3 +192,17 @@ PR #537 のレビューで、再開（ADR 0036）が子の上限・最低時間�
 - 比較候補の v15-wide は `candidate` のまま変えない（`sinks-v14` と `fixed-v15` を使う）。`deep` の v11 も変えない。ADR 0038 の 2026-10-26 追記 13 の出口の park（申告欄の値による `declared-precondition`）は 2 つ目の線として残す。Lead の型と保存も変えない。
 - 測った数字: なし。本番で、同じ選定帯の切り替え前（v16-wide）と切り替え後（v17-wide）の窓を比べる（DEVELOPMENT 第 5 節）。見る数字は Trial あたりの Finding と Lead、人間が reject した Finding の割合、`declared-precondition` の park の件数である。
 - 消し方: v17-wide を `archived` にして mode を外し、v16-wide を `current`・`mode: "wide"` に戻し、2 つの campaign 設定の `promptId` を v16-wide に戻す。v17-wide の本文、`sinks-v17`、`fixed-v17` と digest は、Trial が走った後なら履歴照合のため残す。
+
+## 2026-10-27 追記 11: `wide` の目的文を v16-wide に戻す（所有者決定、数字で戻す）
+
+追記 10 の v17-wide を本番で走らせた結果、Trial あたりの出力が分類の変化ではなく量として減った。2026-10-24 以降の本番 Trial で、Codex は v14-wide の 21 Trial で Finding 3.6・Lead 3.7（計 7.3）/Trial だったものが、v17-wide の 34 Trial で Finding 0・Lead 1.0（計 1.0）/Trial になり、Root の時間は 15 分から 7 分に、Root が読む固有 file は 30 から 17 に減った。Claude は v14-wide の 36 Trial で計 5.2/Trial、v17-wide の 21 Trial で計 2.0/Trial だった。「迷ったら Lead」の 2 文（`sinks-v17` の「管理者が安全でない形で作る設定はもっともらしくない」と `fixed-v17` の「両方をソースが示すときだけ Finding」）は、Lead への格下げではなく chain を書かない方向に効いた。
+
+同日、v14 系の Finding 162 件をソースだけで読み直す段（入力支配と到達性の 2 つの問い）を試したところ、成立 88・不成立 67・未決 7 で、人間の選別と 2 つの問いについて 159 / 162 で一致した。人間が外した層（ベンダー feed、管理者の危険設定）は、目的文で絞らなくても後段で落とせる。所有者は 2026-10-27 に「文 1（ベンダーだけが置ける内容は攻撃者入力ではない。`sinks-v16`）は残し、文 2 と文 3 は v14 に戻す」を選んだ。これは v16-wide の本文そのものなので、新しい版は作らない。
+
+- `wp2shell-bounty-v16-wide`（`sha256:1ffb15f4f3f7ad6de70e330e10fd24c31513e41d250c8e0d6885b760a0a5c1f3`、契約 v5）を `wide` の `current` に戻す。本文、fragment、digest は変えない。
+- `wp2shell-bounty-v17-wide` は本文・`sinks-v17`・`fixed-v17`・digest・契約 v5 を変えず `archived` にする（Trial が走ったので照合用に残す）。`src/profiles/wordpress/policy/campaign.json` と `examples/campaign-wide-20.json` の `promptId` を v16-wide に戻す。
+- 追記 5 の「後段の人間レビューで多少の偽陽性を許容する」は、`wide` の現行の目的文について再び有効になる。偽陽性はソース読み直しの段で落とす（ADR 0038 に別途書く）。
+- 比較候補の v15-wide は `candidate` のまま変えない。`deep` の v11 も変えない。
+- 測った数字: 上の Trial あたりの Finding と Lead、Root の時間と読み、ソース読み直しの一致率。
+- 消し方: 追記 10 の手順をもう一度行う（v17-wide を `current`・`mode: "wide"` に、v16-wide を `archived` に、2 つの campaign 設定の `promptId` を v17-wide に）。
+
