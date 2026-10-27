@@ -36,7 +36,7 @@ export type WordPressLedgerExclusionReason =
   | "legacy-ambiguous"
   /** This exact version failed Lab provisioning (e.g. a missing dependency plugin) and never started a Trial. */
   | "lab-provision-failed"
-  /** This exact version's source freeze was deferred (e.g. an unreadable plugin header) while the same attempt froze another target. */
+  /** This exact version's source freeze was deferred (e.g. an unreadable plugin header) while the same attempt froze another target, or its archive was rejected (#623). */
   | "freeze-deferred"
   /** A batch another runner of the state holds selected this slug and has not finished (#604). */
   | "reserved-by-runner";
@@ -243,13 +243,16 @@ export function inspectWordPressLedgerExclusions(input: {
   }
   const deferredVersions = new Set<string>();
   for (const event of ledgerEvents(input.ledger, "target-skipped")) {
-    if (
-      event.type !== "target-skipped" ||
-      event.stage !== "freeze" ||
-      event.reason !== "deferred" ||
-      !attemptsThatFroze.has(event.campaignId)
-    )
-      continue;
+    if (event.type !== "target-skipped" || event.stage !== "freeze") continue;
+    // A deferral is the target's own when the same attempt froze another
+    // target. A rejected archive is the version's own whatever else the
+    // attempt froze: the sole candidate of a band must not be retried every
+    // batch (#623).
+    const ownFailure =
+      (event.reason === "deferred" &&
+        attemptsThatFroze.has(event.campaignId)) ||
+      event.reason === "invalid-archive";
+    if (!ownFailure) continue;
     const identity = parseWordPressOrgSelectionId(event.selectionId);
     if (identity === null) continue;
     const key = `${identity.slug}@${identity.version}`;

@@ -1623,10 +1623,7 @@ export function createWordPressCliProfile(
           ? {}
           : { reservedBatches: input.reservedBatches }),
       });
-      const inspected = decision.inspections;
-      const inspectionBySlug = new Map(
-        inspected.map((item) => [item.slug, item]),
-      );
+      let inspected = decision.inspections;
       // Freeze and batch outcomes are appended to the decision's reasons below.
       const reasons = new Map<string, string[]>(
         inspected.map((item) => [item.slug, [...item.reasons]]),
@@ -1641,33 +1638,60 @@ export function createWordPressCliProfile(
         diagnosticDigest: string;
         selectionArtifactDigest: string;
       }[] = [];
-      // Ranked beyond the cutoff fills in when a better-ranked source fails to freeze.
-      for (const target of decision.ranked) {
-        if (chosen.length >= policy.maximumTargets) {
-          reasons.get(target.slug)?.push("below-rank-cutoff");
-          continue;
+      // Ranked beyond the cutoff fills in when a better-ranked source fails to
+      // freeze. When a band's freezes leave fewer than `minimum` targets, the
+      // next cascade bands are tried in turn, as the pre-freeze decision would
+      // have done had the failed sources not counted as eligible (#623).
+      const tried = [...decision.cascade];
+      const attempted = new Set<string>();
+      let bandUsed = decision.cascadeStep ?? 0;
+      const firstBand = Math.max(
+        0,
+        decision.bands.findIndex((band) => band.step === bandUsed),
+      );
+      for (const band of decision.bands.slice(firstBand)) {
+        if (band.step !== bandUsed) {
+          if (chosen.length >= minimum) break;
+          bandUsed = band.step;
+          if (!tried.some((entry) => entry.step === band.step))
+            tried.push({ step: band.step, eligible: band.ranked.length });
+          inspected = band.inspections;
+          for (const item of band.inspections)
+            if (!attempted.has(item.slug))
+              reasons.set(item.slug, [...item.reasons]);
         }
-        try {
-          chosen.push({ target, snapshot: await boundaries.freeze(target) });
-        } catch (error) {
-          reasons.get(target.slug)?.push("snapshot-unavailable");
-          const { reason, digest } = await storeTargetSkipDiagnostic(
-            state.store,
-            error,
-          );
-          const selectionId = targetSelectionId(target);
-          const selectionArtifactDigest = await state.store.putFiles({
-            "target-selection.json": canonicalJson(target),
-          });
-          freezeFailures.push({
-            selectionId,
-            snapshotDigest: canonicalDigest(target),
-            reason,
-            diagnosticDigest: digest,
-            selectionArtifactDigest,
-          });
+        for (const target of band.ranked) {
+          if (attempted.has(target.slug)) continue;
+          attempted.add(target.slug);
+          if (chosen.length >= policy.maximumTargets) {
+            reasons.get(target.slug)?.push("below-rank-cutoff");
+            continue;
+          }
+          try {
+            chosen.push({ target, snapshot: await boundaries.freeze(target) });
+          } catch (error) {
+            reasons.get(target.slug)?.push("snapshot-unavailable");
+            const { reason, digest } = await storeTargetSkipDiagnostic(
+              state.store,
+              error,
+            );
+            const selectionId = targetSelectionId(target);
+            const selectionArtifactDigest = await state.store.putFiles({
+              "target-selection.json": canonicalJson(target),
+            });
+            freezeFailures.push({
+              selectionId,
+              snapshotDigest: canonicalDigest(target),
+              reason,
+              diagnosticDigest: digest,
+              selectionArtifactDigest,
+            });
+          }
         }
       }
+      const inspectionBySlug = new Map(
+        inspected.map((item) => [item.slug, item]),
+      );
       // A runner stop that arrived while sources froze records no batch, so
       // none is left unconsumed for the next start (#302).
       if (input.stop?.() === true)
@@ -1692,10 +1716,8 @@ export function createWordPressCliProfile(
         legacyHistory: decision.legacyHistory,
         advisoryHistory: decision.advisoryHistory,
         minimum,
-        ...(decision.cascadeStep === undefined
-          ? {}
-          : { cascadeStep: decision.cascadeStep }),
-        cascade: decision.cascade,
+        ...(bandUsed === 0 ? {} : { cascadeStep: bandUsed }),
+        cascade: tried,
       };
       const reportDigest = await state.store.putFiles({
         "selection-report.json": canonicalJson(report),
@@ -1758,10 +1780,8 @@ export function createWordPressCliProfile(
         sourceStatus: decision.sourceStatus,
         legacyHistory: decision.legacyHistory,
         advisoryHistory: decision.advisoryHistory,
-        ...(decision.cascadeStep === undefined
-          ? {}
-          : { cascadeStep: decision.cascadeStep }),
-        cascade: decision.cascade,
+        ...(bandUsed === 0 ? {} : { cascadeStep: bandUsed }),
+        cascade: tried,
         selected: chosen.map(({ target }) => ({
           targetId: target.targetId,
           version: target.version,

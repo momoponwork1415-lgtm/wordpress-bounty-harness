@@ -501,6 +501,8 @@ describe("WordPress ledger exclusions", () => {
         selected("fine", "1.0.0", "selection-1", digest("a")),
         // Nothing froze in this attempt: the host may have failed, not the target.
         skipped("host-down", "1.0.0", "selection-2"),
+        // A rejected archive is the version's own failure even when nothing else froze (#623).
+        skipped("bad-archive", "1.0.0", "selection-2", "invalid-archive"),
         // Deferred once, then frozen and explored: the Trial rule decides.
         skipped("recovered", "1.0.0", "selection-1"),
         ...trial("recovered", "1.0.0", "campaign-3", digest("c")),
@@ -510,6 +512,8 @@ describe("WordPress ledger exclusions", () => {
         { slug: "bad-header", version: "1.0.1" },
         { slug: "timed-out", version: "1.0.0" },
         { slug: "host-down", version: "1.0.0" },
+        { slug: "bad-archive", version: "1.0.0" },
+        { slug: "bad-archive", version: "1.0.1" },
         { slug: "recovered", version: "1.0.0" },
       ],
       revisitPolicy: { kind: "never" },
@@ -522,6 +526,8 @@ describe("WordPress ledger exclusions", () => {
       ["bad-header", "1.0.1", []],
       ["timed-out", "1.0.0", []],
       ["host-down", "1.0.0", []],
+      ["bad-archive", "1.0.0", ["freeze-deferred"]],
+      ["bad-archive", "1.0.1", []],
       ["recovered", "1.0.0", ["previously-selected"]],
     ]);
   });

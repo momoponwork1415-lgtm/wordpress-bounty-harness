@@ -126,6 +126,15 @@ export interface WordPressSelectionDecision {
     readonly step: number;
     readonly eligible: number;
   }[];
+  /**
+   * Every band's merged inspections and ranking, step 0 first, so a caller
+   * whose freezes leave it below `minimum` can go on to the next band (#623).
+   */
+  readonly bands: readonly {
+    readonly step: number;
+    readonly inspections: WordPressSelectionDecision["inspections"];
+    readonly ranked: readonly WordPressTargetSelection[];
+  }[];
   readonly sourceStatus: WordPressSelectionBatchInspection["sourceStatus"];
   readonly sourceListings: WordPressSelectionBatchInspection["sourceListings"];
   readonly legacyHistory: WordPressLegacyHistoryReport;
@@ -756,20 +765,24 @@ export function openWordPressSelection(input: {
     // The primary band stands whenever it reaches the minimum; the cascade
     // steps are tried in policy order only below it (ADR 0037 addendum).
     const primary = evaluate(batch.inspections);
+    const steps = batch.cascade.map((step) => ({
+      step: step.step,
+      ...evaluate(step.inspections),
+    }));
     const tried = [{ step: 0, eligible: primary.ranked.length }];
     let chosen: Pick<WordPressSelectionDecision, "inspections" | "ranked"> & {
       readonly cascadeStep?: number;
     } = primary;
     if (primary.ranked.length < minimum)
-      for (const step of batch.cascade) {
-        const evaluated = evaluate(step.inspections);
-        tried.push({ step: step.step, eligible: evaluated.ranked.length });
+      for (const evaluated of steps) {
+        tried.push({ step: evaluated.step, eligible: evaluated.ranked.length });
         if (evaluated.ranked.length >= minimum) {
-          chosen = { ...evaluated, cascadeStep: step.step };
+          chosen = { ...evaluated, cascadeStep: evaluated.step };
           break;
         }
       }
     return {
+      bands: [{ step: 0, ...primary }, ...steps],
       inspections: chosen.inspections,
       ranked: chosen.ranked,
       selected: chosen.ranked.slice(0, policy.maximumTargets),
