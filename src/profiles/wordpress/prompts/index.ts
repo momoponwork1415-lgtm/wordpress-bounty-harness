@@ -227,7 +227,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     id: "wp2shell-bounty-v11",
     digest:
       "sha256:0ce13a617484c0e0b7ff3af6a55b4b821ea106189a897ed573040e9d5ad16ae9",
-    outputContract: "v5",
+    outputContract: "v4",
     status: "current",
     mode: "deep",
     // v10 without the lifetime paragraph, the child count and the minutes;
@@ -304,15 +304,16 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     id: "wp2shell-bounty-v14-wide",
     digest:
       "sha256:42ec734364d93492bf9b936e415b94796da21fb154d3b29033cafbd58596229d",
-    outputContract: "v5",
+    outputContract: "v4",
     status: "current",
     mode: "wide",
     // v13-wide with only the sink strategy and fixed coordination fragments
     // replaced (owner guidance 2026-10-26, ADR 0039 addendum). Restored as the
     // wide current on 2026-10-27 (ADR 0039 addendum 12): v16-wide's vendor
     // sentence, or the 8-child cap it ran under, cut Findings per Codex Trial
-    // from 3.6 to 0.3. Launchable rows receive the v5 contract (#613); the
-    // objective text and digest are unchanged.
+    // from 3.6 to 0.3. Back on the v4 contract since 2026-10-27 (ADR 0038
+    // addendum 15): under v5 the same text gave 8 Findings in 22 Codex Trials
+    // against 76 in 21 under v4. The objective text and digest are unchanged.
     fragments: [
       TASK,
       { section: "objective", file: "first-principles-v11" },
@@ -329,7 +330,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     id: "wp2shell-bounty-v15-wide",
     digest:
       "sha256:3e82116ebdd32e4e863d7daacf7a87d90c43f6c4e73efe49333668883fcf680d",
-    outputContract: "v5",
+    outputContract: "v4",
     status: "candidate",
     mode: "wide",
     // v14-wide plus one sentence: the root agent copies the Harness `## Lab`

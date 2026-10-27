@@ -42,7 +42,7 @@ import {
   type TargetIntakePacket,
   type WordPressOrgTargetSource,
 } from "../../src/profiles/wordpress/acquisition/index.js";
-import { wordPressDiscoveryOutputContractV5 } from "../../src/profiles/wordpress/discovery/output-contract.js";
+import { wordPressDiscoveryOutputContractV4 } from "../../src/profiles/wordpress/discovery/output-contract.js";
 import {
   openWordPressLab,
   diffWordPressLabState,
@@ -1390,7 +1390,7 @@ describe("discovery runtime share", () => {
 });
 
 describe("harness CLI vertical slice", () => {
-  it("adds the generated v5 contract to the sole runnable prompt and records separate digests", async () => {
+  it("adds the generated v4 contract to the sole runnable prompt and records separate digests", async () => {
     const { run, configPath, prompts, ledger } = await harness();
     const result = await run(
       "campaign",
@@ -1403,7 +1403,7 @@ describe("harness CLI vertical slice", () => {
     );
     expect(result.code).toBe(0);
     const objective = await loadWordPressDiscoveryAsset("wp2shell-bounty-v11");
-    const contract = wordPressDiscoveryOutputContractV5();
+    const contract = wordPressDiscoveryOutputContractV4();
     expect(prompts[0]).toContain(objective.text.trim());
     expect(prompts[0]).toContain(contract.text);
     expect(prompts[0]?.split(contract.text)).toHaveLength(2);
