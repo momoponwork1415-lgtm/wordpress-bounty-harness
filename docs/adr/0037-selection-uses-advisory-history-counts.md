@@ -94,3 +94,11 @@ amended-by: 本文末尾の 2026-10-19 追記（公開統計による重みの�
 - 方針 id を `wordpress-selection-2026-10-26` に上げた。方針 digest が変わるので、旧 id に束縛済みの batch は再開できず、batch の境界で切り替える（帰結の方針 id の項と同じ）。
 - 追記 4 と OPERATIONS 第 1 節の「50k → 30k → ≥1M」は、この追記で 50k → ≥1M に読み替える。追記 4 の本文は履歴として直さない。`cascadeStep` は 1 始まりのまま、≥1M の段は 3 から 2 になる。過去の `target-selected` の `cascadeStep: 3` は 30k の段を含む方針で選ばれたもので、読み続ける。
 - 参照: #533。
+
+## 2026-10-27 追記: freeze の後にも cascade を進める（#623）
+
+2026-10-26 に両 runner が `sleeping reason=empty` で 24 時間止まった。主帯の適格候補が 1 件だけで、その版の archive が凍結で拒否され（`invalid-archive`）、対象 0 件になった。cascade の判定は凍結前の適格数で行っていたので、50k の帯は試されなかった。直し方は 2 つで、どちらも判断を含まない。
+
+- `select` は、ある帯の凍結が終わって対象が `minimum` 未満なら、次の cascade の帯を順に凍結する。凍結に失敗した候補は再試行しない。報告の `cascadeStep` と `cascade` は、実際に対象を出した帯まで並べる。
+- `target-skipped`（stage `freeze`）の理由が `invalid-archive` なら、同じ試行で他の対象が凍結できたかに関係なく、その版を `freeze-deferred` として除外する。archive の拒否は host の都合ではなく版の性質だからである。`deferred` の扱いは変えない。
+

@@ -159,6 +159,8 @@ async function harness(
     readonly listingObservations?: readonly WordPressOrgListingObservation[];
     /** A slug whose snapshot cannot be frozen. */
     readonly failFreeze?: string;
+    /** Active installations per slug; 5000 for the rest. */
+    readonly installs?: Readonly<Record<string, number>>;
     /** A slug whose acquired bytes disagree with its manifest. */
     readonly corruptSourceManifest?: string;
     /** Simulates an archive connection failing after the selection freeze succeeded. */
@@ -491,7 +493,7 @@ async function harness(
           displayName: slug,
           stableVersion: "9.9.9",
           minimumWordPressVersion: "6.0",
-          activeInstallations: 5000,
+          activeInstallations: options.installs?.[slug] ?? 5000,
           lastUpdated: "2026-09-01 12:00am GMT",
           observedAt: now,
           author: "Independent Author",
@@ -4392,6 +4394,86 @@ describe("harness CLI vertical slice", () => {
             diagnosticDigest: diagnosticRef!.digest,
           },
         ],
+      });
+  });
+
+  it("falls through to the next cascade band when the primary band's only candidate fails to freeze (#623)", async () => {
+    const { run, root, ledger, store } = await harness({
+      candidates: ["broken-plugin", "item-b"],
+      failFreeze: "broken-plugin",
+      installs: { "broken-plugin": 150_000, "item-b": 60_000 },
+      legacyHistoryUnavailable: true,
+    });
+    const policyPath = join(root, "selection.json");
+    const policy = JSON.parse(await readFile(policyPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    delete policy.candidateSlugs;
+    delete policy.pinnedVersions;
+    await writeFile(
+      policyPath,
+      JSON.stringify({
+        ...policy,
+        promptVariant: "wp2shell-bounty-v11",
+        revisitPolicy: { kind: "never" },
+        wordpressVersion: "6.8",
+        maximumTargets: 3,
+        candidateSource: {
+          kind: "wordpress-org",
+          popularPages: 1,
+          tags: [],
+          pagesPerTag: 1,
+          perPage: 20,
+          maxCandidates: 20,
+          maxAgeDays: 1,
+        },
+        minimumActiveInstallations: 100_000,
+        maximumActiveInstallations: 1_000_000,
+        cascade: [{ minimumActiveInstallations: 50_000 }],
+      }),
+    );
+    // Before the freeze the primary band holds one eligible candidate, so the
+    // decision stands on it; after its freeze fails the 50k band supplies the batch.
+    const selected = await run(
+      "select",
+      "--config",
+      policyPath,
+      "--minimum",
+      "1",
+    );
+    expect(selected.code).toBe(0);
+    expect(selected.stdout).toMatch(/^selection batch selection-/m);
+    expect(selected.stdout).toContain(
+      "cascade step 0 eligible 1; step 1 eligible 2 (selected)",
+    );
+    expect(selected.stdout).toContain(
+      "excluded wporg:broken-plugin  reasons snapshot-unavailable",
+    );
+    const chosen = ledger()
+      .read({ type: "target-selected" })
+      .map(({ event }) => event);
+    expect(chosen).toMatchObject([
+      { selectionId: "wporg:item-b@9.9.9", cascadeStep: 1 },
+    ]);
+    const reportRef = chosen[0]?.artifacts.find(
+      (artifact) => artifact.kind === "selection-report",
+    );
+    const report = await store().readFile(
+      reportRef!.digest,
+      "selection-report.json",
+      2 * 1024 * 1024,
+    );
+    expect(report.status).toBe("resolved");
+    if (report.status === "resolved")
+      expect(JSON.parse(report.bytes.toString("utf8"))).toMatchObject({
+        cascadeStep: 1,
+        // The 50k band also holds the 150k candidate, so it counts 2 before the freeze.
+        cascade: [
+          { step: 0, eligible: 1 },
+          { step: 1, eligible: 2 },
+        ],
+        freezeFailures: [{ selectionId: "wporg:broken-plugin@9.9.9" }],
       });
   });
 
