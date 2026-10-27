@@ -23,6 +23,13 @@
 | Anthropic | model の出力は report でなく lead として扱い、人間が再現してから外へ出す | 人間が Lab で見る（既存の不変条件 6・7） |
 | Anthropic | 重大度は分類でなく前提から。model に CVSS を計算させず計算機を渡す | 既存の wbh-screen / wbh-report の範囲。探索には入れない |
 
+所有者の補足（2026-10-28）: 3 社は所有者が思いついた出典で、採用の義務は無い。AI が良いと思うものを組み合わせて設計を組み立て、所有者が承認する（部分ごとの採否は [承認用の要約](2026-10-28-adopted-design-for-approval.md)）。調べた範囲（[repo 比較](2026-10-27-public-harness-repos-responsibility-split.md)）では、全体をより良く写せる 1 つの実装は無く、部分ごとに強い実装が 2 つある。これも採る。
+
+| 出典 | 採る考え方 | この設計での置き場 |
+|---|---|---|
+| Shopify | agent が file を「context の 20〜30%、関連する機能」で区画にする。区画ごとに hunter、別 model の verifier が test を oracle にする。code が重複と重大度を持つ | 段階 1〜2 の形そのもの。列挙役の Markdown に区画の大きさの目安「context の 2〜3 割」を書く。Harness の検査は件数のまま |
+| Google Mantis | 証拠の階層で `code` だけが verdict を書ける。snapshot が合わない verdict は出さない。再現できないは `not_attempted` で負ではない。却下は意見で、機械の証拠を上書きしない。索引と相関は HINT | 台帳と `incomplete` の規則（既存）。足りない所: 索引と群を「HINT」と文書に明記、役の失敗理由の対応表 |
+
 ## 1. 全体像（24 時間の輪）
 
 ```mermaid
