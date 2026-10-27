@@ -99,6 +99,12 @@ export type TrialOutcome = {
   readonly findingsRecorded: number;
   /** What the Harness observed in the Trial's exploration Lab, when one was attached. */
   readonly lab?: TrialLabRecord;
+  /**
+   * A usage limit any run of the Trial met, even one that did not end the
+   * Trial (a tracer of a partial partitioned Trial, ADR 0042): the campaign
+   * backs off after the Trial either way.
+   */
+  readonly providerLimit?: "rate-limit" | "quota";
 };
 
 type TrialDraft = { -readonly [K in keyof TrialOutcome]: TrialOutcome[K] };

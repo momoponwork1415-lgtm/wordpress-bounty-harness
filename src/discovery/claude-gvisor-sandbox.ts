@@ -277,9 +277,18 @@ async function collectTranscripts(
   return transcripts;
 }
 
+/** The command's shape is outside what the sandbox runs; nothing was started. */
+export class ClaudeSandboxNotAdmittedError extends Error {
+  constructor() {
+    super("Claude sandbox command is not admitted");
+    this.name = "ClaudeSandboxNotAdmittedError";
+  }
+}
+
 /**
  * The JSON files a one-shot run left directly under its output directory,
- * bounded; a link, a subdirectory entry or an oversize file fails the capture.
+ * bounded; a link or an oversize file fails the capture, a subdirectory or a
+ * file of another extension is left behind unread.
  */
 async function collectOutputFiles(directory: string): Promise<OneShotFile[]> {
   const files: OneShotFile[] = [];
@@ -431,7 +440,7 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
           command.input.outputSchema === undefined ||
           command.input.maxChildren < 1))
     )
-      throw new Error("Claude sandbox command is not admitted");
+      throw new ClaudeSandboxNotAdmittedError();
     const oneShot = command.oneShot;
     const wallMs = oneShot?.wallMs ?? this.#options.timeoutMs;
     const mountOf = async (mount: Mount): Promise<string> => {

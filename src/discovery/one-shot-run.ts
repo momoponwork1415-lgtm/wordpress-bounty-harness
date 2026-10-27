@@ -14,9 +14,14 @@ import { SANDBOX_TOOLS_MOUNT_PATH } from "./sandbox-layout.js";
  */
 const ONE_SHOT_FILE_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 export const ONE_SHOT_MAX_FILES = 16;
-export const ONE_SHOT_MAX_INPUT_BYTES = 4 * 1024 * 1024;
 export const ONE_SHOT_MAX_TOOL_BYTES = 1024 * 1024;
 export const ONE_SHOT_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
+/**
+ * A sent-back enumerator reads its previous inventory and proposal as one
+ * file, so an input file may hold two output files; the executor still
+ * checks the send-back before it starts a run.
+ */
+export const ONE_SHOT_MAX_INPUT_BYTES = 2 * ONE_SHOT_MAX_OUTPUT_BYTES;
 /** A role run is one sandbox under the same ceiling as a whole target. */
 export const ONE_SHOT_MAX_WALL_MS = 240 * 60_000;
 

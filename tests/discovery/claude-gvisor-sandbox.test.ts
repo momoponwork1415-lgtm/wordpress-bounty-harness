@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -264,6 +271,113 @@ describe("Claude gVisor sandbox", () => {
           dependencyMounts: [],
         }),
       ).rejects.toThrow("Claude sandbox command is not admitted");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds the one-shot output capture: links and oversize files fail it, other entries are left unread, sixteen files at most", async () => {
+    const root = await mkdtemp(join(tmpdir(), "gvisor-claude-output-"));
+    try {
+      const source = join(root, "source");
+      await mkdir(source);
+      await writeFile(join(source, "fixed.php"), "<?php");
+      const tree = await measureCanonicalSourceTree(source, {
+        maxEntries: 10,
+        maxBytes: 1024,
+      });
+      const capture = async (fill: (output: string) => Promise<void>) => {
+        const sandbox = new GvisorClaudeSandbox({
+          dockerExecutablePath: "/usr/bin/docker",
+          image: `claude@sha256:${"a".repeat(64)}`,
+          scratchRootDirectory: root,
+          ownerDirectory: join(root, "owners"),
+          maxOutputBytes: 1024 * 1024,
+          timeoutMs: 60_000,
+          runDocker: async (args) => {
+            const output = args
+              .find((arg) => arg.endsWith("dst=/workspace/output"))
+              ?.replace(/^--mount=type=bind,src=/, "")
+              .replace(/,dst=.*$/, "");
+            if (output !== undefined) await fill(output);
+            return {
+              kind: "exited",
+              exitCode: 0,
+              stdout: args.includes("--version")
+                ? "2.1.296 (Claude Code)\n"
+                : "",
+              stderr: "",
+            };
+          },
+        });
+        const result = await sandbox.execute({
+          grant: {
+            baseUrl: "http://172.20.0.5:8080",
+            authorization: `Bearer ${"t".repeat(43)}`,
+            dockerNetworkName: "trial-internal",
+            model: "claude-opus-5-5",
+            protocol: "anthropic-messages",
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          },
+          input: {
+            prompt: "Role.",
+            minimumActiveMs: 0,
+            maxChildren: 0,
+            model: "claude-opus-5-5",
+            effort: "high",
+            oneShot: true,
+          },
+          oneShot: { inputFiles: [], toolFiles: [], wallMs: 60_000 },
+          subagentModel: "claude-opus-5-5",
+          sourceMount: { directory: source, expectedTree: tree },
+          dependencyMounts: [],
+        });
+        return {
+          names: result.outputFiles?.map((file) => file.name),
+          failure: result.outputFailure,
+        };
+      };
+      // A subdirectory and a non-JSON file beside the JSON are left unread.
+      expect(
+        await capture(async (output) => {
+          await mkdir(join(output, "scratch"));
+          await writeFile(join(output, "scratch", "x.json"), "{}");
+          await writeFile(join(output, "notes.txt"), "ignored");
+          await writeFile(join(output, "inventory.json"), '{"rows":[]}');
+        }),
+      ).toEqual({ names: ["inventory.json"], failure: undefined });
+      // A symbolic link fails the capture, whatever it points at.
+      expect(
+        await capture(async (output) => {
+          await writeFile(join(output, "inventory.json"), '{"rows":[]}');
+          await symlink(
+            join(output, "inventory.json"),
+            join(output, "partitions.json"),
+          );
+        }),
+      ).toEqual({ names: undefined, failure: "capture-failed" });
+      // One byte over the output cap fails it.
+      expect(
+        await capture(async (output) => {
+          await writeFile(
+            join(output, "inventory.json"),
+            Buffer.alloc(8 * 1024 * 1024 + 1, 0x20),
+          );
+        }),
+      ).toEqual({ names: undefined, failure: "capture-failed" });
+      // Sixteen JSON files are read; a seventeenth fails the capture.
+      const many = (count: number) => async (output: string) => {
+        for (let index = 0; index < count; index++)
+          await writeFile(
+            join(output, `out-${String(index).padStart(2, "0")}.json`),
+            "{}",
+          );
+      };
+      expect((await capture(many(16))).names).toHaveLength(16);
+      expect(await capture(many(17))).toEqual({
+        names: undefined,
+        failure: "capture-failed",
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

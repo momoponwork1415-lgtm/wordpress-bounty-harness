@@ -796,7 +796,7 @@ function wordPressRoleProfile(
  * the tool files the config names. Existing prompt ids and texts are reused
  * unchanged.
  */
-async function planWordPressPartitionedDiscovery(
+export async function planWordPressPartitionedDiscovery(
   { snapshot, lab }: WordPressDiscoveryInput,
   context: WordPressDiscoveryContext,
 ): Promise<WordPressDiscoveryPlan> {
@@ -885,8 +885,6 @@ async function planWordPressPartitionedDiscovery(
     ...sourceNotes,
   ].join("\n\n");
   const shared = {
-    promptVariant: objective.id,
-    promptDigest: objective.digest,
     trustBoundaryVersion: trustBoundary.id,
     sourcePack: {
       dependency:
@@ -902,9 +900,13 @@ async function planWordPressPartitionedDiscovery(
     effort: profile.requestedEffort,
   };
   const mounts = wordPressSourceMounts(source);
+  // The enumerator never sees the objective: its prompt is its own role
+  // body, so its start event names that body, not the tracer objective.
   const enumerate: PartitionedRolePlan = {
     configuration: {
       ...shared,
+      promptVariant: enumeratorRole.id,
+      promptDigest: enumeratorRole.digest,
       inputDigest: sha256(enumeratorPrompt),
       wallMinutes: discovery.enumerator.wallMinutes,
       role: {
@@ -926,6 +928,8 @@ async function planWordPressPartitionedDiscovery(
   const trace: PartitionedRolePlan = {
     configuration: {
       ...shared,
+      promptVariant: objective.id,
+      promptDigest: objective.digest,
       objectiveDigest: objective.digest,
       contractDigest: contract.digest,
       ...(objective.sectionDigests === undefined

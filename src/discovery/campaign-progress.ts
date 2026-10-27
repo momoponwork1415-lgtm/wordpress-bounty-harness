@@ -96,6 +96,134 @@ export function providerLimitedExplorations(
   return limited;
 }
 type ConcludedEvent = Extract<LedgerEventV1, { type: "discovery-concluded" }>;
+type EnumerationEvent = Extract<
+  LedgerEventV1,
+  { type: "enumeration-recorded" }
+>;
+
+/** How a partitioned Trial (ADR 0042) ended, read from its role runs and its enumeration record. */
+export type PartitionedTrialOutcome = {
+  readonly trialId: string;
+  readonly outcome:
+    "completed" | "incomplete" | "provider-limited" | "unfinished";
+  readonly reason?: string;
+  readonly reasonDetail?: string;
+  readonly providerLimit?: "rate-limit" | "quota";
+};
+
+/**
+ * A partitioned Trial is one attempt: its enumerate run (resubmits continue
+ * it) and its tracer runs. It is incomplete when the enumeration was
+ * rejected after the send-backs or when no tracer finished `completed`; it
+ * is provider-limited when the enumerator was, or when no tracer completed
+ * and one was limited. A Trial whose enumerate run has no finish, or whose
+ * accepted enumeration has no tracer finish yet, is unfinished.
+ */
+export function partitionedTrialOutcomes(
+  target: CampaignTarget,
+): ReadonlyMap<string, PartitionedTrialOutcome> {
+  const finishes = readFinishedRuns(target);
+  const enumerations = new Map<string, EnumerationEvent>();
+  for (const { event } of target.ledger.readAll({
+    campaignId: target.campaignId,
+    type: "enumeration-recorded",
+  }))
+    if (
+      event.type === "enumeration-recorded" &&
+      event.snapshotDigest === target.snapshotDigest
+    )
+      enumerations.set(event.trialId, event);
+  const trials = new Map<
+    string,
+    { enumerate: StartedEvent[]; trace: StartedEvent[] }
+  >();
+  for (const { event } of target.ledger.readAll({
+    campaignId: target.campaignId,
+    type: "discovery-run-started",
+  })) {
+    if (
+      event.type !== "discovery-run-started" ||
+      event.snapshotDigest !== target.snapshotDigest ||
+      (event.runKind !== "enumerate" && event.runKind !== "trace") ||
+      event.trialId === undefined
+    )
+      continue;
+    const trial = trials.get(event.trialId) ?? { enumerate: [], trace: [] };
+    trial[event.runKind].push(event);
+    trials.set(event.trialId, trial);
+  }
+  const outcomes = new Map<string, PartitionedTrialOutcome>();
+  const failed = (
+    trialId: string,
+    outcome: PartitionedTrialOutcome["outcome"],
+    finish?: FinishedEvent,
+  ): PartitionedTrialOutcome => ({
+    trialId,
+    outcome,
+    ...(finish?.reason === undefined ? {} : { reason: finish.reason }),
+    ...(finish?.reasonDetail === undefined
+      ? {}
+      : { reasonDetail: finish.reasonDetail }),
+    ...(finish?.providerLimit === undefined
+      ? {}
+      : { providerLimit: finish.providerLimit }),
+  });
+  for (const [trialId, trial] of trials) {
+    if (trial.enumerate.length === 0) continue;
+    const enumeration = enumerations.get(trialId);
+    if (enumeration?.accepted === false) {
+      outcomes.set(trialId, {
+        trialId,
+        outcome: "incomplete",
+        reason: "schema",
+        reasonDetail: "enumeration-rejected",
+      });
+      continue;
+    }
+    const latest = finishes.get(trial.enumerate.at(-1)!.runId);
+    if (latest === undefined) {
+      outcomes.set(trialId, failed(trialId, "unfinished"));
+      continue;
+    }
+    if (latest.outcome === "provider-limited") {
+      outcomes.set(trialId, failed(trialId, "provider-limited", latest));
+      continue;
+    }
+    if (latest.outcome !== "completed" || enumeration === undefined) {
+      outcomes.set(
+        trialId,
+        failed(
+          trialId,
+          latest.outcome === "completed" ? "unfinished" : "incomplete",
+          latest,
+        ),
+      );
+      continue;
+    }
+    const traces = trial.trace.flatMap((start) => {
+      const finish = finishes.get(start.runId);
+      return finish === undefined ? [] : [finish];
+    });
+    if (traces.some((finish) => finish.outcome === "completed")) {
+      outcomes.set(trialId, { trialId, outcome: "completed" });
+      continue;
+    }
+    if (traces.length === 0) {
+      outcomes.set(trialId, failed(trialId, "unfinished"));
+      continue;
+    }
+    const limited = traces.find(
+      (finish) => finish.outcome === "provider-limited",
+    );
+    outcomes.set(
+      trialId,
+      limited === undefined
+        ? failed(trialId, "incomplete", traces[0])
+        : failed(trialId, "provider-limited", limited),
+    );
+  }
+  return outcomes;
+}
 
 /** One campaign on one Target Snapshot; events of other snapshots are not its progress. */
 export type CampaignTarget = {
@@ -158,6 +286,15 @@ export function readResumeProgress(target: CampaignTarget): ResumeProgress {
   const startedExplorations = new Set<string>();
   const spentOrdinals = new Set<number>();
   let nextLegacyOrdinal = 0;
+  // ADR 0042: a partitioned Trial is spent once its enumerate run finished
+  // without a usage limit; a dangling start runs the ordinal again.
+  const partitioned = partitionedTrialOutcomes(target);
+  const spentPartitioned = (event: StartedEvent): boolean => {
+    if (event.runKind !== "enumerate" || event.trialId !== event.runId)
+      return false;
+    const outcome = partitioned.get(event.trialId)?.outcome;
+    return outcome === "completed" || outcome === "incomplete";
+  };
   for (const { event } of target.ledger.readAll({
     campaignId: target.campaignId,
     type: "discovery-run-started",
@@ -165,9 +302,10 @@ export function readResumeProgress(target: CampaignTarget): ResumeProgress {
     if (
       event.type === "discovery-run-started" &&
       event.snapshotDigest === target.snapshotDigest &&
-      // Historical events had no runKind and each represented exploration.
-      (event.runKind ?? "explore") === "explore" &&
-      countsAsTrialChain(event.runId, segment)
+      (spentPartitioned(event) ||
+        // Historical events had no runKind and each represented exploration.
+        ((event.runKind ?? "explore") === "explore" &&
+          countsAsTrialChain(event.runId, segment)))
     ) {
       startedExplorations.add(event.runId);
       if (event.trialOrdinal !== undefined)
@@ -203,10 +341,20 @@ export function recordedFailureAfterRuns(
     hasRecordedActivity: active.has(`${target.campaignId}\0${runId}`),
     resumesRun: startsById.get(runId)?.resumesRun,
   });
+  // ADR 0042: a partitioned Trial's id is its enumerate run; its outcome is
+  // read across its role runs, not from that one finish.
+  const partitioned = partitionedTrialOutcomes(target);
+  const partitionedOutcomes = [...startedExplorations].flatMap((runId) => {
+    const outcome = partitioned.get(runId);
+    return outcome === undefined ? [] : [outcome];
+  });
   const latestRuns = new Set(
-    [...startedExplorations].map((runId) => latestSegment(starts, runId)),
+    [...startedExplorations]
+      .filter((runId) => !partitioned.has(runId))
+      .map((runId) => latestSegment(starts, runId)),
   );
   if (
+    partitionedOutcomes.some((trial) => trial.outcome === "provider-limited") ||
     [...latestRuns].some(
       (runId) => outcomes.get(runId)?.outcome === "provider-limited",
     )
@@ -215,7 +363,10 @@ export function recordedFailureAfterRuns(
   const countedRuns = [...latestRuns].filter((runId) =>
     countsAsTrialChain(runId, segment),
   );
-  if (countedRuns.some((runId) => outcomes.get(runId)?.outcome !== "completed"))
+  if (
+    partitionedOutcomes.some((trial) => trial.outcome !== "completed") ||
+    countedRuns.some((runId) => outcomes.get(runId)?.outcome !== "completed")
+  )
     return "incomplete";
   return undefined;
 }

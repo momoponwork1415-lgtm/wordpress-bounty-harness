@@ -9,6 +9,7 @@ import { canonicalDigest } from "../../src/infrastructure/canonical-json.js";
 import {
   ANTHROPIC_UPSTREAM_ORIGIN,
   ClaudeOneShotRuntime,
+  ClaudeSandboxNotAdmittedError,
   defineAgentRuntimeProfile,
   defineClaudeRuntimeProfile,
   ProviderAttachmentStore,
@@ -326,6 +327,56 @@ describe("Claude one-shot runtime (ADR 0042)", () => {
       reasonDetail: "claude-run-not-admitted",
     });
     expect(requests).toEqual([]);
+  });
+
+  it("ends a command the sandbox refuses as policy, not as a broker failure", async () => {
+    const root = await mkdtemp(join(tmpdir(), "claude-one-shot-refused-"));
+    directories.push(root);
+    const requests: ProviderCredentialEgressGrantRequest[] = [];
+    const refusing: ClaudeSandbox = {
+      execute: () => Promise.reject(new ClaudeSandboxNotAdmittedError()),
+    };
+    const oneShot = new ClaudeOneShotRuntime(
+      refusing,
+      broker(requests),
+      new ProviderAttachmentStore(root),
+      image,
+      wordPressLabCommandRule,
+      () => new Date(start),
+    );
+    const result = await oneShot.execute(run("files"));
+    expect(result.receipt).toMatchObject({
+      terminal: "incomplete",
+      reason: "policy",
+      reasonDetail: "claude-run-not-admitted",
+    });
+    expect(requests).toHaveLength(1);
+    // The same refusal reported through a broker that caught the throw.
+    const caught: ProviderCredentialEgressBroker = {
+      async withGrant(request, operation) {
+        const inner = await broker(requests).withGrant(request, async (grant) =>
+          operation(grant).then(
+            (value) => ({ status: "completed" as const, value }),
+            (error: unknown) => ({ status: "failed" as const, error }),
+          ),
+        );
+        if (inner.operation.status !== "completed")
+          throw new Error("unreachable");
+        return { operation: inner.operation.value, receipt: inner.receipt };
+      },
+    };
+    const viaBroker = new ClaudeOneShotRuntime(
+      refusing,
+      caught,
+      new ProviderAttachmentStore(root),
+      image,
+      wordPressLabCommandRule,
+      () => new Date(start),
+    );
+    expect((await viaBroker.execute(run("files"))).receipt).toMatchObject({
+      reason: "policy",
+      reasonDetail: "claude-run-not-admitted",
+    });
   });
 
   it("detects a script run from Bash tool calls only", () => {

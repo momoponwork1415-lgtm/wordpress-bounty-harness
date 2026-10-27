@@ -568,8 +568,11 @@ export async function runCampaignPipeline<
         stoppedBy: discovered.stoppedBy,
         verifications: [],
       };
+      // A usage limit stops the campaign's other targets even when the Trial
+      // that met it concluded partially (ADR 0042): the runner backs off.
       if (
-        discovered.stoppedBy === "provider-limit" &&
+        (discovered.stoppedBy === "provider-limit" ||
+          discovered.providerLimit !== undefined) &&
         discovered.runCount > 0
       ) {
         const runtime = runtimeOf(target);
@@ -582,22 +585,31 @@ export async function runCampaignPipeline<
           reason: "provider-limit",
           ...(runtime === undefined ? {} : { runtime }),
         });
-      } else if (
+      }
+      if (
         discovered.stoppedBy === "incomplete" &&
         (discovered.runCount > 0 || discovered.resumeRefusal !== undefined)
       ) {
+        // The skip names its cause: the refused resume, or the Trial's own
+        // failure (reason tokens only; the receipt stays in Private Evidence).
+        const diagnostic =
+          discovered.resumeRefusal !== undefined
+            ? {
+                kind: "resume-refused",
+                runId: discovered.resumeRefusal.runId,
+                reason: discovered.resumeRefusal.reason,
+                ...(discovered.resumeRefusal.detail === undefined
+                  ? {}
+                  : { detail: discovered.resumeRefusal.detail }),
+              }
+            : discovered.failure !== undefined
+              ? { kind: "run-failed", ...discovered.failure }
+              : undefined;
         const diagnosticDigest =
-          discovered.resumeRefusal === undefined
+          diagnostic === undefined
             ? undefined
             : await options.store.putFiles({
-                "target-skip-diagnostic.json": canonicalJson({
-                  kind: "resume-refused",
-                  runId: discovered.resumeRefusal.runId,
-                  reason: discovered.resumeRefusal.reason,
-                  ...(discovered.resumeRefusal.detail === undefined
-                    ? {}
-                    : { detail: discovered.resumeRefusal.detail }),
-                }),
+                "target-skip-diagnostic.json": canonicalJson(diagnostic),
               });
         await append({
           ...base,

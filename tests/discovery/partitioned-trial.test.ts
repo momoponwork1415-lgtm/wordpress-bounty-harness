@@ -88,7 +88,7 @@ type Helpers = {
   report(run: OneShotRun, text: string): Promise<OneShotResult>;
   failed(
     run: OneShotRun,
-    reason: "provider" | "wall" | "schema",
+    reason: "provider" | "wall" | "schema" | "operator",
     providerLimit?: "rate-limit",
   ): OneShotResult;
 };
@@ -105,6 +105,12 @@ async function fixture(options: {
   readonly targetWallMs?: number;
   /** Each executed run moves the clock this far; 0 keeps the clock still. */
   readonly runMs?: number;
+  readonly signal?: AbortSignal;
+  /** Replaces the WordPress admission; the default admits every claim. */
+  readonly recordReport?: Parameters<
+    typeof runDiscoveryCampaign
+  >[0]["recordReport"];
+  readonly evidenceMaxBytes?: number;
 }) {
   const root = await mkdtemp(join(tmpdir(), "wbh-partitioned-"));
   directories.push(root);
@@ -112,7 +118,7 @@ async function fixture(options: {
   const evidence = new PrivateArtifactStore({
     rootDirectory: join(root, "evidence"),
     maxEntries: 64,
-    maxBytes: 4 * 1024 * 1024,
+    maxBytes: options.evidenceMaxBytes ?? 4 * 1024 * 1024,
   });
   const ledger = new Ledger({
     databasePath: join(root, "ledger.sqlite"),
@@ -178,7 +184,7 @@ async function fixture(options: {
     },
     failed(
       run: OneShotRun,
-      reason: "provider" | "wall" | "schema",
+      reason: "provider" | "wall" | "schema" | "operator",
       providerLimit?: "rate-limit",
     ): OneShotResult {
       return {
@@ -283,14 +289,24 @@ async function fixture(options: {
     attachments,
     evidence,
     ledger,
-    recordReport: recordWordPressReport,
+    recordReport: options.recordReport ?? recordWordPressReport,
     clock,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
   });
   const events = ledger
     .readAll({ campaignId: "campaign-1" })
     .map(({ event }) => event);
-  return { result, events, calls, trialId };
+  return { result, events, calls, trialId, ledger, evidence };
 }
+
+/** Three partitions of one row each, for the pool tests. */
+const threeProposal = {
+  partitions: [
+    { id: "p1", label: "A", rowIds: ["s1"] },
+    { id: "p2", label: "B", rowIds: ["a1"] },
+    { id: "p3", label: "C", rowIds: ["a2"] },
+  ],
+};
 
 const summary = (events: readonly LedgerEventV1[]) =>
   events.map((event) =>
@@ -466,7 +482,7 @@ describe("partitioned Trial executor (ADR 0042)", () => {
   });
 
   it("ends the Trial incomplete once the send-backs are exhausted, with the last rejection's reasons", async () => {
-    const { result, events, calls } = await fixture({
+    const { result, events, calls, ledger } = await fixture({
       limits: { maxResubmits: 1 },
       script: (run, _attempt, helpers) =>
         helpers.files(
@@ -498,6 +514,23 @@ describe("partitioned Trial executor (ADR 0042)", () => {
       runCount: 1,
       findingsRecorded: 0,
       stoppedBy: "incomplete",
+      failure: {
+        runId: "trial-1",
+        reason: "schema",
+        reasonDetail: "enumeration-rejected",
+      },
+    });
+    // The funnel reads one attempt that ended incomplete, not a completed
+    // attempt with zero candidates (ADR 0042); the send-back is no second attempt.
+    const funnel = ledger.funnel("campaign-1");
+    expect(funnel.discoveryAttempts).toBe(1);
+    expect(funnel.attemptOutcomes).toEqual({
+      completed: 0,
+      completedWithoutCandidate: 0,
+      incomplete: 1,
+      incompleteByReason: { "schema/enumeration-rejected": 1 },
+      providerLimited: 0,
+      unfinished: 0,
     });
   });
 
@@ -510,11 +543,9 @@ describe("partitioned Trial executor (ADR 0042)", () => {
             [ENUMERATION_OUTPUT_FILES.inventory]: inventory,
             [ENUMERATION_OUTPUT_FILES.partitions]: proposal,
           });
-        if (run.runId === "trial-1-p-p1-r1")
+        if (run.runId === "trial-1-p-p1.retry1")
           return helpers.report(run, `claim of ${run.runId}`);
-        if (run.runId === "trial-1-p-p1")
-          return helpers.failed(run, "provider", "rate-limit");
-        return run.runId.endsWith("-r1")
+        return run.runId.endsWith(".retry1")
           ? helpers.failed(run, "schema")
           : helpers.failed(run, "wall");
       },
@@ -523,10 +554,10 @@ describe("partitioned Trial executor (ADR 0042)", () => {
     expect(lines.filter((line) => line.startsWith("finish"))).toEqual(
       expect.arrayContaining([
         "finish completed trial-1",
-        "finish provider-limited trial-1-p-p1",
-        "finish completed trial-1-p-p1-r1",
+        "finish failed trial-1-p-p1",
+        "finish completed trial-1-p-p1.retry1",
         "finish failed trial-1-p-p2",
-        "finish failed trial-1-p-p2-r1",
+        "finish failed trial-1-p-p2.retry1",
       ]),
     );
     expect(lines.filter((line) => line.startsWith("assigned"))).toEqual([
@@ -534,12 +565,12 @@ describe("partitioned Trial executor (ADR 0042)", () => {
       "assigned p2 trial-1-p-p2",
     ]);
     expect(lines.filter((line) => line.startsWith("finding"))).toEqual([
-      "finding p1 trial-1-p-p1-r1",
+      "finding p1 trial-1-p-p1.retry1",
     ]);
     const retry = events.find(
       (event) =>
         event.type === "discovery-run-started" &&
-        event.runId === "trial-1-p-p1-r1",
+        event.runId === "trial-1-p-p1.retry1",
     );
     expect(retry).toMatchObject({
       runKind: "trace",
@@ -549,7 +580,7 @@ describe("partitioned Trial executor (ADR 0042)", () => {
     const last = events.find(
       (event) =>
         event.type === "discovery-run-finished" &&
-        event.runId === "trial-1-p-p2-r1",
+        event.runId === "trial-1-p-p2.retry1",
     );
     expect(last).toMatchObject({
       reason: "schema",
@@ -561,14 +592,275 @@ describe("partitioned Trial executor (ADR 0042)", () => {
       findingsRecorded: 1,
       stoppedBy: "max-runs",
     });
+    expect(result.providerLimit).toBeUndefined();
   });
 
-  it("does not retry and does not start a tracer once the target ceiling is spent", async () => {
-    // Every run takes six minutes; a 10-minute target wall is gone after the
-    // enumerator and the first tracer attempt.
+  it("names a retry with a separator outside the partition id alphabet, so it is never another partition's first run", async () => {
+    const { events } = await fixture({
+      maxParallel: 1,
+      script: (run, _attempt, helpers) => {
+        if (run.output === "files")
+          return helpers.files(run, {
+            [ENUMERATION_OUTPUT_FILES.inventory]: inventory,
+            [ENUMERATION_OUTPUT_FILES.partitions]: {
+              partitions: [
+                { id: "x", label: "X", rowIds: ["s1", "a1"] },
+                { id: "x-r1", label: "X again", rowIds: ["a2"] },
+              ],
+            },
+          });
+        return run.runId === "trial-1-p-x"
+          ? helpers.failed(run, "wall")
+          : helpers.report(run, `claim of ${run.runId}`);
+      },
+    });
+    expect(summary(events).filter((line) => line.startsWith("start"))).toEqual([
+      "start enumerate trial-1",
+      "start trace trial-1-p-x",
+      "start trace trial-1-p-x.retry1",
+      "start trace trial-1-p-x-r1",
+    ]);
+    expect(summary(events).filter((line) => line.startsWith("finish"))).toEqual(
+      [
+        "finish completed trial-1",
+        "finish failed trial-1-p-x",
+        "finish completed trial-1-p-x.retry1",
+        "finish completed trial-1-p-x-r1",
+      ],
+    );
+  });
+
+  it("does not retry a provider-limited tracer and ends the Trial provider-limited when no tracer completed", async () => {
+    const { result, events, calls } = await fixture({
+      maxParallel: 1,
+      script: (run, _attempt, helpers) =>
+        run.output === "files"
+          ? helpers.files(run, {
+              [ENUMERATION_OUTPUT_FILES.inventory]: inventory,
+              [ENUMERATION_OUTPUT_FILES.partitions]: proposal,
+            })
+          : helpers.failed(run, "provider", "rate-limit"),
+    });
+    expect(calls.map((run) => run.runId)).toEqual([
+      "trial-1",
+      "trial-1-p-p1",
+      "trial-1-p-p2",
+    ]);
+    expect(summary(events).filter((line) => line.startsWith("finish"))).toEqual(
+      [
+        "finish completed trial-1",
+        "finish provider-limited trial-1-p-p1",
+        "finish provider-limited trial-1-p-p2",
+      ],
+    );
+    expect(result).toMatchObject({
+      runCount: 1,
+      stoppedBy: "provider-limit",
+      providerLimit: "rate-limit",
+      failure: {
+        runId: "trial-1",
+        reason: "provider",
+        providerLimit: "rate-limit",
+      },
+    });
+  });
+
+  it("surfaces a tracer's usage limit to the campaign even when the Trial completes partially", async () => {
+    const { result, events } = await fixture({
+      maxParallel: 1,
+      script: (run, _attempt, helpers) =>
+        run.output === "files"
+          ? helpers.files(run, {
+              [ENUMERATION_OUTPUT_FILES.inventory]: inventory,
+              [ENUMERATION_OUTPUT_FILES.partitions]: proposal,
+            })
+          : run.runId === "trial-1-p-p1"
+            ? helpers.failed(run, "provider", "rate-limit")
+            : helpers.report(run, `claim of ${run.runId}`),
+    });
+    expect(summary(events).filter((line) => line.startsWith("finish"))).toEqual(
+      [
+        "finish completed trial-1",
+        "finish provider-limited trial-1-p-p1",
+        "finish completed trial-1-p-p2",
+      ],
+    );
+    // Concluded, with the limit on the side for the runner's backoff.
+    expect(result).toMatchObject({
+      runCount: 1,
+      findingsRecorded: 1,
+      stoppedBy: "max-runs",
+      providerLimit: "rate-limit",
+    });
+    expect(result.failure).toBeUndefined();
+  });
+
+  it("records a throw after the transport as missing evidence with the message in Private Evidence, and retries", async () => {
+    let thrown = false;
+    const { events, evidence } = await fixture({
+      maxParallel: 1,
+      recordReport: async (report, context) => {
+        if (!thrown) {
+          thrown = true;
+          throw new Error("admission exploded");
+        }
+        return recordWordPressReport(report, context);
+      },
+      script: (run, _attempt, helpers) =>
+        run.output === "files"
+          ? helpers.files(run, {
+              [ENUMERATION_OUTPUT_FILES.inventory]: inventory,
+              [ENUMERATION_OUTPUT_FILES.partitions]: proposal,
+            })
+          : helpers.report(run, `claim of ${run.runId}`),
+    });
+    expect(summary(events).filter((line) => line.startsWith("finish"))).toEqual(
+      [
+        "finish completed trial-1",
+        "finish failed trial-1-p-p1",
+        "finish completed trial-1-p-p1.retry1",
+        "finish completed trial-1-p-p2",
+      ],
+    );
+    const failed = events.find(
+      (event) =>
+        event.type === "discovery-run-finished" &&
+        event.runId === "trial-1-p-p1",
+    );
+    expect(failed).toMatchObject({
+      outcome: "failed",
+      reason: "evidence",
+      reasonDetail: "post-run-threw",
+    });
+    const receiptRef =
+      failed?.type === "discovery-run-finished"
+        ? failed.artifacts.find((ref) => ref.kind === "native-run-receipt")
+        : undefined;
+    expect(receiptRef).toBeDefined();
+    const receipt = await evidence.readFile(
+      receiptRef!.digest,
+      "receipt.json",
+      64 * 1024,
+    );
+    if (receipt.status !== "resolved") throw new Error(receipt.status);
+    const sealed = JSON.parse(receipt.bytes.toString("utf8")) as {
+      diagnosticArtifactDigest?: string;
+    };
+    expect(sealed.diagnosticArtifactDigest).toBeDefined();
+    const diagnostic = await evidence.readFile(
+      sealed.diagnosticArtifactDigest!,
+      "role-run-error.json",
+      4096,
+    );
+    if (diagnostic.status !== "resolved") throw new Error(diagnostic.status);
+    expect(JSON.parse(diagnostic.bytes.toString("utf8"))).toEqual({
+      runId: "trial-1-p-p1",
+      stage: "admission",
+      message: "admission exploded",
+    });
+  });
+
+  it("keeps at most maxParallel tracers in flight", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const { events } = await fixture({
+      maxParallel: 2,
+      script: async (run, _attempt, helpers) => {
+        if (run.output === "files")
+          return helpers.files(run, {
+            [ENUMERATION_OUTPUT_FILES.inventory]: inventory,
+            [ENUMERATION_OUTPUT_FILES.partitions]: threeProposal,
+          });
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        inFlight--;
+        return helpers.report(run, `claim of ${run.runId}`);
+      },
+    });
+    expect(peak).toBe(2);
+    expect(
+      summary(events).filter((line) => line.startsWith("finish completed")),
+    ).toHaveLength(4);
+  });
+
+  it("stops the pool on operator cancellation: the running tracer ends as operator, the rest are recorded without starting", async () => {
+    const controller = new AbortController();
+    const { result, events, calls } = await fixture({
+      maxParallel: 1,
+      signal: controller.signal,
+      script: async (run, _attempt, helpers) => {
+        if (run.output === "files")
+          return helpers.files(run, {
+            [ENUMERATION_OUTPUT_FILES.inventory]: inventory,
+            [ENUMERATION_OUTPUT_FILES.partitions]: threeProposal,
+          });
+        // The transport sees the operator's stop and returns a cancelled receipt.
+        controller.abort("operator");
+        return helpers.failed(run, "operator");
+      },
+    });
+    expect(calls.map((run) => run.runId)).toEqual(["trial-1", "trial-1-p-p1"]);
+    expect(summary(events).filter((line) => line.startsWith("finish"))).toEqual(
+      [
+        "finish completed trial-1",
+        "finish failed trial-1-p-p1",
+        "finish failed trial-1-p-p2",
+        "finish failed trial-1-p-p3",
+      ],
+    );
+    for (const runId of ["trial-1-p-p1", "trial-1-p-p2", "trial-1-p-p3"])
+      expect(
+        events.find(
+          (event) =>
+            event.type === "discovery-run-finished" && event.runId === runId,
+        ),
+      ).toMatchObject({ reason: "operator" });
+    expect(result).toMatchObject({ runCount: 1, stoppedBy: "incomplete" });
+  });
+
+  it("ends the Trial instead of mounting a send-back that exceeds the input file cap", async () => {
+    // Two raw files just under the output cap; their canonical form plus the
+    // wrapper is over twice that cap, the input file limit.
+    const filler = "x".repeat(8 * 1024 * 1024 - 20);
+    const { result, events, calls } = await fixture({
+      evidenceMaxBytes: 64 * 1024 * 1024,
+      script: (run, _attempt, helpers) =>
+        helpers.files(run, {
+          [ENUMERATION_OUTPUT_FILES.inventory]: `{"rows":"${filler}"}`,
+          [ENUMERATION_OUTPUT_FILES.partitions]: `{"partitions":"${filler}"}`,
+        }),
+    });
+    expect(calls).toHaveLength(1);
+    expect(summary(events)).toEqual([
+      "start enumerate trial-1",
+      "finish completed trial-1",
+      "enumeration rejected trial-1",
+    ]);
+    expect(
+      events.find((event) => event.type === "enumeration-recorded"),
+    ).toMatchObject({
+      accepted: false,
+      resubmits: 0,
+      rejectedReasons: [
+        "inventory-invalid",
+        "proposal-invalid",
+        "send-back-oversize",
+      ],
+    });
+    expect(result).toMatchObject({
+      stoppedBy: "incomplete",
+      failure: { reason: "schema", reasonDetail: "enumeration-rejected" },
+    });
+  });
+
+  it("does not start a tracer, a retry or a send-back below the five-minute floor of the target wall", async () => {
+    // Every run takes six minutes. Of a 16-minute target wall, 10 minutes
+    // are left after the enumerator: the first tracer starts; its retry and
+    // the second partition would start under the floor and are only recorded.
     const { events, calls } = await fixture({
       maxParallel: 1,
-      targetWallMs: 10 * 60_000,
+      targetWallMs: 16 * 60_000,
       runMs: 6 * 60_000,
       script: (run, _attempt, helpers) =>
         run.output === "files"
@@ -594,6 +886,30 @@ describe("partitioned Trial executor (ADR 0042)", () => {
     expect(unstarted).toMatchObject({
       reason: "wall",
       reasonDetail: "target-ceiling",
+    });
+    // A send-back under the floor is not mounted either.
+    const sentBack = await fixture({
+      targetWallMs: 10 * 60_000,
+      runMs: 6 * 60_000,
+      script: (run, _attempt, helpers) =>
+        helpers.files(run, {
+          [ENUMERATION_OUTPUT_FILES.inventory]: inventory,
+        }),
+    });
+    expect(sentBack.calls.map((run) => run.runId)).toEqual(["trial-1"]);
+    expect(summary(sentBack.events)).toEqual([
+      "start enumerate trial-1",
+      "finish completed trial-1",
+      "start enumerate trial-1-r1",
+      "finish failed trial-1-r1",
+    ]);
+    expect(sentBack.result).toMatchObject({
+      stoppedBy: "incomplete",
+      failure: {
+        runId: "trial-1",
+        reason: "wall",
+        reasonDetail: "target-ceiling",
+      },
     });
   });
 

@@ -187,12 +187,13 @@ describe("partitioned Trial events", () => {
     ).toBe(false);
   });
 
-  it("counts a partitioned Trial once in the funnel: the enumerate run, not each tracer", async () => {
+  it("counts a partitioned Trial once in the funnel: the enumerate run, not its send-backs or tracers", async () => {
     const ledger = await fixture();
-    for (const [runId, runKind] of [
-      ["run-enumerate-1", "enumerate"],
-      ["run-trace-1", "trace"],
-      ["run-trace-2", "trace"],
+    for (const [runId, runKind, resubmit] of [
+      ["trial-1", "enumerate", 0],
+      ["trial-1-r1", "enumerate", 1],
+      ["run-trace-1", "trace", undefined],
+      ["run-trace-2", "trace", undefined],
     ] as const) {
       await ledger.append({
         ...base(`${runId}-started`),
@@ -202,7 +203,14 @@ describe("partitioned Trial events", () => {
         runKind,
         labAttached: false,
         history: { mode: "none" },
-        configuration: { promptVariant: "objective-partition-v1" },
+        configuration: {
+          promptVariant: "objective-partition-v1",
+          role: {
+            kind: runKind === "enumerate" ? "enumerator" : "tracer",
+            definitionDigest: digest,
+            ...(resubmit === undefined ? {} : { resubmit }),
+          },
+        },
       });
       await ledger.append({
         ...base(`${runId}-finished`),
@@ -213,6 +221,91 @@ describe("partitioned Trial events", () => {
         wallTimeMs: 1,
       });
     }
-    expect(ledger.funnel("campaign-1").discoveryAttempts).toBe(1);
+    await ledger.append({ ...enumeration, runId: "trial-1-r1" });
+    const funnel = ledger.funnel("campaign-1");
+    expect(funnel.discoveryAttempts).toBe(1);
+    expect(funnel.runCount).toBe(4);
+    // Completed through its tracers; no tracer reached a candidate.
+    expect(funnel.attemptOutcomes).toEqual({
+      completed: 1,
+      completedWithoutCandidate: 1,
+      incomplete: 0,
+      incompleteByReason: {},
+      providerLimited: 0,
+      unfinished: 0,
+    });
+  });
+
+  it("reads a rejected enumeration and an all-failed tracer set as incomplete attempts, never as zero candidates (ADR 0042)", async () => {
+    const ledger = await fixture();
+    const run = async (
+      trialId: string,
+      runId: string,
+      runKind: "enumerate" | "trace",
+      finish: Record<string, unknown> | undefined,
+    ) => {
+      await ledger.append({
+        ...base(`${runId}-started`),
+        type: "discovery-run-started",
+        runId,
+        trialId,
+        runKind,
+        labAttached: false,
+        history: { mode: "none" },
+        configuration: { promptVariant: "objective-partition-v1" },
+      });
+      if (finish !== undefined)
+        await ledger.append({
+          ...base(`${runId}-finished`),
+          type: "discovery-run-finished",
+          runId,
+          costUsd: "unavailable",
+          wallTimeMs: 1,
+          ...finish,
+        } as Parameters<Ledger["append"]>[0]);
+    };
+    // Trial 1: the send-backs ran out.
+    await run("trial-1", "trial-1", "enumerate", { outcome: "completed" });
+    await ledger.append({
+      ...enumeration,
+      identity: "enumeration-trial-1",
+      accepted: false,
+      rejectedReasons: ["proposal-missing"],
+      partitionCount: 0,
+    });
+    // Trial 2: accepted, but both tracers hit the wall.
+    await run("trial-2", "trial-2", "enumerate", { outcome: "completed" });
+    await ledger.append({
+      ...enumeration,
+      identity: "enumeration-trial-2",
+      trialId: "trial-2",
+      runId: "trial-2",
+    });
+    for (const runId of ["trial-2-p-a", "trial-2-p-b"])
+      await run("trial-2", runId, "trace", {
+        outcome: "failed",
+        reason: "wall",
+        reasonDetail: "target-ceiling",
+      });
+    // Trial 3: the enumerator's limit; Trial 4: a dangling enumerate start.
+    await run("trial-3", "trial-3", "enumerate", {
+      outcome: "provider-limited",
+      reason: "provider",
+      providerLimit: "rate-limit",
+    });
+    await run("trial-4", "trial-4", "enumerate", undefined);
+    const funnel = ledger.funnel("campaign-1");
+    expect(funnel.discoveryAttempts).toBe(4);
+    expect(funnel.attemptOutcomes).toEqual({
+      completed: 0,
+      completedWithoutCandidate: 0,
+      incomplete: 2,
+      incompleteByReason: {
+        "schema/enumeration-rejected": 1,
+        "wall/target-ceiling": 1,
+      },
+      providerLimited: 1,
+      unfinished: 1,
+    });
   });
 });

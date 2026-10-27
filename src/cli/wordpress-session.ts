@@ -277,6 +277,15 @@ export const wordpressCampaignConfigSchema = z
           path: ["discovery", "tracer", "maxParallel"],
           message: `The memory budget holds ${sandboxes} tracer run(s) at once`,
         });
+      // Targets run side by side, each with its own tracers in flight.
+      const concurrent =
+        config.resources.maxConcurrentTargets * tracer.maxParallel;
+      if (concurrent > sandboxes)
+        context.addIssue({
+          code: "custom",
+          path: ["resources", "maxConcurrentTargets"],
+          message: `${config.resources.maxConcurrentTargets} target(s) × ${tracer.maxParallel} tracer(s) need ${concurrent * PARTITIONED_TRACER_RUN_MEMORY_MIB} MiB; the budget holds ${sandboxes} tracer run(s)`,
+        });
     }
     const floor =
       config.discovery.minimumActiveMinutes ??

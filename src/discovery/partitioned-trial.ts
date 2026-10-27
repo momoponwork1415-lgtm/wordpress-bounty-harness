@@ -22,7 +22,13 @@ import {
   sealNativeRunReceipt,
   type NativeRunReceipt,
 } from "./native-run-receipts.js";
-import type { OneShotFile, OneShotResult, OneShotRun } from "./one-shot-run.js";
+import {
+  admittedOneShotFiles,
+  ONE_SHOT_MAX_INPUT_BYTES,
+  type OneShotFile,
+  type OneShotResult,
+  type OneShotRun,
+} from "./one-shot-run.js";
 import {
   collapseInventory,
   inventorySchema,
@@ -78,8 +84,13 @@ export type PartitionedTrialPlan = {
 
 /** One target in a partitioned campaign may take this long at most (ADR 0042). */
 export const PARTITIONED_TARGET_CEILING_MS = 240 * 60_000;
-/** A failed tracer is retried once only when at least this much of the target wall is left. */
-export const TRACER_RETRY_FLOOR_MS = 5 * 60_000;
+/**
+ * A role run after the enumerator's first (a send-back, a tracer, a retry)
+ * starts only when at least this much of the target wall is left; otherwise
+ * it is recorded as `wall / target-ceiling` without a sandbox the wall would
+ * kill at once.
+ */
+export const ROLE_START_FLOOR_MS = 5 * 60_000;
 
 /** The files the Harness places under `/workspace/input` for a role. */
 export const PARTITION_INPUT_FILES = {
@@ -110,6 +121,9 @@ type SentBackRejection =
       /** The first schema issue, bounded; file text only, never in the ledger. */
       readonly detail?: string;
     };
+
+/** The send-back could not be mounted: the previous submission exceeds the input file cap. */
+const SEND_BACK_OVERSIZE = "send-back-oversize";
 
 type Submission = {
   /** The submitted values as JSON, or null where the file was absent or not JSON. */
@@ -271,8 +285,9 @@ async function runRole(
   if (started.status === "conflict")
     throw new Error("Discovery run identity conflict");
   const synthetic = (
-    reason: "wall" | "operator",
+    reason: "wall" | "operator" | "evidence",
     detail?: string,
+    diagnosticArtifactDigest?: string,
   ): OneShotResult => ({
     receipt: createNativeRunReceipt({
       runId: run.runId,
@@ -281,6 +296,9 @@ async function runRole(
       terminal: "incomplete",
       reason,
       ...(detail === undefined ? {} : { reasonDetail: detail }),
+      ...(diagnosticArtifactDigest === undefined
+        ? {}
+        : { diagnosticArtifactDigest }),
       startedAt,
       completedAt: clock().toISOString(),
     }),
@@ -296,9 +314,11 @@ async function runRole(
     runWallTimeMs: wallMs > 0 ? wallMs : undefined,
     resultOnSilence: (reason) => synthetic(reason),
   });
+  // Only the transport is under the catch-all: a throw there is the sandbox's.
+  let result: OneShotResult | undefined;
   try {
     // The ceiling is spent or the operator stopped: recorded, never started.
-    const result =
+    result =
       wallMs <= 0
         ? synthetic("wall", "target-ceiling")
         : context.signal?.aborted
@@ -307,43 +327,7 @@ async function runRole(
               executor.execute(run, cancellation.signal),
               cancellation.fallback,
             ]);
-    cancellation.disarmWall();
-    const receipt = nativeRunReceiptSchema.parse(result.receipt);
-    draft.result = result;
-    draft.receipt = receipt;
-    draft.wallTimeMs = receiptWallTimeMs(receipt);
-    draft.receiptDigest = await sealNativeRunReceipt(context.evidence, receipt);
-    const readPathsDigest = await recordReadPaths(
-      context.attachments,
-      context.evidence,
-      receipt.diagnosticArtifactDigest,
-      dependencyMountPathsOf(run),
-    );
-    if (readPathsDigest !== undefined) draft.readPathsDigest = readPathsDigest;
-    if (
-      receipt.runId !== run.runId ||
-      receipt.targetSnapshotDigest !== input.snapshotDigest ||
-      receipt.runtimeProfileDigest !== run.profile.digest
-    )
-      draft.failure = {
-        reason: "policy",
-        reasonDetail: "receipt-identity-mismatch",
-      };
-    else if (receipt.providerLimit !== undefined) {
-      draft.outcome = "provider-limited";
-      const failure = failureOf(receipt);
-      if (failure !== undefined) draft.failure = failure;
-    } else {
-      const failure = failureOf(receipt);
-      if (failure !== undefined) draft.failure = failure;
-      else {
-        const admitted = await role.admit?.(result);
-        if (admitted !== undefined) draft.failure = admitted;
-        else draft.outcome = "completed";
-      }
-    }
   } catch {
-    draft.outcome = "failed";
     if (cancellation.signal.aborted) {
       const reason =
         cancellation.signal.reason === "operator" ? "operator" : "wall";
@@ -356,7 +340,74 @@ async function runRole(
     } else
       draft.failure = { reason: "sandbox", reasonDetail: "transport-threw" };
   } finally {
+    cancellation.disarmWall();
     cancellation.dispose();
+  }
+  if (result !== undefined) {
+    // The Harness's own bookkeeping after the run: a throw here is recorded
+    // as missing evidence, with its message in Private Evidence only.
+    let stage = "receipt";
+    try {
+      const receipt = nativeRunReceiptSchema.parse(result.receipt);
+      draft.result = result;
+      draft.receipt = receipt;
+      draft.wallTimeMs = receiptWallTimeMs(receipt);
+      stage = "seal";
+      draft.receiptDigest = await sealNativeRunReceipt(
+        context.evidence,
+        receipt,
+      );
+      stage = "read-paths";
+      const readPathsDigest = await recordReadPaths(
+        context.attachments,
+        context.evidence,
+        receipt.diagnosticArtifactDigest,
+        dependencyMountPathsOf(run),
+      );
+      if (readPathsDigest !== undefined)
+        draft.readPathsDigest = readPathsDigest;
+      if (
+        receipt.runId !== run.runId ||
+        receipt.targetSnapshotDigest !== input.snapshotDigest ||
+        receipt.runtimeProfileDigest !== run.profile.digest
+      )
+        draft.failure = {
+          reason: "policy",
+          reasonDetail: "receipt-identity-mismatch",
+        };
+      else if (receipt.providerLimit !== undefined) {
+        draft.outcome = "provider-limited";
+        const failure = failureOf(receipt);
+        if (failure !== undefined) draft.failure = failure;
+      } else {
+        const failure = failureOf(receipt);
+        if (failure !== undefined) draft.failure = failure;
+        else {
+          stage = "admission";
+          const admitted = await role.admit?.(result);
+          if (admitted !== undefined) draft.failure = admitted;
+          else draft.outcome = "completed";
+        }
+      }
+    } catch (error: unknown) {
+      draft.outcome = "failed";
+      draft.failure = { reason: "evidence", reasonDetail: "post-run-threw" };
+      const diagnosticDigest = await context.evidence.putFiles({
+        "role-run-error.json": canonicalJson({
+          runId: run.runId,
+          stage,
+          message: (error instanceof Error
+            ? error.message
+            : String(error)
+          ).slice(0, 4096),
+        }),
+      });
+      draft.receiptDigest = await sealNativeRunReceipt(
+        context.evidence,
+        synthetic("evidence", "post-run-threw", diagnosticDigest).receipt,
+      );
+      if (draft.receipt === undefined) draft.wallTimeMs = wallMs;
+    }
   }
   const outcome: RoleOutcome = draft;
   const finished = await context.ledger.append(
@@ -420,6 +471,9 @@ export async function executePartitionedTrial(
   const deadline =
     trialStart + Math.min(plan.targetWallMs, PARTITIONED_TARGET_CEILING_MS);
   const remaining = () => deadline - clock().getTime();
+  /** The wall of a run after the first: none below the start floor. */
+  const wallFor = (roleWallMs: number) =>
+    remaining() < ROLE_START_FLOOR_MS ? 0 : Math.min(roleWallMs, remaining());
   const base: EventBase = {
     schemaVersion: 1,
     campaignId: context.campaignId,
@@ -451,6 +505,10 @@ export async function executePartitionedTrial(
       draft.findingsRecorded += count;
     },
   });
+  const noteLimit = (run: RoleOutcome) => {
+    const limit = run.receipt?.providerLimit ?? run.failure?.providerLimit;
+    if (limit !== undefined) draft.providerLimit ??= limit;
+  };
   const settle = (run: RoleOutcome | undefined): TrialOutcome => {
     draft.wallTimeMs = clock().getTime() - trialStart;
     if (run?.receipt !== undefined) {
@@ -466,7 +524,15 @@ export async function executePartitionedTrial(
     return draft;
   };
 
-  const enumeration = await enumerate(context, trial, plan, base, remaining);
+  const enumeration = await enumerate(
+    context,
+    trial,
+    plan,
+    base,
+    remaining,
+    wallFor,
+  );
+  if (enumeration.run !== undefined) noteLimit(enumeration.run);
   if (enumeration.status === "stopped") {
     draft.outcome = enumeration.outcome;
     draft.failure = enumeration.failure;
@@ -506,13 +572,13 @@ export async function executePartitionedTrial(
     });
     if (assigned.status === "conflict")
       throw new Error("Partition assignment identity conflict");
-    const attempt = (runId: string) =>
-      runRole(context, trial, base, {
+    const attempt = async (runId: string) => {
+      const run = await runRole(context, trial, base, {
         runId,
         runKind: "trace",
         plan: plan.trace,
         inputFiles,
-        wallMs: Math.min(plan.trace.run.wallMs, remaining()),
+        wallMs: wallFor(plan.trace.run.wallMs),
         role: { partitionId: partition.id },
         admit: async (result) => {
           if (result.attachment === undefined)
@@ -526,15 +592,21 @@ export async function executePartitionedTrial(
           }
         },
       });
+      noteLimit(run);
+      return run;
+    };
     const first = await attempt(firstRunId);
+    // A usage limit is the campaign's backoff, not a fresh sandbox at once.
     if (
-      first.outcome === "completed" ||
+      first.outcome !== "failed" ||
       context.signal?.aborted === true ||
-      remaining() < TRACER_RETRY_FLOOR_MS
+      remaining() < ROLE_START_FLOOR_MS
     )
       return first;
     // One fresh sandbox; a second failure leaves the partition incomplete.
-    return attempt(`${firstRunId}-r1`);
+    // The separator is outside the partition id alphabet, so the retry's id
+    // cannot be another partition's first run.
+    return attempt(`${firstRunId}.retry1`);
   };
   const worker = async () => {
     while (next < of) {
@@ -569,37 +641,22 @@ async function enumerate(
   plan: PartitionedTrialPlan,
   base: EventBase,
   remaining: () => number,
+  wallFor: (roleWallMs: number) => number,
 ): Promise<Enumeration> {
-  let previous: Submission | undefined;
+  let inputFiles: OneShotFile[] = [];
   let scriptRan = false;
   for (let resubmit = 0; ; resubmit++) {
     const runId =
       resubmit === 0 ? trial.trialId : `${trial.trialId}-r${resubmit}`;
-    const inputFiles: OneShotFile[] =
-      previous === undefined
-        ? []
-        : [
-            {
-              name: PARTITION_INPUT_FILES.previous,
-              content: canonicalJson({
-                inventory: previous.inventory,
-                partitions: previous.partitions,
-              }),
-            },
-            {
-              name: PARTITION_INPUT_FILES.sentBack,
-              content: canonicalJson({
-                resubmit,
-                rejections: previous.rejections,
-              }),
-            },
-          ];
     const run = await runRole(context, trial, base, {
       runId,
       runKind: "enumerate",
       plan: plan.enumerate,
       inputFiles,
-      wallMs: Math.min(plan.enumerate.run.wallMs, remaining()),
+      wallMs:
+        resubmit === 0
+          ? Math.min(plan.enumerate.run.wallMs, remaining())
+          : wallFor(plan.enumerate.run.wallMs),
       role: { resubmit },
     });
     scriptRan ||= run.result?.scriptRan === true;
@@ -651,8 +708,8 @@ async function enumerate(
         ? undefined
         : collapseInventory(submission.parsedInventory));
     const accepted = validation?.status === "accepted";
-    const reasons = [
-      ...new Set([
+    const reasons: string[] = [
+      ...new Set<string>([
         ...submission.rejections.map((rejection) => rejection.reason),
         ...rejectionReasonTokens(
           validation?.status === "rejected" ? validation.rejections : [],
@@ -667,8 +724,26 @@ async function enumerate(
             maxResubmits: plan.limits.maxResubmits,
           });
     if (decision === "resubmit") {
-      previous = { ...submission, rejections };
-      continue;
+      // The send-back is checked against the input cap before a sandbox is
+      // paid for; an unmountable one ends the Trial like an exhausted one.
+      const sendBack: OneShotFile[] = [
+        {
+          name: PARTITION_INPUT_FILES.previous,
+          content: canonicalJson({
+            inventory: submission.inventory,
+            partitions: submission.partitions,
+          }),
+        },
+        {
+          name: PARTITION_INPUT_FILES.sentBack,
+          content: canonicalJson({ resubmit: resubmit + 1, rejections }),
+        },
+      ];
+      if (admittedOneShotFiles(sendBack, ONE_SHOT_MAX_INPUT_BYTES)) {
+        inputFiles = sendBack;
+        continue;
+      }
+      reasons.push(SEND_BACK_OVERSIZE);
     }
     const recorded = await context.ledger.append({
       ...base,

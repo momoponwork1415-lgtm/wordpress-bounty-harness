@@ -2,9 +2,10 @@ import { isAbsolute } from "node:path";
 
 import { canonicalJson } from "../infrastructure/canonical-json.js";
 import { admitAgentRuntimeProfile } from "./agent-runtime-profile.js";
-import type {
-  ClaudeSandbox,
-  ClaudeSandboxResult,
+import {
+  ClaudeSandboxNotAdmittedError,
+  type ClaudeSandbox,
+  type ClaudeSandboxResult,
 } from "./claude-gvisor-sandbox.js";
 import {
   claudeProviderFailure,
@@ -118,6 +119,9 @@ export class ClaudeOneShotRuntime implements OneShotExecutor {
     const profile = run.profile;
     if (!admitted(run, this.sandboxImage))
       return refused("policy", "claude-run-not-admitted");
+    // The sandbox refuses a command's shape before anything starts; that is
+    // the Harness's policy, not a provider or broker failure.
+    let threw: unknown;
     const granted: ProviderCredentialEgressResult<ClaudeSandboxResult> | void =
       await this.broker
         .withGrant(
@@ -173,7 +177,20 @@ export class ClaudeOneShotRuntime implements OneShotExecutor {
             ),
           signal,
         )
-        .catch(() => undefined);
+        .catch((error: unknown) => {
+          threw = error;
+          return undefined;
+        });
+    if (
+      threw instanceof ClaudeSandboxNotAdmittedError ||
+      (granted?.operation.status === "failed" &&
+        granted.operation.error instanceof ClaudeSandboxNotAdmittedError)
+    )
+      return refused("policy", "claude-run-not-admitted", {
+        ...(granted === undefined
+          ? {}
+          : { grantReceiptDigest: granted.receipt.digest }),
+      });
     if (granted === undefined)
       return refused(
         signal?.aborted

@@ -139,6 +139,13 @@ export type DiscoveryStop =
   | "provider-limit"
   | "incomplete";
 
+type TrialFailure = {
+  readonly runId: string;
+  readonly reason: string;
+  readonly reasonDetail?: string;
+  readonly providerLimit?: "rate-limit" | "quota";
+};
+
 export type ProviderLimitedResumeResult =
   | { readonly status: "resumed"; readonly outcome: TrialOutcome }
   | {
@@ -204,6 +211,15 @@ export async function runDiscoveryCampaign(options: {
     readonly reason: string;
     readonly detail?: string;
   };
+  /** The Trial failure that stopped the campaign, for the target's skip diagnostic. */
+  readonly failure?: {
+    readonly runId: string;
+    readonly reason: string;
+    readonly reasonDetail?: string;
+    readonly providerLimit?: "rate-limit" | "quota";
+  };
+  /** A usage limit any Trial met, including one that completed partially. */
+  readonly providerLimit?: "rate-limit" | "quota";
 }> {
   const input = campaignInputV1Schema.parse(options.input);
   const id = z.string().min(1).max(128);
@@ -268,6 +284,8 @@ export async function runDiscoveryCampaign(options: {
     resumeRefusal:
       | Extract<ProviderLimitedResumeResult, { status: "incomplete" }>
       | undefined;
+    failure: TrialFailure | undefined;
+    providerLimit: "rate-limit" | "quota" | undefined;
     next: number;
     stopped:
       | Extract<
@@ -280,6 +298,8 @@ export async function runDiscoveryCampaign(options: {
     findingsRecorded: 0,
     noNewFindings: 0,
     resumeRefusal: undefined,
+    failure: undefined,
+    providerLimit: undefined,
     next: 0,
     stopped: undefined,
   };
@@ -303,6 +323,27 @@ export async function runDiscoveryCampaign(options: {
   };
   const account = (explore: TrialOutcome) => {
     tally.findingsRecorded += explore.findingsRecorded;
+    tally.providerLimit ??=
+      explore.providerLimit ??
+      explore.receipt?.providerLimit ??
+      explore.failure?.providerLimit;
+    if (explore.outcome !== "completed")
+      tally.failure ??= {
+        runId: explore.runId,
+        reason: explore.failure?.reason ?? "evidence",
+        ...(explore.failure?.reasonDetail === undefined
+          ? {}
+          : { reasonDetail: explore.failure.reasonDetail }),
+        ...((explore.failure?.providerLimit ??
+          explore.receipt?.providerLimit ??
+          explore.providerLimit) === undefined
+          ? {}
+          : {
+              providerLimit: (explore.failure?.providerLimit ??
+                explore.receipt?.providerLimit ??
+                explore.providerLimit)!,
+            }),
+      };
     if (!explore.counted) {
       tally.stopped ??=
         explore.outcome === "provider-limited"
@@ -395,6 +436,13 @@ export async function runDiscoveryCampaign(options: {
     runCount: tally.runCount,
     findingsRecorded: tally.findingsRecorded,
     stoppedBy,
+    ...(tally.failure === undefined ||
+    (stoppedBy !== "incomplete" && stoppedBy !== "provider-limit")
+      ? {}
+      : { failure: tally.failure }),
+    ...(tally.providerLimit === undefined
+      ? {}
+      : { providerLimit: tally.providerLimit }),
     ...(tally.resumeRefusal === undefined
       ? {}
       : {

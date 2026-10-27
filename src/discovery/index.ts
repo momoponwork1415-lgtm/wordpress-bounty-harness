@@ -77,7 +77,7 @@ export {
   PARTITION_INPUT_FILES,
   PARTITIONED_TARGET_CEILING_MS,
   readEnumerationOutput,
-  TRACER_RETRY_FLOOR_MS,
+  ROLE_START_FLOOR_MS,
   type PartitionedRolePlan,
   type PartitionedTrialPlan,
 } from "./partitioned-trial.js";
@@ -88,6 +88,7 @@ export {
 export {
   CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB,
   CLAUDE_ONE_SHOT_SANDBOX_MEMORY_MIB,
+  ClaudeSandboxNotAdmittedError,
   GvisorClaudeSandbox,
   type ClaudeSandbox,
   type ClaudeSandboxCommand,
