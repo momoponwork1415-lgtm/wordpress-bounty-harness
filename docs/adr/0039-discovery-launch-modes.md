@@ -206,3 +206,23 @@ PR #537 のレビューで、再開（ADR 0036）が子の上限・最低時間�
 - 測った数字: 上の Trial あたりの Finding と Lead、Root の時間と読み、ソース読み直しの一致率。
 - 消し方: 追記 10 の手順をもう一度行う（v17-wide を `current`・`mode: "wide"` に、v16-wide を `archived` に、2 つの campaign 設定の `promptId` を v17-wide に）。
 
+## 2026-10-27 追記 12: `wide` の目的文を v14-wide に戻す（所有者決定、数字で戻す）
+
+追記 11 の v16-wide を本番と pass@3 の実験で走らせた結果、Finding の出方は v14-wide ではなく v17-wide に近かった。Root 単位の台帳の数字（2026-10-26 と 2026-10-27 の本番、子の上限は 10-26 が 4、10-27 が 8）:
+
+| 日 | 目的文 | runtime | Trial | Finding/Trial | Lead/Trial | Root の分 |
+|---|---|---|---|---|---|---|
+| 10-26 | v14-wide | Codex | 21 | 3.6 | 3.7 | 14.6 |
+| 10-26 | v17-wide | Codex | 31 | 0.0 | 0.8 | 6.8 |
+| 10-27 | v16-wide | Codex | 42 | 0.3 | 3.5 | 9.2 |
+| 10-26 | v14-wide | Claude | 36 | 0.4 | 4.8 | 11.6 |
+| 10-27 | v16-wide | Claude | 5 | 0.6 | 10.2 | 14.8 |
+
+Lead は v14-wide の水準に戻ったが、Finding は戻らなかった。10-26 に v14-wide で Finding を出した 19 対象を v16-wide で 2 回ずつ走らせた pass@3 では、38 Trial のうち Finding が 1 件以上出たのは 5 対象の 6 Trial だった。v16-wide の文 1（ベンダーだけが置ける内容は攻撃者入力ではない）が Finding を書く手前で止める方向に効いているか、同時に変えた子の上限 8 が Root の動きを変えているかは、この数字では分けられない。ベンダー由来の層は段 1b の `wbh-source-check`（ADR 0038 追記 14）で落とせる（不成立 67 件のうち入力支配 no が 51 件）ので、目的文で絞る必要はない。
+
+- `wp2shell-bounty-v14-wide`（`sha256:42ec734364d93492bf9b936e415b94796da21fb154d3b29033cafbd58596229d`）を `wide` の `current` に戻す。本文、fragment、digest は変えない。契約は、新しい Trial を起こせる行の規則（ADR 0038 追記 13）に従って v5 を受け取る。契約節は Harness が生成する節なので、目的文の digest は変わらない。
+- `wp2shell-bounty-v16-wide` は本文・`sinks-v16`・digest・契約 v5 を変えず `archived` にする（Trial が走ったので照合用に残す）。`src/profiles/wordpress/policy/campaign.json` と `examples/campaign-wide-20.json` の `promptId` を v14-wide に戻す。
+- 子の上限は変えない（本番は `discovery.maxChildren: 8` のまま）。目的文だけを戻すので、次の 10 Trial で Finding/Trial が 3 前後に戻れば文 1 が原因、戻らなければ子の上限 8 が原因と分けられる。
+- 比較候補の v15-wide は `candidate` のまま変えない。`deep` の v11 も変えない。
+- 測った数字: 上の表と pass@3 の 6 / 38。
+- 消し方: 追記 11 の手順をもう一度行う（v16-wide を `current`・`mode: "wide"` に、v14-wide を `archived`・契約 v4 に、2 つの campaign 設定の `promptId` を v16-wide に）。

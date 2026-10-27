@@ -25,7 +25,7 @@ Step 1 の間に凍結するもの: 不変条件、モジュール境界（ADR 0
 所有者決定 2026-10-26（[監査](reviews/2026-10-26-system-audit.md) 第 F.2 節への答え、ADR 0032 の 2026-10-26 追記 4）:
 
 - prompt の採否は、監査 第 B.3 節の 6 段で決める（第 5 節）。同日の「開発セット 6 case を各 1 run 回し、scope 内 Finding が 1 件以上の case を数える」基準は、これで置き換える。これから先の探索 prompt の変更には、上の 2026-10-25 の「開発 Trial の数字は取らない」に代えて、この決定を使う。
-- 本番の既定は `wide` の `wp2shell-bounty-v16-wide` にした（`src/profiles/wordpress/policy/campaign.json`。同日 v14-wide から v16-wide に替え、2026-10-27 に v17-wide に替えた後、同日に v16-wide へ戻した。ADR 0039 の 2026-10-27 追記 11）。`deep` の `wp2shell-bounty-v11` は名指しの Trial でだけ使う。
+- 本番の既定は `wide` の `wp2shell-bounty-v14-wide` にした（`src/profiles/wordpress/policy/campaign.json`。2026-10-26 に v14-wide から v16-wide に替え、2026-10-27 に v17-wide に替えた後、同日に v16-wide へ戻し、さらに同日、v16-wide の Finding が v14-wide の 1 割に留まった数字で v14-wide に戻した。ADR 0039 の 2026-10-27 追記 11 と 12）。`deep` の `wp2shell-bounty-v11` は名指しの Trial でだけ使う。
 - 探索は止めずに回す。本番で scope 内 Finding の group が週 15 件を超えたら Trial を減らす（監査 第 B.3 節の段 (4)。数え方は OPERATIONS 第 2 節）。数は上の表の Step 2 の引き金と同じである。
 - 記録だけ: 探索 Lab は、開発セットで `wide` の arm を 1 つ回してから残すかを決める。Claude の探索 runtime は残す。
 

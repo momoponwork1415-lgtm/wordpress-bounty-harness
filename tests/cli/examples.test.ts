@@ -41,7 +41,7 @@ it("starts the checked-in wide v14 campaign with one concurrent target on WordPr
   ) as unknown;
   const config = wordpressCampaignConfigSchema.parse(source);
   expect(config).toMatchObject({
-    promptId: "wp2shell-bounty-v16-wide",
+    promptId: "wp2shell-bounty-v14-wide",
     runWallTimeMinutes: 120,
   });
   expect(config.resources.maxConcurrentTargets).toBe(1);
@@ -85,7 +85,7 @@ it("starts the checked-in wide v14 campaign with one concurrent target on WordPr
     ).toBe(accepted);
 });
 
-it("runs the wide example as a 20-minute v16-wide Trial on the production selection policy (ADR 0039)", async () => {
+it("runs the wide example as a 20-minute v14-wide Trial on the production selection policy (ADR 0039)", async () => {
   const config = wordpressCampaignConfigSchema.parse(
     JSON.parse(
       await readFile(
@@ -107,7 +107,7 @@ it("runs the wide example as a 20-minute v16-wide Trial on the production select
       mode: "wide",
       minimumActiveMinutes: 0,
     },
-    promptId: "wp2shell-bounty-v16-wide",
+    promptId: "wp2shell-bounty-v14-wide",
     runWallTimeMinutes: 20,
   });
   // The production selection policy names the deep objective; both modes select from it.
