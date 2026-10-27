@@ -223,3 +223,20 @@ Programme Boundary を `wordfence-2026-10-26` 版にし、その節を次の文�
 - 変えないもの: 段 1 の規則の篩、段 2 の群、段 3 の Lab と判定器、追記 13 の申告欄による park（2 つ目の線として残す）。
 - 消し方: skill と OPERATIONS 第 3 節の表の 0b 行とこの追記を消す。記録した `reject` は別の判断を記録すれば handoff 列に戻る。
 
+## 2026-10-27 追記 15: 新しい Trial の契約節を v4 に戻す（申告欄を渡さない）
+
+追記 13 の契約 v5（申告欄 3 つと各値の説明を Finding schema に載せる）を受け取った Trial は、目的文に関わらず Finding が減った。同じ目的文 `wp2shell-bounty-v14-wide`、同じ選定帯、同じ Codex で、契約だけが違う 2 日の Root 単位の数字:
+
+| 日 | 契約 | 子の上限 | Trial | Finding | Finding が 1 件以上出た Trial | Trial あたりの中央値 | Lead |
+|---|---|---|---|---|---|---|---|
+| 10-26 | v4 | 4 | 21 | 76 | 16 | 2 | 78 |
+| 10-27 | v5 | 8 | 22 | 8 | 3 | 0 | 65 |
+
+v16-wide（42 Trial、Finding 0.3/Trial）と v17-wide（36 Trial、0）はどちらも v5 の下でしか走っていない。ADR 0039 の追記 11 と 12 で目的文の文に帰した減り方は、契約 v5 と切り分けられていなかった。候補の `candidate-held` は増えていない（10-27 の Codex で 0）ので、schema の検証で落ちたのではなく、エージェントが Finding として書かなくなった。schema の値の説明（「典型的なサイトでは作らない」「ベンダーだけが書く」など）が、Finding の条件として読まれたと見る。子の上限 8 は同時に変わっているので、この表だけでは完全には分けられない。
+
+決定:
+
+- 新しい Trial を起こせる行（`wp2shell-bounty-v11`、`wp2shell-bounty-v14-wide`、candidate の `wp2shell-bounty-v15-wide`）の契約を v4 に戻す。目的文の本文と digest は変わらない。archived の `v16-wide` と `v17-wide` は、走った Trial の `contractDigest` のとおり v5 のまま残す。
+- schema の 3 つの欄、`declared-precondition` の park、`review restore`、`review export` の出力は消さない。申告の無い Finding は park しないので、新しい Finding にこの park は当たらない。偽陽性は段 1b の `wbh-source-check`（追記 14）で落とす。
+- 測り方: 本番の次の 20 Codex Trial で Finding/Trial と「Finding が 1 件以上出た Trial の割合」を見る。v4 の 10-26 の水準（3.6/Trial、16/21）に戻れば契約が原因。戻らなければ子の上限 8 を 4 に戻して同じ 20 Trial を見る。
+- 消し方: 3 行の契約を v5 に戻す。schema と park は残っているので、それだけで欄が渡る。

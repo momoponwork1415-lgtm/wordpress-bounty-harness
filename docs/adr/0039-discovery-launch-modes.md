@@ -220,7 +220,7 @@ PR #537 のレビューで、再開（ADR 0036）が子の上限・最低時間�
 
 Lead は v14-wide の水準に戻ったが、Finding は戻らなかった。10-26 に v14-wide で Finding を出した 19 対象を v16-wide で 2 回ずつ走らせた pass@3 では、38 Trial のうち Finding が 1 件以上出たのは 5 対象の 6 Trial だった。v16-wide の文 1（ベンダーだけが置ける内容は攻撃者入力ではない）が Finding を書く手前で止める方向に効いているか、同時に変えた子の上限 8 が Root の動きを変えているかは、この数字では分けられない。ベンダー由来の層は段 1b の `wbh-source-check`（ADR 0038 追記 14）で落とせる（不成立 67 件のうち入力支配 no が 51 件）ので、目的文で絞る必要はない。
 
-- `wp2shell-bounty-v14-wide`（`sha256:42ec734364d93492bf9b936e415b94796da21fb154d3b29033cafbd58596229d`）を `wide` の `current` に戻す。本文、fragment、digest は変えない。契約は、新しい Trial を起こせる行の規則（ADR 0038 追記 13）に従って v5 を受け取る。契約節は Harness が生成する節なので、目的文の digest は変わらない。
+- `wp2shell-bounty-v14-wide`（`sha256:42ec734364d93492bf9b936e415b94796da21fb154d3b29033cafbd58596229d`）を `wide` の `current` に戻す。本文、fragment、digest は変えない。契約は、新しい Trial を起こせる行の規則（ADR 0038 追記 13）に従って v5 を受け取る。契約節は Harness が生成する節なので、目的文の digest は変わらない。（同日の ADR 0038 追記 15 で v4 に戻した。）
 - `wp2shell-bounty-v16-wide` は本文・`sinks-v16`・digest・契約 v5 を変えず `archived` にする（Trial が走ったので照合用に残す）。`src/profiles/wordpress/policy/campaign.json` と `examples/campaign-wide-20.json` の `promptId` を v14-wide に戻す。
 - 子の上限は変えない（本番は `discovery.maxChildren: 8` のまま）。目的文だけを戻すので、次の 10 Trial で Finding/Trial が 3 前後に戻れば文 1 が原因、戻らなければ子の上限 8 が原因と分けられる。
 - 比較候補の v15-wide は `candidate` のまま変えない。`deep` の v11 も変えない。

@@ -239,11 +239,11 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
       expect(WORDPRESS_PROMPT_SECTIONS).toContain(path.split("/")[0]);
   });
 
-  it("pins the generated v5 contract the composed objectives receive and keeps v4", () => {
+  it("pins the generated v4 contract the composed objectives receive and keeps v5 for the archived rows", () => {
     expect(wordPressDiscoveryOutputContractV5().digest).toBe(
       "sha256:4ead63b056590be4cbdd7f474bd79c7e301550454a7e4644d943a17bb0bd6ec4",
     );
-    // Archived rows and earlier Trials' `contractDigest` (#613).
+    // Launchable rows since 2026-10-27 (ADR 0038 addendum 15); v5 stays for the archived v16-wide and v17-wide.
     expect(wordPressDiscoveryOutputContractV4().digest).toBe(
       "sha256:5acd5157fc82cb76c35490af607513a1558477c4eb03acaa046fdf0a64c99883",
     );
