@@ -304,10 +304,15 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     id: "wp2shell-bounty-v14-wide",
     digest:
       "sha256:42ec734364d93492bf9b936e415b94796da21fb154d3b29033cafbd58596229d",
-    outputContract: "v4",
-    status: "archived",
+    outputContract: "v5",
+    status: "current",
+    mode: "wide",
     // v13-wide with only the sink strategy and fixed coordination fragments
-    // replaced (owner guidance 2026-10-26, ADR 0039 addendum).
+    // replaced (owner guidance 2026-10-26, ADR 0039 addendum). Restored as the
+    // wide current on 2026-10-27 (ADR 0039 addendum 12): v16-wide's vendor
+    // sentence, or the 8-child cap it ran under, cut Findings per Codex Trial
+    // from 3.6 to 0.3. Launchable rows receive the v5 contract (#613); the
+    // objective text and digest are unchanged.
     fragments: [
       TASK,
       { section: "objective", file: "first-principles-v11" },
@@ -348,14 +353,13 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:1ffb15f4f3f7ad6de70e330e10fd24c31513e41d250c8e0d6885b760a0a5c1f3",
     outputContract: "v5",
-    status: "current",
-    mode: "wide",
+    status: "archived",
     // v14-wide with one sentence of the sink strategy replaced (owner
     // instruction 2026-10-26: content only the vendor can place is not
     // attacker input): third-party content is attacker-placeable only when
     // someone other than the service's vendor can place it. Restored as the
-    // wide current on 2026-10-27 (ADR 0039 addendum 11): v17-wide's two
-    // stricter sentences cut Findings and Leads per Trial to about a seventh.
+    // wide current on 2026-10-27 (ADR 0039 addendum 11), then archived the
+    // same day (addendum 12): 42 Codex Trials gave 0.3 Findings per Trial.
     fragments: [
       TASK,
       { section: "objective", file: "first-principles-v11" },

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "discovery": { "lab": "none", "mode": "wide" },
   "selectionPolicyPath": "src/profiles/wordpress/policy/selection.json",
-  "promptId": "wp2shell-bounty-v16-wide",
+  "promptId": "wp2shell-bounty-v14-wide",
   "programmeBoundary": {
     "version": "wordfence-2026-10-17",
     "text": "Wordfence Bug Bounty Program, campaign boundary revised 2026-10-17. In scope for this campaign: impact reachable by an unauthenticated visitor, a Subscriber or a Customer. Highest value: arbitrary PHP file upload or read, arbitrary PHP file deletion, remote code execution, authentication bypass to admin, privilege escalation to admin. Also in scope: account takeover, stored XSS, SQL injection, arbitrary file read, download or delete, local or remote file inclusion, and directory traversal. Out of scope for this campaign: sensitive information disclosure; access to private, draft or password-protected content; basic information disclosure; arbitrary content deletion; arbitrary options update; privilege escalation or authentication bypass that stops below admin; reflected XSS; CSRF; missing authorization; IDOR; denial of service; business-logic-only impact; and routes requiring Contributor, Author, Editor, Shop Manager or Administrator, or an administrator's explicit configuration or grant of permissions."
