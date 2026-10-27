@@ -212,3 +212,14 @@ Programme Boundary を `wordfence-2026-10-26` 版にし、その節を次の文�
 計測: 本番ランナーの再起動の後に、新しい Finding のうち 3 つの欄をすべて申告した割合と、`declared-precondition` の park の件数を見る。2026-10-26 の Finding 9 件を手で当てると、スキャナ / 脆弱性データベースの 4 件は `vendor-controlled-data`（park）、WAF ログの 2 件は攻撃者自身の要求が残るので `public-third-party-content`（レビュー列）、配信サービスの 3 件はエージェントの申告次第になる。時間に頼る 6 件の reject は、`time-window` か `race` を申告すれば park に回る。
 
 消し方: `candidate-admission.ts` の `declared-precondition` の分岐と `finding.ts` の `wordPressDeclaredPreconditionPark` を消し、`review restore` の受け入れを旧 reason だけに戻す。prompt 表の 3 行（`v11`、`v16-wide`、`v15-wide`）を v4 の契約に戻せば、エージェントに欄が渡らなくなる。schema の 3 つの欄は、記録済みの Finding を読むために optional のまま残す。台帳の enum の `declared-precondition` と `declaredPrecondition` も、park 済みの event を読み続けるために残す。
+
+## 2026-10-27 追記 14: 段 1 と段 2 の間にソース読み直しの段 1b（`wbh-source-check`）を置く
+
+所有者決定 2026-10-27。探索の目的文で偽陽性を絞ると出力そのものが減る（ADR 0039 の 2026-10-27 追記 11）ので、目的文は広く報告する v16-wide に戻し、偽陽性は後段で落とす。落とす段は、探索エージェントの主張ではなく固定ソースを根拠にする。段 1 は review export の欄と規則の写ししか読まない（2026-10-23 追記 4）ので、別の段にする。
+
+- 段 1b の skill `wbh-source-check` v1 は、Finding ごとに固定ソース（対象、依存、WordPress 本体）だけを読み、2 つの問いに yes / no / unknown で答える。入力支配（低権限の攻撃者が典型的なサイトでその値を置けるか。ベンダー、管理者、公式 feed にしか置けない値は no）と、到達性（既定かもっともらしい設定で sink に届くか。管理者が安全でない形で自分で書く設定は no）である。両方 yes で `成立`、どちらか no で `不成立`、必要なソースが Snapshot に無ければ `未決`。
+- 対象ごとに agent 1 体、1 単位 10 件まで。実行も通信もしない。台帳には書かず、`不成立` の `review decide --decision reject --reason source-check:<input|reach>` を人間か運用者が打つ。`成立` は段 2 の群と段 3 の Lab へ進む。
+- 2026-10-27 に 2026-10-25 以降の Finding 162 件（25 対象、31 単位）へ当てた結果は成立 88・不成立 67・未決 7。不成立の内訳は入力支配 no 51、到達性 no 14、両方 no 2。所有者の 2026-10-26 の選別と 2 つの問いについて 159 / 162 で一致し、ずれ 3 件は人間側の理由に先例が混じるものだった。人間が同根、impact、市場性で外した 19 件はこの段では成立になり、それらの軸は段 2、出口の park、段 4 に残る。
+- 変えないもの: 段 1 の規則の篩、段 2 の群、段 3 の Lab と判定器、追記 13 の申告欄による park（2 つ目の線として残す）。
+- 消し方: skill と OPERATIONS 第 3 節の表の 0b 行とこの追記を消す。記録した `reject` は別の判断を記録すれば handoff 列に戻る。
+
