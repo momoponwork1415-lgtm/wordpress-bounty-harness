@@ -23,6 +23,7 @@ import {
   sealNativeRunReceipt,
   type NativeRunReceipt,
 } from "./native-run-receipts.js";
+import type { OneShotExecutor } from "./one-shot-run.js";
 import type { ProviderAttachmentStore } from "./provider-research-report.js";
 import { recordReadPaths } from "./read-paths.js";
 import { dependencyMountPathsOf } from "./sandbox-layout.js";
@@ -37,7 +38,7 @@ import {
 } from "./recover-agent-reports.js";
 
 type FinishedEvent = Extract<LedgerEventV1, { type: "discovery-run-finished" }>;
-type EventBase = {
+export type EventBase = {
   readonly schemaVersion: 1;
   readonly campaignId: string;
   readonly snapshotDigest: string;
@@ -64,6 +65,8 @@ export type TrialContext = {
      */
     release?(runId: string): Promise<void>;
   };
+  /** The one-shot transport of a partitioned Trial's roles (ADR 0042); absent on cooperative campaigns. */
+  readonly oneShotExecutor?: OneShotExecutor;
   readonly attachments: ProviderAttachmentStore;
   readonly evidence: PrivateArtifactStore;
   readonly ledger: Ledger;
@@ -96,6 +99,12 @@ export type TrialOutcome = {
   readonly findingsRecorded: number;
   /** What the Harness observed in the Trial's exploration Lab, when one was attached. */
   readonly lab?: TrialLabRecord;
+  /**
+   * A usage limit any run of the Trial met, even one that did not end the
+   * Trial (a tracer of a partial partitioned Trial, ADR 0042): the campaign
+   * backs off after the Trial either way.
+   */
+  readonly providerLimit?: "rate-limit" | "quota";
 };
 
 type TrialDraft = { -readonly [K in keyof TrialOutcome]: TrialOutcome[K] };
@@ -161,10 +170,10 @@ function assertPlannedForInput(
     throw new Error("Planned run differs from the CampaignInput");
 }
 
-type Cancellation = {
+export type Cancellation<Result = DiscoveryTransportResult> = {
   readonly signal: AbortSignal;
-  /** Resolves with a synthetic receipt once a cancelled transport stays silent. */
-  readonly fallback: Promise<DiscoveryTransportResult>;
+  /** Resolves with a synthetic result once a cancelled transport stays silent. */
+  readonly fallback: Promise<Result>;
   /** The transport answered; the wall no longer applies to what follows. */
   readonly disarmWall: () => void;
   readonly dispose: () => void;
@@ -173,13 +182,16 @@ type Cancellation = {
 /**
  * The wall and the operator cancel the transport through one signal. A
  * transport that ignores its cancellation is answered after a grace period so
- * the ledger still receives a finish.
+ * the ledger still receives a finish. The partitioned executor arms one per
+ * role run with its own result shape.
  */
-function armCancellation(options: {
+export function armCancellation<
+  Result extends { readonly receipt: NativeRunReceipt },
+>(options: {
   readonly operator: AbortSignal | undefined;
   readonly runWallTimeMs: number | undefined;
-  readonly receiptOnSilence: (reason: "wall" | "operator") => NativeRunReceipt;
-}): Cancellation {
+  readonly resultOnSilence: (reason: "wall" | "operator") => Result;
+}): Cancellation<Result> {
   const controller = new AbortController();
   const timers: { wall?: NodeJS.Timeout; shutdown?: NodeJS.Timeout } = {};
   const onOperatorStop = () => controller.abort("operator");
@@ -190,15 +202,15 @@ function armCancellation(options: {
       () => controller.abort("wall"),
       options.runWallTimeMs,
     );
-  const fallback = new Promise<DiscoveryTransportResult>((resolve) => {
+  const fallback = new Promise<Result>((resolve) => {
     const afterAbort = () => {
       timers.shutdown = setTimeout(
         () => {
-          resolve({
-            receipt: options.receiptOnSilence(
+          resolve(
+            options.resultOnSilence(
               controller.signal.reason === "operator" ? "operator" : "wall",
             ),
-          });
+          );
         },
         Math.min(70_000, options.runWallTimeMs ?? 70_000),
       );
@@ -222,7 +234,9 @@ function armCancellation(options: {
 }
 
 /** A transport receipt that ended short of completion names the failure. */
-function failureOf(receipt: NativeRunReceipt): ReportFailure | undefined {
+export function failureOf(
+  receipt: NativeRunReceipt,
+): ReportFailure | undefined {
   if (receipt.terminal !== "incomplete" || receipt.reason === "unavailable")
     return undefined;
   return {
@@ -337,10 +351,10 @@ export async function executeTrial(
       startedAt,
       completedAt: clock().toISOString(),
     });
-  const cancellation = armCancellation({
+  const cancellation = armCancellation<DiscoveryTransportResult>({
     operator: context.signal,
     runWallTimeMs,
-    receiptOnSilence: syntheticReceipt,
+    resultOnSilence: (reason) => ({ receipt: syntheticReceipt(reason) }),
   });
   await context.lab?.open();
   let execution: Promise<DiscoveryTransportResult> | undefined;

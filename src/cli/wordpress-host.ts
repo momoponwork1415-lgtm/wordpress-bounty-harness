@@ -7,6 +7,7 @@ import { z } from "zod";
 import {
   agentRuntimeProfileDefinitionSchema,
   ClaudeNativeAgentRuntime,
+  ClaudeOneShotRuntime,
   claudeRuntimeProfileDefinitionSchema,
   CodexNativeAgentRuntime,
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB,
@@ -460,8 +461,10 @@ export async function createWordPressHostProfile(options: {
       wordPressLabCommandRule,
       state.clock,
     );
+    // ADR 0042: a partitioned campaign runs every role on Claude, whatever the share.
     const claude =
-      (config.discovery.runtimeShare?.claude ?? 0) === 0
+      (config.discovery.runtimeShare?.claude ?? 0) === 0 &&
+      config.discovery.mode !== "partitioned"
         ? undefined
         : await claudeBoundary({
             host,
@@ -776,7 +779,7 @@ async function claudeBoundary(options: {
   const claude = options.host.claude;
   if (claude === undefined)
     throw new Error(
-      "The campaign assigns targets to Claude, but the host config has no claude section",
+      "The campaign uses the Claude runtime (share or partitioned mode), but the host config has no claude section",
     );
   const scratch = join(options.host.workDirectory, "claude-scratch");
   await mkdir(scratch, { recursive: true, mode: 0o700 });
@@ -825,22 +828,29 @@ async function claudeBoundary(options: {
     throw new Error(
       `Claude preflight failed; nothing was started:\n${problems.map((problem) => `  claude-runtime: ${problem}`).join("\n")}`,
     );
+  const broker = createProviderCredentialEgressBroker({
+    dockerExecutablePath: options.host.dockerExecutablePath,
+    brokerImage: options.host.images.broker,
+    credentialFilePath: claude.credentialFilePath,
+    credentialKind: "anthropic-oauth",
+    scratchRootDirectory: join(options.host.workDirectory, "broker-scratch"),
+    proxyBundleDirectory: options.proxyBundleDirectory,
+    clock: options.clock,
+  });
   return {
     runtimeProfile,
     executor: new ClaudeNativeAgentRuntime(
       sandbox,
-      createProviderCredentialEgressBroker({
-        dockerExecutablePath: options.host.dockerExecutablePath,
-        brokerImage: options.host.images.broker,
-        credentialFilePath: claude.credentialFilePath,
-        credentialKind: "anthropic-oauth",
-        scratchRootDirectory: join(
-          options.host.workDirectory,
-          "broker-scratch",
-        ),
-        proxyBundleDirectory: options.proxyBundleDirectory,
-        clock: options.clock,
-      }),
+      broker,
+      options.attachments,
+      claude.image,
+      wordPressLabCommandRule,
+      options.clock,
+    ),
+    // The roles of a partitioned Trial (ADR 0042): one turn, no children, own wall.
+    oneShot: new ClaudeOneShotRuntime(
+      sandbox,
+      broker,
       options.attachments,
       claude.image,
       wordPressLabCommandRule,

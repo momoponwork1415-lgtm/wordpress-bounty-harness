@@ -1240,6 +1240,14 @@ describe("Ledger public interface", () => {
     expect(ledger.funnel("campaign-1")).toEqual({
       campaignId: "campaign-1",
       discoveryAttempts: 1,
+      attemptOutcomes: {
+        completed: 1,
+        completedWithoutCandidate: 0,
+        incomplete: 0,
+        incompleteByReason: {},
+        providerLimited: 0,
+        unfinished: 0,
+      },
       incompleteDepth: 0,
       byLab: {
         attached: { runs: 2, findings: 4, confirmed: 1 },
@@ -1596,6 +1604,15 @@ describe("Ledger public interface", () => {
       runCount: 3,
       wallTimeMs: 6_000,
       byLab: { none: { runs: 2 }, attached: { runs: 0 } },
+      // The refused run's attempt ended with its resumed segment: completed,
+      // and a genuine zero, like the old run.
+      attemptOutcomes: {
+        completed: 2,
+        completedWithoutCandidate: 2,
+        incomplete: 0,
+        providerLimited: 0,
+        unfinished: 0,
+      },
     });
     expect(funnel.byObjective["wp2shell-bounty-v8"]).toMatchObject({
       runs: 1,

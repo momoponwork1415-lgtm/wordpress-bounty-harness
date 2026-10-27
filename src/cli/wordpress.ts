@@ -8,13 +8,21 @@ import {
   assessTrialResume,
   assignDiscoveryRuntime,
   DEFAULT_MAX_CHILDREN,
+  defineClaudeRuntimeProfile,
   DISCOVERY_LEFTOVER_PATTERNS,
   executeTrialResume,
+  PARTITION_INPUT_FILES,
+  PARTITIONED_TARGET_CEILING_MS,
+  partitionLimitsSection,
   providerLimitedAutoResumeRefusal,
   recordInterruptedRun,
   runParametersSection,
+  SANDBOX_INPUT_MOUNT_PATH,
 } from "../discovery/index.js";
 import type {
+  AgentRuntimeProfile,
+  OneShotToolFile,
+  PartitionedRolePlan,
   PlannedDiscoveryRun,
   ResumePlan,
   RunParameters,
@@ -36,8 +44,17 @@ import {
   wordPressDiscoveryOutputContract,
   wordPressDiscoveryOutputContractV2,
   wordPressDiscoveryOutputContractV4,
+  wordPressDiscoveryOutputContractV4Solo,
   wordPressDiscoveryOutputContractV5,
 } from "../profiles/wordpress/discovery/output-contract.js";
+import {
+  loadWordPressEnumerationTool,
+  wordPressEnumerationToolsDigest,
+} from "../profiles/wordpress/discovery/tools.js";
+import {
+  loadWordPressRoleDefinition,
+  WORDPRESS_CURRENT_ROLE_DEFINITION_IDS,
+} from "../profiles/wordpress/prompts/roles.js";
 import type {
   WordPressLabHandle,
   WordPressLabSetup,
@@ -723,10 +740,289 @@ function wordPressSourceMounts(source: WordPressDiscoverySource) {
   };
 }
 
-async function planWordPressDiscovery(
+/** The source mount notes every role receives, as the cooperative prompt states them. */
+function wordPressSourceNotes(source: WordPressDiscoverySource): string[] {
+  return [
+    ...(source.dependency === undefined
+      ? []
+      : [`WordPress core source (read-only): ${source.dependency.path}.`]),
+    ...(source.dependencySources ?? []).map(
+      (dependency) => `Dependency source (read-only): ${dependency.path}.`,
+    ),
+  ];
+}
+
+const sha256 = (text: string) =>
+  `sha256:${createHash("sha256").update(text).digest("hex")}`;
+
+/**
+ * The runtime profile one role runs on: the host's Claude profile, with the
+ * role's model and effort when the config names them. Both roles of a Trial
+ * must agree, because one CampaignInput binds one profile digest.
+ */
+function wordPressRoleProfile(
+  base: AgentRuntimeProfile,
+  role: {
+    readonly model?: string | undefined;
+    readonly effort?: string | undefined;
+  },
+): AgentRuntimeProfile {
+  if (base.transportKind !== "claude-code/v1")
+    throw new Error("A partitioned Trial runs on the Claude runtime only");
+  if (role.model === undefined && role.effort === undefined) return base;
+  const requestedModelId = (role.model ??
+    base.requestedModelId) as typeof base.requestedModelId;
+  const requestedEffort = (role.effort ??
+    base.requestedEffort) as typeof base.requestedEffort;
+  return defineClaudeRuntimeProfile(
+    {
+      id: base.id,
+      requestedModelId,
+      requestedEffort,
+      claudeCliVersion: base.claudeCliVersion,
+      authenticationMethod: base.authenticationMethod,
+      subagent: { modelId: requestedModelId, effort: requestedEffort },
+    },
+    base.sandboxImageDigest,
+  );
+}
+
+/**
+ * One partitioned Trial per target (ADR 0042): the enumerator's prompt is its
+ * role body, the enforced run parameters and limits, and the source notes;
+ * a tracer's is its role body, the partition objective, the solo contract,
+ * the trust and Programme boundaries and the source notes, with the
+ * partition itself in `/workspace/input/partition.json`. Every role mounts
+ * the tool files the config names. Existing prompt ids and texts are reused
+ * unchanged.
+ */
+export async function planWordPressPartitionedDiscovery(
   { snapshot, lab }: WordPressDiscoveryInput,
   context: WordPressDiscoveryContext,
 ): Promise<WordPressDiscoveryPlan> {
+  const { config, boundaries, state, objective, trustBoundary } = context;
+  const discovery = config.discovery;
+  if (
+    discovery.mode !== "partitioned" ||
+    discovery.enumerator === undefined ||
+    discovery.partition === undefined ||
+    discovery.tracer === undefined
+  )
+    throw new Error("The campaign is not partitioned");
+  if (lab !== undefined || discovery.lab.mode !== "none")
+    throw new Error("The partitioned mode runs without an exploration Lab");
+  if (discovery.enumerator.rowSource !== "agent")
+    throw new Error(
+      "rowSource script-only is the stage 3 measurement arm; not runnable yet",
+    );
+  if (wordPressDiscoveryModeOf(objective.id) !== "partitioned")
+    throw new Error("The partitioned mode runs a partitioned objective only");
+  const claude = boundaries.claude;
+  if (claude?.oneShot === undefined)
+    throw new Error(
+      "The partitioned mode needs the host's Claude runtime with one-shot runs",
+    );
+  const enumeratorProfile = wordPressRoleProfile(
+    claude.runtimeProfile,
+    discovery.enumerator,
+  );
+  const tracerProfile = wordPressRoleProfile(
+    claude.runtimeProfile,
+    discovery.tracer,
+  );
+  if (enumeratorProfile.digest !== tracerProfile.digest)
+    throw new Error(
+      "The enumerator and tracer must run on the same model and effort in stage 1",
+    );
+  const profile = enumeratorProfile;
+  const [enumeratorRole, tracerRole, source] = await Promise.all([
+    loadWordPressRoleDefinition(
+      WORDPRESS_CURRENT_ROLE_DEFINITION_IDS.enumerator,
+    ),
+    loadWordPressRoleDefinition(WORDPRESS_CURRENT_ROLE_DEFINITION_IDS.tracer),
+    boundaries.sourceFor(snapshot),
+  ]);
+  const toolIds = [...new Set(discovery.enumerator.tools)];
+  const toolFiles: OneShotToolFile[] = (
+    await Promise.all(toolIds.map(loadWordPressEnumerationTool))
+  ).map((tool) => ({ name: tool.file, content: tool.bytes }));
+  const toolsDigest = wordPressEnumerationToolsDigest(toolIds);
+  const limits = discovery.partition;
+  const runtime = {
+    transportKind: profile.transportKind,
+    model: profile.requestedModelId,
+    effort: profile.requestedEffort,
+  };
+  const enumeratorParameters: RunParameters = {
+    wallMinutes: discovery.enumerator.wallMinutes,
+    minimumActiveMinutes: 0,
+    maxChildren: 0,
+    lab: { mode: "none", maxResets: discovery.lab.maxResets },
+    runtime,
+  };
+  const sourceNotes = wordPressSourceNotes(source);
+  const enumeratorPrompt = [
+    enumeratorRole.body.trim(),
+    runParametersSection(enumeratorParameters),
+    partitionLimitsSection({
+      ...limits,
+      sentBack: {
+        previous: `${SANDBOX_INPUT_MOUNT_PATH}/${PARTITION_INPUT_FILES.previous}`,
+        reasons: `${SANDBOX_INPUT_MOUNT_PATH}/${PARTITION_INPUT_FILES.sentBack}`,
+      },
+    }),
+    ...sourceNotes,
+  ].join("\n\n");
+  const contract = wordPressDiscoveryOutputContractV4Solo();
+  const tracerPrompt = [
+    tracerRole.body.trim(),
+    objective.text.trim(),
+    contract.text,
+    "## Trust boundary",
+    trustBoundary.text.trim(),
+    `## Programme Boundary (${config.programmeBoundary.version})`,
+    config.programmeBoundary.text.trim(),
+    ...sourceNotes,
+  ].join("\n\n");
+  const shared = {
+    trustBoundaryVersion: trustBoundary.id,
+    sourcePack: {
+      dependency:
+        source.dependency === undefined
+          ? ("none" as const)
+          : ("mounted" as const),
+    },
+    labAccess: { database: "none" as const },
+    runtime: profile.transportKind,
+    mode: "partitioned" as const,
+    lab: { mode: "none" as const, maxResets: discovery.lab.maxResets },
+    model: profile.requestedModelId,
+    effort: profile.requestedEffort,
+  };
+  const mounts = wordPressSourceMounts(source);
+  // The enumerator never sees the objective: its prompt is its own role
+  // body, so its start event names that body, not the tracer objective.
+  const enumerate: PartitionedRolePlan = {
+    configuration: {
+      ...shared,
+      promptVariant: enumeratorRole.id,
+      promptDigest: enumeratorRole.digest,
+      inputDigest: sha256(enumeratorPrompt),
+      wallMinutes: discovery.enumerator.wallMinutes,
+      role: {
+        kind: enumeratorRole.role,
+        definitionDigest: enumeratorRole.digest,
+        toolsDigest,
+      },
+    },
+    run: {
+      targetSnapshotDigest: snapshot.digest,
+      profile,
+      prompt: enumeratorPrompt,
+      toolFiles,
+      output: "files",
+      wallMs: discovery.enumerator.wallMinutes * 60_000,
+      ...mounts,
+    },
+  };
+  const trace: PartitionedRolePlan = {
+    configuration: {
+      ...shared,
+      promptVariant: objective.id,
+      promptDigest: objective.digest,
+      objectiveDigest: objective.digest,
+      contractDigest: contract.digest,
+      ...(objective.sectionDigests === undefined
+        ? {}
+        : { sectionDigests: objective.sectionDigests }),
+      inputDigest: sha256(tracerPrompt),
+      wallMinutes: discovery.tracer.wallMinutes,
+      role: {
+        kind: tracerRole.role,
+        definitionDigest: tracerRole.digest,
+        toolsDigest,
+      },
+    },
+    run: {
+      targetSnapshotDigest: snapshot.digest,
+      profile,
+      prompt: tracerPrompt,
+      toolFiles,
+      output: "report",
+      wallMs: discovery.tracer.wallMinutes * 60_000,
+      ...mounts,
+    },
+  };
+  // The worst case the config's superRefine already bounded; enforced again here.
+  const targetWallMs = Math.min(
+    PARTITIONED_TARGET_CEILING_MS,
+    (discovery.enumerator.wallMinutes * (1 + limits.maxResubmits) +
+      Math.ceil(limits.maxPartitions / discovery.tracer.maxParallel) *
+        discovery.tracer.wallMinutes) *
+      60_000,
+  );
+  const trialId = state.newId();
+  return {
+    input: {
+      schemaVersion: 1,
+      snapshotDigest: snapshot.digest,
+      trustBoundary: { version: trustBoundary.id, text: trustBoundary.text },
+      programmeBoundary: config.programmeBoundary,
+      modelProfileDigest: profile.digest,
+      promptDigest: objective.digest,
+      stopRules: { maxRuns: 1, noFindingRuns: 1 },
+      lab: { mode: "none" },
+      history: { mode: "none" },
+    },
+    concurrency: 1,
+    plannedTrials: [
+      {
+        trialId,
+        trialOrdinal: 0,
+        // The Trial's attempt for the campaign loop: the enumerator's first run.
+        explore: {
+          configuration: enumerate.configuration,
+          run: {
+            runId: trialId,
+            targetSnapshotDigest: snapshot.digest,
+            profile,
+            prompt: enumeratorPrompt,
+            ...mounts,
+            expiresAt: new Date(
+              state.clock().getTime() + targetWallMs,
+            ).toISOString(),
+          },
+        },
+        partitioned: {
+          enumerate,
+          trace,
+          limits,
+          maxParallel: discovery.tracer.maxParallel,
+          targetWallMs,
+          rowSource: discovery.enumerator.rowSource,
+          definitionDigests: {
+            enumerator: enumeratorRole.digest,
+            tracer: tracerRole.digest,
+          },
+          toolsDigest,
+        },
+      },
+    ],
+    executor: claude.executor,
+    oneShotExecutor: claude.oneShot,
+    attachments: boundaries.attachments,
+    recordReport: recordWordPressReport,
+  };
+}
+
+async function planWordPressDiscovery(
+  input: WordPressDiscoveryInput,
+  context: WordPressDiscoveryContext,
+): Promise<WordPressDiscoveryPlan> {
+  // ADR 0042: the role-based Trial has its own planner; deep and wide are unchanged.
+  if (context.config.discovery.mode === "partitioned")
+    return planWordPressPartitionedDiscovery(input, context);
+  const { snapshot, lab } = input;
   const { config, repeat, boundaries, state, objective, trustBoundary } =
     context;
   if ((lab === undefined) !== (config.discovery.lab.mode === "none"))

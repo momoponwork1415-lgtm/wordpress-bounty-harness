@@ -524,6 +524,17 @@ export function formatResumeRow(row: ResumeRow): string {
   ].join("  ");
 }
 
+/** The attempts by their end: a genuine zero is told apart from an incomplete Trial (ADR 0033). */
+function attemptLine(outcomes: CampaignFunnel["attemptOutcomes"]): string {
+  const reasons = Object.keys(outcomes.incompleteByReason).sort();
+  return [
+    `attempts: completed ${outcomes.completed} (without candidate ${outcomes.completedWithoutCandidate})`,
+    `incomplete ${outcomes.incomplete}${reasons.length === 0 ? "" : ` [${reasons.map((reason) => `${reason} ${outcomes.incompleteByReason[reason]}`).join(", ")}]`}`,
+    `provider-limited ${outcomes.providerLimited}`,
+    `unfinished ${outcomes.unfinished}`,
+  ].join("  ");
+}
+
 export function formatFunnel(funnel: CampaignFunnel): string[] {
   const rate = (value: number | null) =>
     value === null ? "unavailable" : value.toFixed(2);
@@ -538,6 +549,9 @@ export function formatFunnel(funnel: CampaignFunnel): string[] {
   const lines = [
     `campaign ${funnel.campaignId}`,
     `agent runs ${funnel.runCount} (discovery attempts ${funnel.discoveryAttempts})  ${cost}  summed agent time ${(funnel.wallTimeMs / 1000).toFixed(1)}s`,
+    ...(funnel.discoveryAttempts > 0
+      ? [attemptLine(funnel.attemptOutcomes)]
+      : []),
     ...(funnel.incompleteDepth > 0
       ? [`incomplete(depth) ${funnel.incompleteDepth}`]
       : []),

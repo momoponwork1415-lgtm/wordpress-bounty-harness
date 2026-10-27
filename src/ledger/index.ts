@@ -840,6 +840,121 @@ function activeParkedFromEvents(
   }
   return [...parked.values()];
 }
+type FinishedRunEvent = Extract<
+  LedgerEventV1,
+  { type: "discovery-run-finished" }
+>;
+
+/**
+ * Each attempt's end, from its runs' finishes (ADR 0033 / 0042). A Root's
+ * attempt ends with its latest resume segment; a partitioned Trial's with its
+ * enumeration record, its last enumerate finish and its tracer finishes.
+ */
+function classifyAttempts(
+  attempts: readonly string[],
+  runs: {
+    readonly runKinds: ReadonlyMap<string, string>;
+    readonly resumedBy: ReadonlyMap<string, string>;
+    readonly finishedRuns: ReadonlyMap<string, FinishedRunEvent>;
+    readonly enumerations: ReadonlyMap<
+      string,
+      Extract<LedgerEventV1, { type: "enumeration-recorded" }>
+    >;
+    readonly trialByRun: ReadonlyMap<string, string>;
+    readonly candidateRuns: ReadonlySet<string>;
+  },
+): AttemptOutcomes {
+  const counts = {
+    completed: 0,
+    completedWithoutCandidate: 0,
+    incomplete: 0,
+    incompleteByReason: Object.create(null) as Record<string, number>,
+    providerLimited: 0,
+    unfinished: 0,
+  };
+  const runsOfTrial = new Map<string, string[]>();
+  for (const [runId, trialId] of runs.trialByRun)
+    (runsOfTrial.get(trialId) ??
+      runsOfTrial.set(trialId, []).get(trialId))!.push(runId);
+  const reachedCandidate = (trialId: string) =>
+    (runsOfTrial.get(trialId) ?? [trialId]).some((runId) =>
+      runs.candidateRuns.has(runId),
+    );
+  const incomplete = (
+    finish: FinishedRunEvent | undefined,
+    reason?: string,
+  ) => {
+    counts.incomplete++;
+    const key =
+      reason ??
+      (finish?.reason === undefined
+        ? "unrecorded"
+        : finish.reasonDetail === undefined
+          ? finish.reason
+          : `${finish.reason}/${finish.reasonDetail}`);
+    counts.incompleteByReason[key] = (counts.incompleteByReason[key] ?? 0) + 1;
+  };
+  const completed = (trialId: string) => {
+    counts.completed++;
+    if (!reachedCandidate(trialId)) counts.completedWithoutCandidate++;
+  };
+  for (const runId of attempts) {
+    const trialId = runs.trialByRun.get(runId) ?? runId;
+    if (runs.runKinds.get(runId) === "enumerate") {
+      const enumeration = runs.enumerations.get(trialId);
+      if (enumeration?.accepted === false) {
+        incomplete(undefined, "schema/enumeration-rejected");
+        continue;
+      }
+      const enumerates = (runsOfTrial.get(trialId) ?? []).filter(
+        (id) => runs.runKinds.get(id) === "enumerate",
+      );
+      const latest = runs.finishedRuns.get(enumerates.at(-1) ?? runId);
+      if (latest === undefined) {
+        counts.unfinished++;
+        continue;
+      }
+      if (latest.outcome === "provider-limited") {
+        counts.providerLimited++;
+        continue;
+      }
+      if (latest.outcome !== "completed") {
+        incomplete(latest);
+        continue;
+      }
+      if (enumeration === undefined) {
+        counts.unfinished++;
+        continue;
+      }
+      const traces = (runsOfTrial.get(trialId) ?? []).flatMap((id) => {
+        const finish = runs.finishedRuns.get(id);
+        return runs.runKinds.get(id) === "trace" && finish !== undefined
+          ? [finish]
+          : [];
+      });
+      if (traces.some((finish) => finish.outcome === "completed"))
+        completed(trialId);
+      else if (traces.length === 0) counts.unfinished++;
+      else if (traces.some((finish) => finish.outcome === "provider-limited"))
+        counts.providerLimited++;
+      else incomplete(traces[0]);
+      continue;
+    }
+    let latestRun = runId;
+    const seen = new Set<string>();
+    while (runs.resumedBy.has(latestRun) && !seen.has(latestRun)) {
+      seen.add(latestRun);
+      latestRun = runs.resumedBy.get(latestRun)!;
+    }
+    const finish = runs.finishedRuns.get(latestRun);
+    if (finish === undefined) counts.unfinished++;
+    else if (finish.outcome === "completed") completed(trialId);
+    else if (finish.outcome === "provider-limited") counts.providerLimited++;
+    else incomplete(finish);
+  }
+  return { ...counts, incompleteByReason: { ...counts.incompleteByReason } };
+}
+
 export type FunnelCounts = {
   readonly reached: number;
   readonly accepted: number;
@@ -875,9 +990,27 @@ export type UsageRow = {
   readonly unavailable: Readonly<Record<UsageField, number>>;
 };
 
+/**
+ * Each discovery attempt by how its Trial ended (ADR 0033 / 0042): a
+ * completed attempt that reached no candidate is a genuine zero; an
+ * incomplete one is not, and carries its reason. A partitioned Trial is
+ * incomplete when its enumeration was rejected or no tracer completed.
+ */
+type AttemptOutcomes = {
+  readonly completed: number;
+  readonly completedWithoutCandidate: number;
+  readonly incomplete: number;
+  /** `reason` or `reason/reasonDetail` of each incomplete attempt. */
+  readonly incompleteByReason: Readonly<Record<string, number>>;
+  readonly providerLimited: number;
+  /** Attempts whose latest run has no finish. */
+  readonly unfinished: number;
+};
+
 export type CampaignFunnel = FunnelCounts & {
   readonly campaignId: string;
   readonly discoveryAttempts: number;
+  readonly attemptOutcomes: AttemptOutcomes;
   readonly incompleteDepth: number;
   readonly byLab: Readonly<Record<"attached" | "none", ArmCounts>>;
   readonly verificationLabFailed: number;
@@ -1651,6 +1784,19 @@ export class Ledger {
     >();
     /** Resume segments continue an earlier run's Trial; they are not new attempts (ADR 0036). */
     const resumeSegments = new Set<string>();
+    /** A send-back continues the enumerate run's attempt (ADR 0042). */
+    const resubmitRuns = new Set<string>();
+    const resumedBy = new Map<string, string>();
+    const finishedRuns = new Map<
+      string,
+      Extract<LedgerEventV1, { type: "discovery-run-finished" }>
+    >();
+    const enumerations = new Map<
+      string,
+      Extract<LedgerEventV1, { type: "enumeration-recorded" }>
+    >();
+    /** Runs that reached at least one candidate, normalized or held. */
+    const candidateRuns = new Set<string>();
     const trialByRun = new Map<string, string>();
     const runArms = new Map<string, string[]>();
     const objectiveByRun = new Map<string, string>();
@@ -1715,8 +1861,15 @@ export class Ledger {
             current.labAttached === false ? "none" : "attached",
           );
           runKinds.set(current.runId, current.runKind ?? "explore");
-          if (current.resumesRun !== undefined)
+          if (current.resumesRun !== undefined) {
             resumeSegments.add(current.runId);
+            resumedBy.set(current.resumesRun, current.runId);
+          }
+          if (
+            current.runKind === "enumerate" &&
+            (current.configuration.role?.resubmit ?? 0) > 0
+          )
+            resubmitRuns.add(current.runId);
           trialByRun.set(current.runId, current.trialId ?? current.runId);
           objectiveByRun.set(
             current.runId,
@@ -1762,6 +1915,10 @@ export class Ledger {
           }
           if (current.outcome === "setup-failed")
             setupFailedRuns.add(current.runId);
+          finishedRuns.set(current.runId, current);
+          break;
+        case "enumeration-recorded":
+          enumerations.set(current.trialId, current);
           break;
         case "candidate-normalized":
         case "candidate-held":
@@ -1769,6 +1926,8 @@ export class Ledger {
           const boundary = `${current.runId}\0${current.candidateKind}`;
           const key = `${boundary}\0${current.candidateIndex}`;
           candidateKeys.add(key);
+          if (current.type !== "candidate-rejected")
+            candidateRuns.add(current.runId);
           if (current.type === "candidate-normalized") {
             normalizationSeen.add(boundary);
             heldKeys.delete(key);
@@ -1785,6 +1944,8 @@ export class Ledger {
           break;
         }
         case "finding-recorded":
+          if (current.derivationKind !== "fixed-version-control")
+            candidateRuns.add(current.runId);
           if (
             current.derivationKind !== "fixed-version-control" &&
             !normalizationSeen.has(`${current.runId}\0finding`)
@@ -1797,6 +1958,7 @@ export class Ledger {
             findings.set(current.findingId, current);
           break;
         case "lead-recorded":
+          candidateRuns.add(current.runId);
           if (!normalizationSeen.has(`${current.runId}\0lead`))
             legacyReached.push({
               runId: current.runId,
@@ -2069,17 +2231,30 @@ export class Ledger {
       )
         byLab[lab].confirmed++;
     }
-    const discoveryAttempts = [...startedRuns.entries()].filter(
-      ([runId, labId]) =>
-        // ADR 0042: a partitioned Trial's attempt is its enumerate run; its
-        // tracer runs belong to that attempt, as children do to a Root.
-        runKinds.get(runId) !== "child" &&
-        runKinds.get(runId) !== "trace" &&
-        !resumeSegments.has(runId) &&
-        (labByRun.get(runId) === "none" ||
-          (labId !== undefined && readyLabs.has(labId))) &&
-        !setupFailedRuns.has(runId),
-    ).length;
+    const attempts = [...startedRuns.entries()]
+      .filter(
+        ([runId, labId]) =>
+          // ADR 0042: a partitioned Trial's attempt is its enumerate run; its
+          // send-backs and tracer runs belong to that attempt, as children
+          // do to a Root.
+          runKinds.get(runId) !== "child" &&
+          runKinds.get(runId) !== "trace" &&
+          !resubmitRuns.has(runId) &&
+          !resumeSegments.has(runId) &&
+          (labByRun.get(runId) === "none" ||
+            (labId !== undefined && readyLabs.has(labId))) &&
+          !setupFailedRuns.has(runId),
+      )
+      .map(([runId]) => runId);
+    const discoveryAttempts = attempts.length;
+    const attemptOutcomes = classifyAttempts(attempts, {
+      runKinds,
+      resumedBy,
+      finishedRuns,
+      enumerations,
+      trialByRun,
+      candidateRuns,
+    });
     const incompleteDepth = events.filter(
       (event) =>
         event.type === "discovery-run-finished" &&
@@ -2145,6 +2320,7 @@ export class Ledger {
     return {
       campaignId: campaign,
       discoveryAttempts,
+      attemptOutcomes,
       incompleteDepth,
       byLab,
       verificationLabFailed,

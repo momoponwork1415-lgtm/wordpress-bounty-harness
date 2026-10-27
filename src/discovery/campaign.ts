@@ -19,6 +19,11 @@ import {
   type TrialContext,
   type TrialOutcome,
 } from "./execute-trial.js";
+import type { OneShotExecutor } from "./one-shot-run.js";
+import {
+  executePartitionedTrial,
+  type PartitionedTrialPlan,
+} from "./partitioned-trial.js";
 import type { ProviderAttachmentStore } from "./provider-research-report.js";
 import type { ReportRecorder } from "./record-discovery-report.js";
 
@@ -83,6 +88,14 @@ export type PlannedDiscoveryRun = {
     readonly runtime?: "codex-native/v1" | "claude-code/v1";
     /** The launch mode the campaign config fixed for this Trial (ADR 0039, 0042). */
     readonly mode?: "deep" | "wide" | "partitioned";
+    /** ADR 0042: the role of a partitioned Trial's run; the executor adds `partitionId` / `resubmit`. */
+    readonly role?: {
+      readonly kind: string;
+      readonly definitionDigest: string;
+      readonly toolsDigest?: string;
+      readonly partitionId?: string;
+      readonly resubmit?: number;
+    };
     /** What the Harness enforced, as the Run parameters section states it. */
     readonly wallMinutes?: number;
     readonly minimumActiveMinutes?: number;
@@ -100,7 +113,13 @@ export type PlannedDiscoveryRun = {
 export type PlannedTrial = {
   readonly trialId: string;
   readonly trialOrdinal: number;
+  /**
+   * The Trial's attempt: the cooperative Root run, or in a partitioned Trial
+   * (ADR 0042) the enumerator's first run, whose id is the Trial's.
+   */
   readonly explore: PlannedDiscoveryRun;
+  /** ADR 0042: the roles and limits of a partitioned Trial; the one-shot executor runs it. */
+  readonly partitioned?: PartitionedTrialPlan;
   /** Set only by an operator-triggered resume (ADR 0036): the refused run this segment continues. */
   readonly resumes?: { readonly runId: string; readonly segment: number };
   /**
@@ -119,6 +138,13 @@ export type DiscoveryStop =
   | "plans-exhausted"
   | "provider-limit"
   | "incomplete";
+
+type TrialFailure = {
+  readonly runId: string;
+  readonly reason: string;
+  readonly reasonDetail?: string;
+  readonly providerLimit?: "rate-limit" | "quota";
+};
 
 export type ProviderLimitedResumeResult =
   | { readonly status: "resumed"; readonly outcome: TrialOutcome }
@@ -153,6 +179,8 @@ export async function runDiscoveryCampaign(options: {
     /** Called once a run's finish is appended (#512). */
     release?(runId: string): Promise<void>;
   };
+  /** Runs the roles of partitioned Trials (ADR 0042); required when any planned Trial is one. */
+  readonly oneShotExecutor?: OneShotExecutor;
   readonly attachments: ProviderAttachmentStore;
   readonly evidence: PrivateArtifactStore;
   readonly ledger: Ledger;
@@ -183,6 +211,15 @@ export async function runDiscoveryCampaign(options: {
     readonly reason: string;
     readonly detail?: string;
   };
+  /** The Trial failure that stopped the campaign, for the target's skip diagnostic. */
+  readonly failure?: {
+    readonly runId: string;
+    readonly reason: string;
+    readonly reasonDetail?: string;
+    readonly providerLimit?: "rate-limit" | "quota";
+  };
+  /** A usage limit any Trial met, including one that completed partially. */
+  readonly providerLimit?: "rate-limit" | "quota";
 }> {
   const input = campaignInputV1Schema.parse(options.input);
   const id = z.string().min(1).max(128);
@@ -229,6 +266,9 @@ export async function runDiscoveryCampaign(options: {
       : { runWallTimeMs: options.runWallTimeMs }),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
     executor: options.executor,
+    ...(options.oneShotExecutor === undefined
+      ? {}
+      : { oneShotExecutor: options.oneShotExecutor }),
     attachments: options.attachments,
     evidence: options.evidence,
     ledger: options.ledger,
@@ -244,6 +284,8 @@ export async function runDiscoveryCampaign(options: {
     resumeRefusal:
       | Extract<ProviderLimitedResumeResult, { status: "incomplete" }>
       | undefined;
+    failure: TrialFailure | undefined;
+    providerLimit: "rate-limit" | "quota" | undefined;
     next: number;
     stopped:
       | Extract<
@@ -256,6 +298,8 @@ export async function runDiscoveryCampaign(options: {
     findingsRecorded: 0,
     noNewFindings: 0,
     resumeRefusal: undefined,
+    failure: undefined,
+    providerLimit: undefined,
     next: 0,
     stopped: undefined,
   };
@@ -271,10 +315,35 @@ export async function runDiscoveryCampaign(options: {
       );
     startedExplorations.add(trial.explore.run.runId);
     tally.runCount++;
-    account(await executeTrial(context, trial));
+    account(
+      await (trial.partitioned === undefined
+        ? executeTrial(context, trial)
+        : executePartitionedTrial(context, trial)),
+    );
   };
   const account = (explore: TrialOutcome) => {
     tally.findingsRecorded += explore.findingsRecorded;
+    tally.providerLimit ??=
+      explore.providerLimit ??
+      explore.receipt?.providerLimit ??
+      explore.failure?.providerLimit;
+    if (explore.outcome !== "completed")
+      tally.failure ??= {
+        runId: explore.runId,
+        reason: explore.failure?.reason ?? "evidence",
+        ...(explore.failure?.reasonDetail === undefined
+          ? {}
+          : { reasonDetail: explore.failure.reasonDetail }),
+        ...((explore.failure?.providerLimit ??
+          explore.receipt?.providerLimit ??
+          explore.providerLimit) === undefined
+          ? {}
+          : {
+              providerLimit: (explore.failure?.providerLimit ??
+                explore.receipt?.providerLimit ??
+                explore.providerLimit)!,
+            }),
+      };
     if (!explore.counted) {
       tally.stopped ??=
         explore.outcome === "provider-limited"
@@ -367,6 +436,13 @@ export async function runDiscoveryCampaign(options: {
     runCount: tally.runCount,
     findingsRecorded: tally.findingsRecorded,
     stoppedBy,
+    ...(tally.failure === undefined ||
+    (stoppedBy !== "incomplete" && stoppedBy !== "provider-limit")
+      ? {}
+      : { failure: tally.failure }),
+    ...(tally.providerLimit === undefined
+      ? {}
+      : { providerLimit: tally.providerLimit }),
     ...(tally.resumeRefusal === undefined
       ? {}
       : {

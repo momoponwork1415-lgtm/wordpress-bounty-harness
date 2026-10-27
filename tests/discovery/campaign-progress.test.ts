@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   autoResumesProviderLimit,
+  partitionedTrialOutcomes,
   providerLimitedAutoResumeRefusal,
   readResumeProgress,
   recordedFailureAfterRuns,
@@ -197,5 +198,137 @@ describe("recordedFailureAfterRuns", () => {
     expect(
       recordedFailureAfterRuns(target, new Set(["done", "crashed"])),
     ).toBeUndefined();
+  });
+});
+
+describe("partitioned Trials in the campaign's progress (ADR 0042)", () => {
+  const enumeration = (
+    trialId: string,
+    runId: string,
+    accepted: boolean,
+  ): Record<string, unknown> => ({
+    identity: `enumeration-${trialId}`,
+    type: "enumeration-recorded",
+    trialId,
+    runId,
+    accepted,
+    resubmits: 0,
+    ...(accepted ? {} : { rejectedReasons: ["proposal-missing"] }),
+    inventoryDigest: digest,
+    scriptRan: true,
+    scriptRowCount: 1,
+    agentRowCount: 0,
+    duplicateRowCount: 0,
+    partitionCount: accepted ? 2 : 0,
+    definitionDigest: digest,
+    toolsDigest: digest,
+    rowSource: "agent",
+  });
+
+  it("reads a rejected enumeration as an incomplete, spent Trial", async () => {
+    const { ledger, base, start, finish, target } = await open();
+    await start("trial-1", {
+      trialId: "trial-1",
+      trialOrdinal: 0,
+      runKind: "enumerate",
+    });
+    await finish("trial-1", "completed");
+    await ledger.append({
+      ...base,
+      ...enumeration("trial-1", "trial-1", false),
+    } as Parameters<Ledger["append"]>[0]);
+    expect([...partitionedTrialOutcomes(target).values()]).toEqual([
+      {
+        trialId: "trial-1",
+        outcome: "incomplete",
+        reason: "schema",
+        reasonDetail: "enumeration-rejected",
+      },
+    ]);
+    expect(recordedFailureAfterRuns(target, new Set(["trial-1"]))).toBe(
+      "incomplete",
+    );
+    const progress = readResumeProgress(target);
+    expect([...progress.startedExplorations]).toEqual(["trial-1"]);
+    expect([...progress.spentOrdinals]).toEqual([0]);
+  });
+
+  it("reads the tracers' ends: a limit outranks the wall, one completion completes, none finished is unfinished", async () => {
+    const { ledger, base, start, finish, target } = await open();
+    const trial = async (
+      trialId: string,
+      ordinal: number,
+      tracers: readonly (
+        | ["completed" | "failed" | "provider-limited", Record<string, unknown>]
+        | undefined
+      )[],
+    ) => {
+      await start(trialId, {
+        trialId,
+        trialOrdinal: ordinal,
+        runKind: "enumerate",
+      });
+      await finish(trialId, "completed");
+      await ledger.append({
+        ...base,
+        ...enumeration(trialId, trialId, true),
+      } as Parameters<Ledger["append"]>[0]);
+      for (const [index, tracer] of tracers.entries()) {
+        const runId = `${trialId}-p-p${index}`;
+        await start(runId, {
+          trialId,
+          trialOrdinal: ordinal,
+          runKind: "trace",
+        });
+        if (tracer !== undefined) await finish(runId, tracer[0], tracer[1]);
+      }
+    };
+    await trial("limited", 0, [
+      ["failed", { reason: "wall", reasonDetail: "target-ceiling" }],
+      ["provider-limited", { reason: "provider", providerLimit: "quota" }],
+    ]);
+    await trial("partial", 1, [
+      ["failed", { reason: "schema", reasonDetail: "report-unreadable" }],
+      ["completed", {}],
+    ]);
+    await trial("walled", 2, [
+      ["failed", { reason: "wall", reasonDetail: "target-ceiling" }],
+    ]);
+    await trial("dangling", 3, [undefined]);
+    const outcomes = partitionedTrialOutcomes(target);
+    expect(outcomes.get("limited")).toEqual({
+      trialId: "limited",
+      outcome: "provider-limited",
+      reason: "provider",
+      providerLimit: "quota",
+    });
+    expect(outcomes.get("partial")).toEqual({
+      trialId: "partial",
+      outcome: "completed",
+    });
+    expect(outcomes.get("walled")).toEqual({
+      trialId: "walled",
+      outcome: "incomplete",
+      reason: "wall",
+      reasonDetail: "target-ceiling",
+    });
+    expect(outcomes.get("dangling")).toEqual({
+      trialId: "dangling",
+      outcome: "unfinished",
+    });
+    expect(recordedFailureAfterRuns(target, new Set(["partial"]))).toBe(
+      undefined,
+    );
+    expect(
+      recordedFailureAfterRuns(target, new Set(["partial", "walled"])),
+    ).toBe("incomplete");
+    expect(
+      recordedFailureAfterRuns(
+        target,
+        new Set(["partial", "walled", "limited"]),
+      ),
+    ).toBe("provider-limit");
+    // The limited and the dangling Trials do not spend their ordinals.
+    expect([...readResumeProgress(target).spentOrdinals]).toEqual([1, 2]);
   });
 });

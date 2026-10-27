@@ -62,6 +62,25 @@ export {
   ClaudeNativeAgentRuntime,
   claudeProviderFailure,
 } from "./claude-native-agent-runtime.js";
+export { ClaudeOneShotRuntime } from "./claude-one-shot-runtime.js";
+export {
+  scriptRanIn,
+  type OneShotExecutor,
+  type OneShotFile,
+  type OneShotResult,
+  type OneShotRun,
+  type OneShotToolFile,
+} from "./one-shot-run.js";
+export {
+  ENUMERATION_OUTPUT_FILES,
+  executePartitionedTrial,
+  PARTITION_INPUT_FILES,
+  PARTITIONED_TARGET_CEILING_MS,
+  readEnumerationOutput,
+  ROLE_START_FLOOR_MS,
+  type PartitionedRolePlan,
+  type PartitionedTrialPlan,
+} from "./partitioned-trial.js";
 export {
   claudeRunSession,
   claudeSessionFromDiagnostic,
@@ -69,6 +88,7 @@ export {
 export {
   CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB,
   CLAUDE_ONE_SHOT_SANDBOX_MEMORY_MIB,
+  ClaudeSandboxNotAdmittedError,
   GvisorClaudeSandbox,
   type ClaudeSandbox,
   type ClaudeSandboxCommand,
@@ -77,7 +97,12 @@ export {
   type GvisorClaudeSandboxOptions,
 } from "./claude-gvisor-sandbox.js";
 export { CLAUDE_RUNNER_DENIALS } from "./claude-runner.js";
-export { runParametersSection, type RunParameters } from "./run-parameters.js";
+export {
+  partitionLimitsSection,
+  runParametersSection,
+  type PartitionLimitParameters,
+  type RunParameters,
+} from "./run-parameters.js";
 export {
   parseRoleDefinition,
   roleDefinitionFrontMatterSchema,
@@ -187,8 +212,11 @@ export {
   type LabCommandRule,
 } from "./read-paths.js";
 export {
+  SANDBOX_INPUT_MOUNT_PATH,
+  SANDBOX_OUTPUT_MOUNT_PATH,
   SANDBOX_RESEARCH_MOUNT_PATH,
   SANDBOX_SOURCE_MOUNT_PATH,
+  SANDBOX_TOOLS_MOUNT_PATH,
   dependencyMountLabel,
   dependencyMountPathsOf,
   sourceRelativePath,

@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 
 import { wordpressCampaignConfigSchema } from "../../src/cli/wordpress.js";
 import {
-  PARTITIONED_RUNTIME_PENDING,
   readWordPressCampaignConfig,
   readWordPressCampaignPolicy,
 } from "../../src/cli/wordpress-session.js";
@@ -332,7 +331,8 @@ describe("partitioned example (ADR 0042 stage 1, shape only)", () => {
         },
       }),
     ).toEqual(["discovery.tracer.wallMinutes"]);
-    // A tracer run is 4,096 + 512 MiB; the 10,752 MiB budget holds two, not three.
+    // A tracer run is 4,096 + 512 MiB; the 10,752 MiB budget holds two, not
+    // three, per target and across the one target.
     expect(
       paths({
         ...source,
@@ -341,7 +341,30 @@ describe("partitioned example (ADR 0042 stage 1, shape only)", () => {
           tracer: { wallMinutes: 20, maxParallel: 3 },
         },
       }),
-    ).toEqual(["discovery.tracer.maxParallel"]);
+    ).toEqual([
+      "discovery.tracer.maxParallel",
+      "resources.maxConcurrentTargets",
+    ]);
+    // Two targets side by side double the tracers in flight.
+    expect(
+      paths({
+        ...source,
+        resources: {
+          ...(source.resources as object),
+          maxConcurrentTargets: 2,
+        },
+      }),
+    ).toEqual(["resources.maxConcurrentTargets"]);
+    expect(
+      paths({
+        ...source,
+        resources: {
+          ...(source.resources as object),
+          maxConcurrentTargets: 2,
+          memoryBudgetMiB: 4 * (4096 + 512),
+        },
+      }),
+    ).toBeUndefined();
     expect(
       paths({
         ...source,
@@ -363,17 +386,17 @@ describe("partitioned example (ADR 0042 stage 1, shape only)", () => {
     ).toEqual(["discovery.enumerator.runtime"]);
   });
 
-  it("is refused by a session until the role runtime lands (PR 2)", async () => {
-    await expect(
-      readWordPressCampaignConfig(
-        join(
-          import.meta.dirname,
-          "..",
-          "..",
-          "examples",
-          "campaign-partitioned.json",
-        ),
+  it("is read by a session now that the role runtime exists (ADR 0042, PR 2)", async () => {
+    const config = await readWordPressCampaignConfig(
+      join(
+        import.meta.dirname,
+        "..",
+        "..",
+        "examples",
+        "campaign-partitioned.json",
       ),
-    ).rejects.toThrow(PARTITIONED_RUNTIME_PENDING);
+    );
+    expect(config.discovery.mode).toBe("partitioned");
+    expect(config.promptId).toBe("objective-partition-v1");
   });
 });
