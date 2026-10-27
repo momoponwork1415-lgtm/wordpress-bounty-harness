@@ -111,6 +111,8 @@ async function fixture(options: {
     typeof runDiscoveryCampaign
   >[0]["recordReport"];
   readonly evidenceMaxBytes?: number;
+  /** Makes Private Evidence refuse any `putFiles` that names one of these files. */
+  readonly brokenEvidenceFiles?: readonly string[];
 }) {
   const root = await mkdtemp(join(tmpdir(), "wbh-partitioned-"));
   directories.push(root);
@@ -124,6 +126,22 @@ async function fixture(options: {
     databasePath: join(root, "ledger.sqlite"),
     artifactStore: evidence,
   });
+  const broken = options.brokenEvidenceFiles ?? [];
+  const trialEvidence =
+    broken.length === 0
+      ? evidence
+      : new Proxy(evidence, {
+          get(target, property) {
+            if (property === "putFiles")
+              return async (files: Record<string, string>) => {
+                if (Object.keys(files).some((name) => broken.includes(name)))
+                  throw new Error("evidence store refused");
+                return target.putFiles(files);
+              };
+            const value = Reflect.get(target, property) as unknown;
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
   let now = Date.parse(start);
   const clock = () => new Date(now);
   const receipt = (
@@ -287,7 +305,7 @@ async function fixture(options: {
     },
     oneShotExecutor: executor,
     attachments,
-    evidence,
+    evidence: trialEvidence,
     ledger,
     recordReport: options.recordReport ?? recordWordPressReport,
     clock,
@@ -695,7 +713,7 @@ describe("partitioned Trial executor (ADR 0042)", () => {
     expect(result.failure).toBeUndefined();
   });
 
-  it("records a throw after the transport as missing evidence with the message in Private Evidence, and retries", async () => {
+  it("records a throw after the transport as missing evidence beside the real receipt, and does not retry it", async () => {
     let thrown = false;
     const { events, evidence } = await fixture({
       maxParallel: 1,
@@ -714,11 +732,11 @@ describe("partitioned Trial executor (ADR 0042)", () => {
             })
           : helpers.report(run, `claim of ${run.runId}`),
     });
+    // A Harness-side failure is not the sandbox's to repeat: no retry.
     expect(summary(events).filter((line) => line.startsWith("finish"))).toEqual(
       [
         "finish completed trial-1",
         "finish failed trial-1-p-p1",
-        "finish completed trial-1-p-p1.retry1",
         "finish completed trial-1-p-p2",
       ],
     );
@@ -731,24 +749,28 @@ describe("partitioned Trial executor (ADR 0042)", () => {
       outcome: "failed",
       reason: "evidence",
       reasonDetail: "post-run-threw",
+      // The transport's own observation, with its own sealed receipt.
+      observed: { filesRead: 3 },
     });
-    const receiptRef =
-      failed?.type === "discovery-run-finished"
-        ? failed.artifacts.find((ref) => ref.kind === "native-run-receipt")
-        : undefined;
-    expect(receiptRef).toBeDefined();
+    const artifacts =
+      failed?.type === "discovery-run-finished" ? failed.artifacts : [];
+    expect(artifacts.map((ref) => ref.kind)).toEqual([
+      "native-run-receipt",
+      "role-run-error",
+    ]);
     const receipt = await evidence.readFile(
-      receiptRef!.digest,
+      artifacts[0]!.digest,
       "receipt.json",
       64 * 1024,
     );
     if (receipt.status !== "resolved") throw new Error(receipt.status);
-    const sealed = JSON.parse(receipt.bytes.toString("utf8")) as {
-      diagnosticArtifactDigest?: string;
-    };
-    expect(sealed.diagnosticArtifactDigest).toBeDefined();
+    expect(JSON.parse(receipt.bytes.toString("utf8"))).toMatchObject({
+      runId: "trial-1-p-p1",
+      terminal: "completed",
+      reason: "unavailable",
+    });
     const diagnostic = await evidence.readFile(
-      sealed.diagnosticArtifactDigest!,
+      artifacts[1]!.digest,
       "role-run-error.json",
       4096,
     );
@@ -757,6 +779,73 @@ describe("partitioned Trial executor (ADR 0042)", () => {
       runId: "trial-1-p-p1",
       stage: "admission",
       message: "admission exploded",
+    });
+  });
+
+  it("still appends the finish when Private Evidence itself refuses the error file or the receipt", async () => {
+    // The error file alone cannot be written: the real receipt's artifact stays.
+    const errorOnly = await fixture({
+      maxParallel: 1,
+      brokenEvidenceFiles: ["role-run-error.json"],
+      recordReport: async () => {
+        throw new Error("admission exploded");
+      },
+      script: (run, _attempt, helpers) =>
+        run.output === "files"
+          ? helpers.files(run, {
+              [ENUMERATION_OUTPUT_FILES.inventory]: inventory,
+              [ENUMERATION_OUTPUT_FILES.partitions]: proposal,
+            })
+          : helpers.report(run, `claim of ${run.runId}`),
+    });
+    expect(
+      summary(errorOnly.events).filter((line) => line.startsWith("finish")),
+    ).toEqual([
+      "finish completed trial-1",
+      "finish failed trial-1-p-p1",
+      "finish failed trial-1-p-p2",
+    ]);
+    for (const runId of ["trial-1-p-p1", "trial-1-p-p2"]) {
+      const finish = errorOnly.events.find(
+        (event) =>
+          event.type === "discovery-run-finished" && event.runId === runId,
+      );
+      expect(finish).toMatchObject({
+        reason: "evidence",
+        reasonDetail: "post-run-threw",
+        artifacts: [{ kind: "native-run-receipt" }],
+      });
+    }
+    expect(errorOnly.result).toMatchObject({ stoppedBy: "incomplete" });
+    // Neither the receipt nor the error file can be written: the finish
+    // carries the receipt's fields and no artifact; no start is left dangling.
+    const nothing = await fixture({
+      brokenEvidenceFiles: ["receipt.json", "role-run-error.json"],
+      script: (run, _attempt, helpers) =>
+        helpers.files(run, {
+          [ENUMERATION_OUTPUT_FILES.inventory]: inventory,
+          [ENUMERATION_OUTPUT_FILES.partitions]: proposal,
+        }),
+    });
+    expect(summary(nothing.events)).toEqual([
+      "start enumerate trial-1",
+      "finish failed trial-1",
+    ]);
+    expect(
+      nothing.events.find((event) => event.type === "discovery-run-finished"),
+    ).toMatchObject({
+      reason: "evidence",
+      reasonDetail: "post-run-threw",
+      observed: { filesRead: 3 },
+      artifacts: [],
+    });
+    expect(nothing.result).toMatchObject({
+      stoppedBy: "incomplete",
+      failure: {
+        runId: "trial-1",
+        reason: "evidence",
+        reasonDetail: "post-run-threw",
+      },
     });
   });
 

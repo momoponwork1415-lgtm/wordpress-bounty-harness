@@ -216,9 +216,14 @@ type RoleOutcome = {
   readonly receipt?: NativeRunReceipt;
   readonly receiptDigest?: string;
   readonly readPathsDigest?: string;
+  /** The message of a Harness-side throw after the run, in Private Evidence. */
+  readonly errorDigest?: string;
   readonly result?: OneShotResult;
   readonly wallTimeMs: number;
 };
+
+/** The finish artifact that carries a post-run throw's message. */
+const ROLE_RUN_ERROR_ARTIFACT = "role-run-error";
 
 type Draft<T> = { -readonly [K in keyof T]: T[K] };
 
@@ -392,43 +397,59 @@ async function runRole(
     } catch (error: unknown) {
       draft.outcome = "failed";
       draft.failure = { reason: "evidence", reasonDetail: "post-run-threw" };
-      const diagnosticDigest = await context.evidence.putFiles({
-        "role-run-error.json": canonicalJson({
-          runId: run.runId,
-          stage,
-          message: (error instanceof Error
-            ? error.message
-            : String(error)
-          ).slice(0, 4096),
-        }),
-      });
-      draft.receiptDigest = await sealNativeRunReceipt(
-        context.evidence,
-        synthetic("evidence", "post-run-threw", diagnosticDigest).receipt,
-      );
-      if (draft.receipt === undefined) draft.wallTimeMs = wallMs;
+      // The store may be what failed: the finish is appended either way, with
+      // whatever evidence could be written. The transport's receipt keeps its
+      // own digest; a synthetic one stands in only when no receipt exists.
+      const errorDigest = await context.evidence
+        .putFiles({
+          "role-run-error.json": canonicalJson({
+            runId: run.runId,
+            stage,
+            message: (error instanceof Error
+              ? error.message
+              : String(error)
+            ).slice(0, 4096),
+          }),
+        })
+        .catch(() => undefined);
+      if (errorDigest !== undefined) draft.errorDigest = errorDigest;
+      if (draft.receipt === undefined) {
+        draft.wallTimeMs = wallMs;
+        const sealed = await sealNativeRunReceipt(
+          context.evidence,
+          synthetic("evidence", "post-run-threw", errorDigest).receipt,
+        ).catch(() => undefined);
+        if (sealed !== undefined) draft.receiptDigest = sealed;
+      }
     }
   }
   const outcome: RoleOutcome = draft;
-  const finished = await context.ledger.append(
-    finishedEventFrom(base, {
-      runId: outcome.runId,
-      outcome: outcome.outcome,
-      ...(outcome.failure === undefined ? {} : { failure: outcome.failure }),
-      ...(outcome.receipt === undefined ? {} : { receipt: outcome.receipt }),
-      wallTimeMs: outcome.wallTimeMs,
-      ...(outcome.receiptDigest === undefined
-        ? {}
-        : { receiptDigest: outcome.receiptDigest }),
-      ...(outcome.readPathsDigest === undefined
-        ? {}
-        : { readPathsDigest: outcome.readPathsDigest }),
-      counted: true,
-      foundNew: false,
-      heldBoundary: false,
-      findingsRecorded: 0,
-    }),
-  );
+  const event = finishedEventFrom(base, {
+    runId: outcome.runId,
+    outcome: outcome.outcome,
+    ...(outcome.failure === undefined ? {} : { failure: outcome.failure }),
+    ...(outcome.receipt === undefined ? {} : { receipt: outcome.receipt }),
+    wallTimeMs: outcome.wallTimeMs,
+    ...(outcome.receiptDigest === undefined
+      ? {}
+      : { receiptDigest: outcome.receiptDigest }),
+    ...(outcome.readPathsDigest === undefined
+      ? {}
+      : { readPathsDigest: outcome.readPathsDigest }),
+    counted: true,
+    foundNew: false,
+    heldBoundary: false,
+    findingsRecorded: 0,
+  });
+  const finished = await context.ledger.append({
+    ...event,
+    artifacts: [
+      ...(event.artifacts ?? []),
+      ...(outcome.errorDigest === undefined
+        ? []
+        : [{ kind: ROLE_RUN_ERROR_ARTIFACT, digest: outcome.errorDigest }]),
+    ],
+  });
   if (finished.status === "conflict")
     throw new Error("Discovery finish identity conflict");
   return outcome;
@@ -596,9 +617,11 @@ export async function executePartitionedTrial(
       return run;
     };
     const first = await attempt(firstRunId);
-    // A usage limit is the campaign's backoff, not a fresh sandbox at once.
+    // A usage limit is the campaign's backoff, not a fresh sandbox at once;
+    // a Harness-side failure (evidence) is not the sandbox's to repeat either.
     if (
       first.outcome !== "failed" ||
+      first.failure?.reason === "evidence" ||
       context.signal?.aborted === true ||
       remaining() < ROLE_START_FLOOR_MS
     )
