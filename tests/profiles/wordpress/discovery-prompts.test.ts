@@ -95,7 +95,7 @@ describe("WordPress prompt table", () => {
     ).toHaveLength(WORDPRESS_DISCOVERY_MODES.length);
     expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS).toEqual({
       deep: "wp2shell-bounty-v11",
-      wide: "wp2shell-bounty-v17-wide",
+      wide: "wp2shell-bounty-v16-wide",
     });
     expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID).toBe("wp2shell-bounty-v11");
     // Archived rows carry no mode, so only a current row launches (ADR 0039).
@@ -109,7 +109,7 @@ describe("WordPress prompt table", () => {
     expect(WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS).toEqual([
       "wp2shell-bounty-v11",
       "wp2shell-bounty-v15-wide",
-      "wp2shell-bounty-v17-wide",
+      "wp2shell-bounty-v16-wide",
     ]);
     expect(
       WORDPRESS_VERIFIER_PROMPTS.filter((row) => row.status === "current"),
@@ -221,7 +221,7 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
     const byId = (id: string) => files(composed.find((row) => row.id === id)!);
     const [deep, wide] = [
       byId("wp2shell-bounty-v11"),
-      byId("wp2shell-bounty-v17-wide"),
+      byId("wp2shell-bounty-v16-wide"),
     ];
     expect(deep.filter((file) => wide.includes(file))).toEqual([
       "objective/task-v10",

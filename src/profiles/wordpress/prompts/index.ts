@@ -348,11 +348,14 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:1ffb15f4f3f7ad6de70e330e10fd24c31513e41d250c8e0d6885b760a0a5c1f3",
     outputContract: "v5",
-    status: "archived",
+    status: "current",
+    mode: "wide",
     // v14-wide with one sentence of the sink strategy replaced (owner
     // instruction 2026-10-26: content only the vendor can place is not
     // attacker input): third-party content is attacker-placeable only when
-    // someone other than the service's vendor can place it.
+    // someone other than the service's vendor can place it. Restored as the
+    // wide current on 2026-10-27 (ADR 0039 addendum 11): v17-wide's two
+    // stricter sentences cut Findings and Leads per Trial to about a seventh.
     fragments: [
       TASK,
       { section: "objective", file: "first-principles-v11" },
@@ -370,8 +373,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:9a32ddcf2083c8e82952907742823bfaa29f8068d346132206b87cf412165bc9",
     outputContract: "v5",
-    status: "current",
-    mode: "wide",
+    status: "archived",
     // v16-wide with three sentences replaced (owner decision 2026-10-27:
     // when in doubt, report a Lead, not a Finding): sinks-v17 says a field,
     // column, query condition, template, snippet or setting an administrator
