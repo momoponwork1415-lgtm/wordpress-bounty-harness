@@ -78,6 +78,16 @@ amends: 0029（単一協調 Trial の主経路）と 0039（探索の mode）に
 - 契約の solo 版を v6 と数える: 文は v4 と同じで、抜いただけ。版を増やすと比較の分母が割れる。
 - 新しい mode ではなく `wide` の中の切り替えにする: ADR 0039 の規則（mode は外側の設定値で決め、Trial の途中で変えない）に従い、mode にした。
 
+## 追記 1（2026-10-28）: 本体の固定一覧
+
+所有者決定（承認用の要約 §6 の Q6・Q11〜Q13、#632）。プラグインのソースだけでは見つからない「本体の機能の悪用」は、全プラグイン共通の固定知識として置く。
+
+- 道具 `core-fixed-list-v1.md` を `/workspace/tools` に足す。中身は「プラグインが値を渡すと本体が効果に変える機能」と「本体が要求をプラグインのコードに解決する経路」の表で、機能の粒度で書き、Wordfence mirror の先例の件数（2025-01-01 以降、mirror 2026-10-27）を優先度の目安として添える。slug、個別の事例、手順、型の一覧は書かない。導出は [先例の集計](../reviews/2026-10-28-core-feature-abuse-precedents.md)。
+- 渡す役は列挙役と追跡役。列挙役の本文に読む旨の 1 文を足した（digest を更新）。追跡役への mount は段階 1 の runtime PR で行う。⑤ の読み直し役には渡さない。
+- 床ではない。一覧は本体側の機能の名前だけで、対象の行を含まない。列挙役が出す行の責任は変わらない。
+- 更新は版と digest を固定し、mirror の月次の集計で新しい類が出たときだけ、数字付きの PR で版を上げる。自動では作り直さない。
+- 消し方: file を消し、`WORDPRESS_ENUMERATION_TOOLS` の行と設定の `enumerator.tools` から外し、列挙役の 1 文を戻す。
+
 ## 消し方
 
 `discovery.mode` を既定（`deep`）に戻すか `wide` にすれば、現行の協調 Trial のまま。役の Markdown、道具、`objective-partition-v1` の行、新しい event と `partition` 欄、設定の 3 節は残しても読まれない。消すときは、この ADR と GLOSSARY の 4 行、measurement.md の 5a 節、reviews/README の参照を revert し、`src/discovery/role-definition.ts`、`partition.ts`、`prompts/roles.ts`、`prompts/agents/`、`discovery/tools.ts`、`discovery/tools/`、`examples/campaign-partitioned.json` と test を消す。台帳の既存 event は消さない。

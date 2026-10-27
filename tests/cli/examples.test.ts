@@ -257,7 +257,11 @@ describe("partitioned example (ADR 0042 stage 1, shape only)", () => {
           model: "claude-opus-5-5",
           effort: "high",
           wallMinutes: 20,
-          tools: ["enumerate-hooks-v1", "enumerate-sinks-v1"],
+          tools: [
+            "enumerate-hooks-v1",
+            "enumerate-sinks-v1",
+            "core-fixed-list-v1",
+          ],
           rowSource: "agent",
         },
         partition: {
