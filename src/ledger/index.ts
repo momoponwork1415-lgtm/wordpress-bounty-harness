@@ -93,7 +93,13 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     trialId: id.optional(),
     trialOrdinal: z.number().int().nonnegative().optional(),
     stage: z.enum(["screening", "deep-dive"]).optional(),
-    runKind: z.enum(["explore", "continue", "child"]).optional(),
+    /**
+     * `enumerate` and `trace` are the two roles of a partitioned Trial (ADR
+     * 0042): one run per role, under the same `trialId`.
+     */
+    runKind: z
+      .enum(["explore", "continue", "child", "enumerate", "trace"])
+      .optional(),
     continuationOf: id.optional(),
     parentRunId: id.optional(),
     /**
@@ -160,8 +166,25 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       labAccess: z
         .strictObject({ database: z.enum(["read-only", "none"]) })
         .optional(),
-      /** ADR 0039: the Trial's launch mode; absent on events before 2026-10-25. */
-      mode: z.enum(["deep", "wide"]).optional(),
+      /**
+       * ADR 0039: the Trial's launch mode; absent on events before 2026-10-25.
+       * `partitioned` is the role-based Trial of ADR 0042.
+       */
+      mode: z.enum(["deep", "wide", "partitioned"]).optional(),
+      /**
+       * ADR 0042: the role this run plays in a partitioned Trial, the digest
+       * of its definition file and of the tool files mounted for it, and for
+       * a tracer its partition. `resubmit` counts an enumerator's send-backs.
+       */
+      role: z
+        .strictObject({
+          kind: declaredToken,
+          definitionDigest: digest,
+          toolsDigest: digest.optional(),
+          partitionId: id.optional(),
+          resubmit: z.number().int().nonnegative().optional(),
+        })
+        .optional(),
       /**
        * Redesign 2026-10-25 §7: the values the Harness enforced and stated in
        * the Run parameters section; absent on earlier events.
@@ -433,6 +456,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
      * of the profile keys it is built from. Absent on events before 2026-10-21.
      */
     group: z.strictObject({ id, keys: z.array(digest) }).optional(),
+    /** ADR 0042: the partition whose tracer reported it; absent outside partitioned Trials. */
+    partition: id.optional(),
   }),
   /** A Finding held outside the active verification and review queues. */
   event({
@@ -480,6 +505,51 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     primitive: id,
     storageKind: id,
     continuationOrdinal: z.number().int().nonnegative().optional(),
+    /** ADR 0042: the partition whose tracer reported it; absent outside partitioned Trials. */
+    partition: id.optional(),
+  }),
+  /**
+   * ADR 0042: the enumerator's inventory and partition proposal, after the
+   * Harness's shape check. One event per Trial, written when the proposal is
+   * accepted or when the send-backs are exhausted. The counts are observed,
+   * never judged: whether the tool scripts ran, how many rows each origin
+   * gave, how many rows collapsed as duplicates.
+   */
+  event({
+    type: z.literal("enumeration-recorded"),
+    trialId: id,
+    runId: id,
+    accepted: z.boolean(),
+    /** Proposals sent back before this one. */
+    resubmits: z.number().int().nonnegative(),
+    /** The distinct reasons of the last rejection; absent when accepted. */
+    rejectedReasons: z.array(declaredToken).min(1).optional(),
+    inventoryDigest: digest,
+    /** Absent when the last proposal did not parse. */
+    partitionsDigest: digest.optional(),
+    scriptRan: z.boolean(),
+    scriptRowCount: z.number().int().nonnegative(),
+    agentRowCount: z.number().int().nonnegative(),
+    duplicateRowCount: z.number().int().nonnegative(),
+    partitionCount: z.number().int().nonnegative(),
+    definitionDigest: digest,
+    toolsDigest: digest,
+    rowSource: z.enum(["agent", "script-only"]),
+  }),
+  /** ADR 0042: one accepted partition handed to one tracer run. */
+  event({
+    type: z.literal("partition-assigned"),
+    trialId: id,
+    partitionId: id,
+    ordinal: z.number().int().nonnegative(),
+    of: z.number().int().positive(),
+    rowCount: z.number().int().positive(),
+    scriptRowCount: z.number().int().nonnegative(),
+    agentRowCount: z.number().int().nonnegative(),
+    assignmentDigest: digest,
+    /** The tracer run that received it. */
+    runId: id,
+    definitionDigest: digest,
   }),
   /** A schema-only child failure was reinterpreted from its immutable private rollout. */
   event({
@@ -1575,7 +1645,10 @@ export class Ledger {
     const startedRuns = new Map<string, string | undefined>();
     const labByRun = new Map<string, "attached" | "none">();
     let verificationLabFailed = 0;
-    const runKinds = new Map<string, "explore" | "continue" | "child">();
+    const runKinds = new Map<
+      string,
+      "explore" | "continue" | "child" | "enumerate" | "trace"
+    >();
     /** Resume segments continue an earlier run's Trial; they are not new attempts (ADR 0036). */
     const resumeSegments = new Set<string>();
     const trialByRun = new Map<string, string>();
@@ -1998,7 +2071,10 @@ export class Ledger {
     }
     const discoveryAttempts = [...startedRuns.entries()].filter(
       ([runId, labId]) =>
+        // ADR 0042: a partitioned Trial's attempt is its enumerate run; its
+        // tracer runs belong to that attempt, as children do to a Root.
         runKinds.get(runId) !== "child" &&
+        runKinds.get(runId) !== "trace" &&
         !resumeSegments.has(runId) &&
         (labByRun.get(runId) === "none" ||
           (labId !== undefined && readyLabs.has(labId))) &&

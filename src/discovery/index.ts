@@ -29,6 +29,8 @@ export {
   agentRuntimeProfileSchema,
   admitAgentRuntimeProfile,
   admitCooperativeRuntimeProfile,
+  claudeEffortSchema,
+  claudeModelSchema,
   claudeRuntimeProfileDefinitionSchema,
   codexModelCatalog,
   defineAgentRuntimeProfile,
@@ -66,6 +68,7 @@ export {
 } from "./claude-session.js";
 export {
   CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB,
+  CLAUDE_ONE_SHOT_SANDBOX_MEMORY_MIB,
   GvisorClaudeSandbox,
   type ClaudeSandbox,
   type ClaudeSandboxCommand,
@@ -75,6 +78,33 @@ export {
 } from "./claude-gvisor-sandbox.js";
 export { CLAUDE_RUNNER_DENIALS } from "./claude-runner.js";
 export { runParametersSection, type RunParameters } from "./run-parameters.js";
+export {
+  parseRoleDefinition,
+  roleDefinitionFrontMatterSchema,
+  type RoleDefinition,
+  type RoleDefinitionFrontMatter,
+} from "./role-definition.js";
+export {
+  collapseInventory,
+  INVENTORY_MAX_ROWS,
+  inventoryRowSchema,
+  inventorySchema,
+  PARTITION_REJECTION_REASONS,
+  partitionLimitsSchema,
+  partitionProposalSchema,
+  rejectionReasonTokens,
+  resubmitDecision,
+  validatePartitionProposal,
+  type AssignedPartition,
+  type CollapsedInventory,
+  type Inventory,
+  type InventoryRow,
+  type PartitionLimits,
+  type PartitionProposal,
+  type PartitionRejection,
+  type PartitionRejectionReason,
+  type PartitionValidation,
+} from "./partition.js";
 export {
   assignDiscoveryRuntime,
   runtimeShareSchema,

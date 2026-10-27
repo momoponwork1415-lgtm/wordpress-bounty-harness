@@ -33,6 +33,8 @@ export type ReportRecorderContext = {
   readonly trialId: string;
   readonly snapshotDigest: string;
   readonly reportArtifactDigest: string;
+  /** ADR 0042: the partition the reporting tracer was assigned; absent outside partitioned Trials. */
+  readonly partition?: string;
 };
 
 export type RecordedCandidate = {

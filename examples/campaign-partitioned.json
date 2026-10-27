@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "discovery": {
+    "lab": "none",
+    "mode": "partitioned",
+    "enumerator": {
+      "runtime": "claude",
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "wallMinutes": 20,
+      "tools": ["enumerate-hooks-v1", "enumerate-sinks-v1"],
+      "rowSource": "agent"
+    },
+    "partition": {
+      "maxEntriesPerPartition": 60,
+      "maxPartitions": 8,
+      "maxResubmits": 2
+    },
+    "tracer": {
+      "runtime": "claude",
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "wallMinutes": 45,
+      "maxParallel": 2
+    }
+  },
+  "selectionPolicyPath": "src/profiles/wordpress/policy/selection.json",
+  "promptId": "objective-partition-v1",
+  "programmeBoundary": {
+    "version": "wordfence-2026-10-17",
+    "text": "Wordfence Bug Bounty Program, campaign boundary revised 2026-10-17. In scope for this campaign: impact reachable by an unauthenticated visitor, a Subscriber or a Customer. Highest value: arbitrary PHP file upload or read, arbitrary PHP file deletion, remote code execution, authentication bypass to admin, privilege escalation to admin. Also in scope: account takeover, stored XSS, SQL injection, arbitrary file read, download or delete, local or remote file inclusion, and directory traversal. Out of scope for this campaign: sensitive information disclosure; access to private, draft or password-protected content; basic information disclosure; arbitrary content deletion; arbitrary options update; privilege escalation or authentication bypass that stops below admin; reflected XSS; CSRF; missing authorization; IDOR; denial of service; business-logic-only impact; and routes requiring Contributor, Author, Editor, Shop Manager or Administrator, or an administrator's explicit configuration or grant of permissions."
+  },
+  "resources": {
+    "maxConcurrentRuns": 1,
+    "maxConcurrentTargets": 1,
+    "memoryBudgetMiB": 10752
+  },
+  "wordpressVersion": "7.1.3",
+  "lab": {
+    "siteTitle": "Harness Lab",
+    "initialPosts": ["Welcome"],
+    "customerRole": false,
+    "databaseAccess": "read-only"
+  }
+}
