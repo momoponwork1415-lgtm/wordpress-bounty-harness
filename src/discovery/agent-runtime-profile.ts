@@ -48,6 +48,8 @@ export const agentRuntimeProfileDefinitionSchema = bodySchema.omit({
  * one shape; the CLI version is measured from the pinned image.
  */
 const claudeEffort = z.enum(["low", "medium", "high", "xhigh", "max"]);
+/** The effort values the Claude runtime accepts, for a per-role setting (ADR 0042). */
+export const claudeEffortSchema = claudeEffort;
 /**
  * The Claude models a profile may bind, for the Root and for the children
  * separately (#418). The broker admits exactly the pair the profile names.

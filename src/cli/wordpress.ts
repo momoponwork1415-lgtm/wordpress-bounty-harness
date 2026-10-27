@@ -698,6 +698,9 @@ function wordPressResumeParagraph(objective: WordPressDiscoveryAsset): string {
     .split(/\n\s*\n/)
     .at(-1);
   const mode = wordPressDiscoveryModeOf(objective.id) ?? "deep";
+  // ADR 0042: a partitioned objective is handed to one-shot tracers, which are never resumed.
+  if (mode === "partitioned")
+    throw new Error("A partitioned objective has no resume paragraph");
   if (
     resumePrompt === undefined ||
     !resumePrompt.startsWith(WORDPRESS_RESUME_PARAGRAPH_PREFIX[mode])

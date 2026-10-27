@@ -4,7 +4,11 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { wordpressCampaignConfigSchema } from "../../src/cli/wordpress.js";
-import { readWordPressCampaignPolicy } from "../../src/cli/wordpress-session.js";
+import {
+  PARTITIONED_RUNTIME_PENDING,
+  readWordPressCampaignConfig,
+  readWordPressCampaignPolicy,
+} from "../../src/cli/wordpress-session.js";
 import { wordPressSelectionPolicySchema } from "../../src/profiles/wordpress/selection/index.js";
 import { wordfenceProgrammeTranscriptionSchema } from "../../src/profiles/wordpress/wordfence-programme/index.js";
 
@@ -222,5 +226,154 @@ describe("historical TranslatePress development fixtures", () => {
       transcription.pages.find((page) => page.sourceKind === "programme")
         ?.assertions.eligibility?.limits,
     ).toBeUndefined();
+  });
+});
+
+describe("partitioned example (ADR 0042 stage 1, shape only)", () => {
+  const partitioned = async () =>
+    JSON.parse(
+      await readFile(
+        join(
+          import.meta.dirname,
+          "..",
+          "..",
+          "examples",
+          "campaign-partitioned.json",
+        ),
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+
+  it("parses the example with its roles, limits and the partition objective", async () => {
+    const config = wordpressCampaignConfigSchema.parse(await partitioned());
+    expect(config).toMatchObject({
+      promptId: "objective-partition-v1",
+      runWallTimeMinutes: 120,
+      discovery: {
+        mode: "partitioned",
+        minimumActiveMinutes: 0,
+        enumerator: {
+          runtime: "claude",
+          model: "claude-opus-5-5",
+          effort: "high",
+          wallMinutes: 15,
+          tools: [
+            "enumerate-hooks-v1",
+            "enumerate-sinks-v1",
+            "core-fixed-list-v1",
+          ],
+          rowSource: "agent",
+        },
+        partition: {
+          maxEntriesPerPartition: 60,
+          maxPartitions: 8,
+          maxResubmits: 2,
+        },
+        tracer: { runtime: "claude", wallMinutes: 20, maxParallel: 1 },
+      },
+    });
+  });
+
+  it("fills the roles with defaults in the partitioned mode and refuses them in the others", async () => {
+    const source = await partitioned();
+    const bare = wordpressCampaignConfigSchema.parse({
+      ...source,
+      discovery: { lab: "none", mode: "partitioned" },
+      promptId: undefined,
+    });
+    expect(bare.promptId).toBe("objective-partition-v1");
+    expect(bare.discovery).toMatchObject({
+      enumerator: { runtime: "claude", wallMinutes: 15, rowSource: "agent" },
+      partition: {
+        maxEntriesPerPartition: 60,
+        maxPartitions: 8,
+        maxResubmits: 2,
+      },
+      tracer: { runtime: "claude", wallMinutes: 20, maxParallel: 1 },
+    });
+    const wide = wordpressCampaignConfigSchema.safeParse({
+      ...source,
+      discovery: { lab: "none", mode: "wide", tracer: { maxParallel: 1 } },
+      promptId: "wp2shell-bounty-v14-wide",
+    });
+    expect(wide.success).toBe(false);
+    expect(wide.error?.issues.map((issue) => issue.path.join("."))).toEqual([
+      "discovery.tracer",
+    ]);
+    // The partition objective belongs to the partitioned mode only.
+    expect(
+      wordpressCampaignConfigSchema.safeParse({
+        ...source,
+        discovery: { lab: "none", mode: "wide" },
+      }).success,
+    ).toBe(false);
+    expect(
+      wordpressCampaignConfigSchema.safeParse({
+        ...source,
+        promptId: "wp2shell-bounty-v14-wide",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("bounds one target to the sandbox ceiling and the parallel tracers to the memory budget", async () => {
+    const source = await partitioned();
+    const discovery = source.discovery as Record<string, unknown>;
+    const paths = (candidate: unknown) =>
+      wordpressCampaignConfigSchema
+        .safeParse(candidate)
+        .error?.issues.map((issue) => issue.path.join("."));
+    // 15 × 3 + 8 × 25 = 245 > 240.
+    expect(
+      paths({
+        ...source,
+        discovery: {
+          ...discovery,
+          tracer: { wallMinutes: 25, maxParallel: 1 },
+        },
+      }),
+    ).toEqual(["discovery.tracer.wallMinutes"]);
+    // Two tracers at once need two discovery runs of memory.
+    expect(
+      paths({
+        ...source,
+        discovery: {
+          ...discovery,
+          tracer: { wallMinutes: 20, maxParallel: 2 },
+        },
+      }),
+    ).toEqual(["discovery.tracer.maxParallel"]);
+    expect(
+      paths({
+        ...source,
+        discovery: {
+          ...discovery,
+          tracer: { wallMinutes: 20, maxParallel: 2 },
+        },
+        resources: {
+          ...(source.resources as object),
+          memoryBudgetMiB: 2 * 10752,
+        },
+      }),
+    ).toBeUndefined();
+    expect(
+      paths({
+        ...source,
+        discovery: { ...discovery, enumerator: { runtime: "codex" } },
+      }),
+    ).toEqual(["discovery.enumerator.runtime"]);
+  });
+
+  it("is refused by a session until the role runtime lands (PR 2)", async () => {
+    await expect(
+      readWordPressCampaignConfig(
+        join(
+          import.meta.dirname,
+          "..",
+          "..",
+          "examples",
+          "campaign-partitioned.json",
+        ),
+      ),
+    ).rejects.toThrow(PARTITIONED_RUNTIME_PENDING);
   });
 });

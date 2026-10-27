@@ -81,8 +81,8 @@ export type PlannedDiscoveryRun = {
     readonly sourcePack?: { readonly dependency: "mounted" | "none" };
     readonly labAccess?: { readonly database: "read-only" | "none" };
     readonly runtime?: "codex-native/v1" | "claude-code/v1";
-    /** The launch mode the campaign config fixed for this Trial (ADR 0039). */
-    readonly mode?: "deep" | "wide";
+    /** The launch mode the campaign config fixed for this Trial (ADR 0039, 0042). */
+    readonly mode?: "deep" | "wide" | "partitioned";
     /** What the Harness enforced, as the Run parameters section states it. */
     readonly wallMinutes?: number;
     readonly minimumActiveMinutes?: number;

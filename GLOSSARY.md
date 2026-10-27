@@ -41,6 +41,10 @@
 | Campaign | 台帳の `campaignId` の単位。本番では選定バッチ 1 つの探索と記録のまとまりで、Target Snapshot は `maximumTargets` 件まで入る。検証は後から Finding 単位に同じ campaign へ記録する。開発で手動実行するときは 1 対象でもよい。 |
 | Trial | Campaign 内の独立した探索試行。現行の探索では、Root と子（4 体まで）が 1 つの Trial を構成する。 |
 | Root / 子 | 協調 Trial の親エージェントが Root、Root が起動する subagent が子。子は 4 体まで（SPEC 第 4 節、ADR 0029）。 |
+| 区画分配型（partitioned） | Root を置かず、Harness が役ごとに AI を起こす Trial。列挙役 1 体が入口と出口の一覧（inventory）と区画の案を出し、Harness が形と上限を検査して、区画ごとに追跡役 1 体を起こす。`discovery.mode: "partitioned"`（ADR 0042）。 |
+| 列挙役（enumerator） | 区画分配型で対象ごとに 1 体。サンドボックスに置かれた列挙の script を自分で走らせて点検し、script が拾えない行を足し、行 id 付きの inventory と区画の案を返す。定義は `prompts/agents/enumerator-v<n>.md`。 |
+| 追跡役（tracer） | 区画分配型で区画ごとに 1 体。自分の区画の行から入口と出口をたどり、契約 v4（solo）の形で Finding / Lead を返す。子を起こさない。定義は `prompts/agents/tracer-v<n>.md`。 |
+| 区画（partition） | 列挙役が機能のまとまりで切った inventory の行の集合。Harness は schema、重複、上限（1 区画の行数、区画数）だけを検査し、超えた案は切り分けずに差し戻す（`maxResubmits` まで）。`partition-assigned` に行数と digest が残り、Finding / Lead に `partition` が付く。 |
 | Discovery run | モデル実行の記録単位。Trial の中で何回モデルを呼んだかと区別する。 |
 | Finding | 攻撃者の立場、入口から影響までのソース上の経路、観測を備えた未確認の主張。 |
 | Lead | ソースに根拠があり、影響までに未解決の辺が残る手がかり。Finding でも検証結果でもない。 |
