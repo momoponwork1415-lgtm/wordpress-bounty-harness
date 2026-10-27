@@ -1,0 +1,295 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1760" height="1310" viewBox="0 0 1760 1310" font-family="'Noto Sans JP','Hiragino Sans','Yu Gothic',sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#555"/>
+    </marker>
+    <marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#1f5fa8"/>
+    </marker>
+    <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#2e7d32"/>
+    </marker>
+  </defs>
+  <style>
+    .t{font-size:15px;fill:#222}
+    .s{font-size:13px;fill:#444}
+    .h{font-size:17px;font-weight:700;fill:#222}
+    .H{font-size:22px;font-weight:700;fill:#1f5fa8}
+    .A{font-size:22px;font-weight:700;fill:#2e7d32}
+    .title{font-size:26px;font-weight:700;fill:#222}
+    .lbl{font-size:13px;fill:#1f5fa8}
+    .lbla{font-size:13px;fill:#2e7d32}
+    .hb{fill:#eef4fb;stroke:#1f5fa8;stroke-width:1.6}
+    .ab{fill:#eef7ee;stroke:#2e7d32;stroke-width:1.6}
+    .pb{fill:#fff6e5;stroke:#c77700;stroke-width:1.6}
+    .nb{fill:#fff;stroke:#888;stroke-width:1.2}
+    .step{font-size:18px;font-weight:700;fill:#333}
+  </style>
+  <rect width="1760" height="1310" fill="#fff"/>
+  <text x="40" y="44" class="title">探索の仕組み（2026-10-28、承認用）— 中身は AI、形はハーネス</text>
+
+  <!-- 外側の輪 -->
+  <rect x="40" y="70" width="1680" height="120" rx="10" fill="#f7f7f7" stroke="#bbb"/>
+  <text x="56" y="96" class="h">外側の輪（24 時間、変えない）</text>
+  <g class="t">
+    <rect x="60" y="112" width="200" height="56" rx="8" class="nb"/><text x="80" y="136">対象を選ぶ</text><text x="80" y="156" class="s">帯・履歴・除外</text>
+    <rect x="300" y="112" width="200" height="56" rx="8" class="nb"/><text x="320" y="136">ソースを固定する</text><text x="320" y="156" class="s">版と指紋（digest）</text>
+    <rect x="540" y="112" width="200" height="56" rx="8" class="nb"/><text x="560" y="136">調べる</text><text x="560" y="156" class="s">↓ 内側（今回変える所）</text>
+    <rect x="780" y="112" width="240" height="56" rx="8" class="nb"/><text x="800" y="136">ふるい分けて確かめる</text><text x="800" y="156" class="s">読み直し → 再現 → 人が見る</text>
+    <rect x="1060" y="112" width="200" height="56" rx="8" class="nb"/><text x="1080" y="136">台帳に残す</text><text x="1080" y="156" class="s">追記だけ、指紋の参照だけ</text>
+    <rect x="1300" y="112" width="400" height="56" rx="8" class="nb"/><text x="1320" y="136">人が決める所は 2 つ</text><text x="1320" y="156" class="s">提出前の確認、外へ出す行動の承認</text>
+  </g>
+  <g stroke="#555" stroke-width="1.6" fill="none" marker-end="url(#a)">
+    <path d="M260 140 H298"/><path d="M500 140 H538"/><path d="M740 140 H778"/><path d="M1020 140 H1058"/><path d="M1260 140 H1298"/>
+  </g>
+  <path d="M1160 112 V100 H160 V110" stroke="#555" stroke-width="1.4" fill="none" marker-end="url(#a)"/>
+
+  <!-- 内側 -->
+  <rect x="40" y="210" width="1300" height="660" rx="10" fill="#fcfcfc" stroke="#999"/>
+  <text x="56" y="238" class="h">内側: 対象 1 つを調べる順（ハーネスが順に起こす。飛ばせない。親となる AI は置かない）</text>
+
+  <!-- 段の見出し -->
+  <g class="step">
+    <text x="64" y="272">① 洗い出す</text>
+    <text x="276" y="272">② 形を検査する</text>
+    <text x="488" y="272">③ 区画ごとに読む</text>
+    <text x="700" y="272">④ 整える</text>
+    <text x="912" y="272">⑤ 別の体が読み直す</text>
+    <text x="1124" y="272">⑥ 再現して人が見る</text>
+  </g>
+  <g stroke="#ddd" stroke-width="1">
+    <line x1="260" y1="250" x2="260" y2="860"/><line x1="472" y1="250" x2="472" y2="860"/><line x1="684" y1="250" x2="684" y2="860"/>
+    <line x1="896" y1="250" x2="896" y2="860"/><line x1="1108" y1="250" x2="1108" y2="860"/>
+  </g>
+
+  <!-- ハーネスのレーン -->
+  <rect x="48" y="286" width="1284" height="230" rx="8" fill="#f3f7fc" stroke="#c9d8ea"/>
+  <text x="60" y="310" class="H">ハーネス（決まった処理）</text>
+  <text x="350" y="310" class="lbl">形を決め、上限を守らせ、起こし、記録する。中身は作らない。自由文を分類しない。</text>
+  <g class="s">
+    <rect x="60" y="324" width="190" height="180" rx="8" class="hb"/>
+    <text x="70" y="346" class="t">渡すもの</text>
+    <text x="70" y="368">・固定したソース（読むだけ）</text>
+    <text x="70" y="388">・洗い出しの道具 2 本</text>
+    <text x="70" y="406">　（登録を拾う、出口を拾う）</text>
+    <text x="70" y="426">・本体側の固定一覧</text>
+    <text x="70" y="452">先に走らせて結果を渡さない</text>
+    <text x="70" y="470">（床にしない）</text>
+
+    <rect x="272" y="324" width="190" height="180" rx="8" class="hb"/>
+    <text x="282" y="346" class="t">形だけ見る</text>
+    <text x="282" y="368">・決めた形（schema）</text>
+    <text x="282" y="386">・行の重複、知らない行番号</text>
+    <text x="282" y="404">・1 区画の行数、区画の数</text>
+    <text x="282" y="430">超えたら前の案と超えた箇所</text>
+    <text x="282" y="448">を添えて差し戻す（2 回まで）</text>
+    <text x="282" y="470">ハーネスは切り分けない</text>
+    <text x="282" y="490">尽きたら「未完」で終える</text>
+
+    <rect x="484" y="324" width="190" height="180" rx="8" class="hb"/>
+    <text x="494" y="346" class="t">割り当てて起こす</text>
+    <text x="494" y="368">・区画 1 つにつき体 1 つ</text>
+    <text x="494" y="386">・同時に動く数、時間の上限</text>
+    <text x="494" y="404">・互いに見えない箱（gVisor）</text>
+    <text x="494" y="430">渡すのは自分の区画の一覧、</text>
+    <text x="494" y="448">短い目的の文、出力の形、</text>
+    <text x="494" y="466">信頼の境界、範囲の宣言</text>
+    <text x="494" y="490">基準や型の一覧は渡さない</text>
+
+    <rect x="696" y="324" width="190" height="180" rx="8" class="hb"/>
+    <text x="706" y="346" class="t">正規化して記録する</text>
+    <text x="706" y="368">・形に揃え、合わなければ保留</text>
+    <text x="706" y="386">・範囲外は脇に置く（park）</text>
+    <text x="706" y="404">・同根の鍵を付ける（ヒント）</text>
+    <text x="706" y="430">候補と手がかりの両方に</text>
+    <text x="706" y="448">区画の番号を付けて台帳へ</text>
+    <text x="706" y="474">何を読み、何を出したかが</text>
+    <text x="706" y="492">機械の記録として残る</text>
+
+    <rect x="908" y="324" width="190" height="180" rx="8" class="hb"/>
+    <text x="918" y="346" class="t">別の体を起こす</text>
+    <text x="918" y="368">・候補 1 つにつき体 1 つ</text>
+    <text x="918" y="386">・追跡役の文章は渡さない</text>
+    <text x="918" y="404">・モデルは別でもよい</text>
+    <text x="918" y="430">通らなかった理由は決めた</text>
+    <text x="918" y="448">語（入力 / 到達）で記録</text>
+    <text x="918" y="474">落とすのはここ。探索の体に</text>
+    <text x="918" y="492">自分で落とさせない</text>
+
+    <rect x="1120" y="324" width="204" height="180" rx="8" class="hb"/>
+    <text x="1130" y="346" class="t">検証環境と合図</text>
+    <text x="1130" y="368">・候補ごとに使い捨ての環境</text>
+    <text x="1130" y="386">・一回限りの合図（canary）</text>
+    <text x="1130" y="404">・固定したソースと同じ指紋か</text>
+    <text x="1130" y="430">合図が回収できたときだけ</text>
+    <text x="1130" y="448">「再現した」と記録する</text>
+    <text x="1130" y="474">環境や手順の失敗は「未完」。</text>
+    <text x="1130" y="492">否定の証拠には数えない</text>
+  </g>
+
+  <!-- AI のレーン -->
+  <rect x="48" y="548" width="1284" height="180" rx="8" fill="#f3f9f3" stroke="#c6dcc6"/>
+  <text x="60" y="572" class="A">AI（判断）</text>
+  <text x="700" y="572" class="lbla">判断はすべて機械の記録を伴う</text>
+  <g class="s">
+    <rect x="60" y="586" width="190" height="130" rx="8" class="ab"/>
+    <text x="70" y="608" class="t">洗い出し役（1 体）</text>
+    <text x="70" y="630">道具を自分で走らせ、結果を</text>
+    <text x="70" y="648">点検し、拾えない分を足す</text>
+    <text x="70" y="670">関連する機能でまとめ、</text>
+    <text x="70" y="688">1 区画を自分の文脈の 2〜3 割に</text>
+    <text x="70" y="708">行ごとに番号と出どころを付ける</text>
+
+    <rect x="272" y="586" width="190" height="130" rx="8" fill="#f9f9f9" stroke="#ccc" stroke-dasharray="4 3"/>
+    <text x="282" y="608" class="t">（差し戻されたら直す）</text>
+    <text x="282" y="630">超えた箇所を自分で切り直す</text>
+
+    <rect x="484" y="586" width="190" height="130" rx="8" class="ab"/>
+    <text x="494" y="608" class="t">追跡役（区画ごとに 1 体）</text>
+    <text x="494" y="630">自分の区画だけを読む。一発。</text>
+    <text x="494" y="648">互いに相談しない</text>
+    <text x="494" y="670">入口が出口につながれば候補、</text>
+    <text x="494" y="688">途中で止まれば手がかり</text>
+    <text x="494" y="708">（足りない 1 つを書く）</text>
+
+    <rect x="696" y="586" width="190" height="130" rx="8" fill="#f9f9f9" stroke="#ccc" stroke-dasharray="4 3"/>
+    <text x="706" y="608" class="t">（AI の仕事は無し）</text>
+    <text x="706" y="630">同根かの最終判断は ⑤ 以降</text>
+
+    <rect x="908" y="586" width="190" height="130" rx="8" class="ab"/>
+    <text x="918" y="608" class="t">読み直し役（候補ごと 1 体）</text>
+    <text x="918" y="630">ソースだけを見て、入力が通るか、</text>
+    <text x="918" y="648">出口に届くかを確かめる</text>
+    <text x="918" y="670">同根の候補をまとめる</text>
+    <text x="918" y="688">新しい候補は出せない</text>
+
+    <rect x="1120" y="586" width="204" height="130" rx="8" class="ab"/>
+    <text x="1130" y="608" class="t">検証役（候補ごとに 1 体）</text>
+    <text x="1130" y="630">前提を作り、攻撃者の位置から</text>
+    <text x="1130" y="648">手順を実行し、記録を書く</text>
+    <text x="1130" y="670">判定はしない</text>
+    <text x="1130" y="696" fill="#c77700">人: 用意された要求を送り、</text>
+    <text x="1130" y="714" fill="#c77700">自分のブラウザで見る</text>
+  </g>
+
+  <!-- レーン間の矢印 -->
+  <g stroke-width="1.6" fill="none">
+    <path d="M72 504 V584" stroke="#1f5fa8" marker-end="url(#ab)"/>
+    <path d="M243 584 V506" stroke="#2e7d32" marker-end="url(#ag)"/>
+    <path d="M250 414 H270" stroke="#1f5fa8" marker-end="url(#ab)"/>
+    <path d="M284 504 V584" stroke="#1f5fa8" marker-end="url(#ab)" stroke-dasharray="4 3"/>
+    <path d="M455 584 V506" stroke="#2e7d32" marker-end="url(#ag)" stroke-dasharray="4 3"/>
+    <path d="M462 414 H482" stroke="#1f5fa8" marker-end="url(#ab)"/>
+    <path d="M496 504 V584" stroke="#1f5fa8" marker-end="url(#ab)"/>
+    <path d="M667 584 V506" stroke="#2e7d32" marker-end="url(#ag)"/>
+    <path d="M674 414 H694" stroke="#1f5fa8" marker-end="url(#ab)"/>
+    <path d="M886 414 H906" stroke="#1f5fa8" marker-end="url(#ab)"/>
+    <path d="M920 504 V584" stroke="#1f5fa8" marker-end="url(#ab)"/>
+    <path d="M1091 584 V506" stroke="#2e7d32" marker-end="url(#ag)"/>
+    <path d="M1098 414 H1118" stroke="#1f5fa8" marker-end="url(#ab)"/>
+    <path d="M1132 504 V584" stroke="#1f5fa8" marker-end="url(#ab)"/>
+    <path d="M1317 584 V506" stroke="#2e7d32" marker-end="url(#ag)"/>
+  </g>
+  <g font-size="12">
+    <text x="84" y="528" fill="#1f5fa8">↓ ソースと道具</text><text x="84" y="543" fill="#2e7d32">↑ 一覧と区画の案</text>
+    <text x="296" y="528" fill="#1f5fa8">↓ 差し戻し（超えた箇所）</text><text x="296" y="543" fill="#2e7d32">↑ 直した案</text>
+    <text x="508" y="528" fill="#1f5fa8">↓ 区画 1 つ、目的、出力の形</text><text x="508" y="543" fill="#2e7d32">↑ 候補 / 手がかり</text>
+    <text x="932" y="528" fill="#1f5fa8">↓ 候補 1 つ（文章なし）</text><text x="932" y="543" fill="#2e7d32">↑ 通る / 通らない</text>
+    <text x="1144" y="528" fill="#1f5fa8">↓ 環境と候補</text><text x="1144" y="543" fill="#2e7d32">↑ 手順の記録</text>
+  </g>
+
+  <!-- 内側の注 -->
+  <g class="s">
+    <text x="60" y="758">責務の線の決め方: 走らせるたびに同じ出力になる仕事はハーネスへ、ばらつきが成果を左右する仕事は AI へ。実際の run の記録（何を読んだか、行の使用率、通過率）で判定し、動かす。</text>
+    <text x="60" y="780">モデルは役ごとに差し替える。役の定義は Markdown 1 枚で、本文の指紋を台帳に固定する。agent の実行は Claude Code の輪 1 つ。</text>
+    <text x="60" y="802">段 ① の道具（script）は補助。出力の責任は洗い出し役が持つ。道具を走らせたかは実行記録から観測する。</text>
+    <text x="60" y="824">記録に残す新しい出来事: 洗い出しの記録（差し戻しの回数、道具の行と AI の行の数）、区画の割り当て、組み合わせの記録。候補と手がかりには区画の番号。</text>
+    <text x="60" y="846">消し方: 設定の 1 行を外せば、いまの単一協調 Trial に戻る。</text>
+  </g>
+
+  <!-- 名指しの段 -->
+  <rect x="1360" y="210" width="360" height="660" rx="10" fill="#fffaf0" stroke="#c77700" stroke-dasharray="8 5" stroke-width="1.6"/>
+  <text x="1376" y="238" class="h" fill="#c77700">名指しの段: 組み合わせる</text>
+  <text x="1376" y="262" class="s">24 時間の輪には入れない。人が対象を名指し</text>
+  <text x="1376" y="280" class="s">したときだけ起こす。</text>
+  <g class="s">
+    <rect x="1376" y="300" width="328" height="56" rx="8" class="pb"/>
+    <text x="1388" y="322" class="t" fill="#c77700">人</text>
+    <text x="1388" y="344">対象と方向を決め、名指しで起動する</text>
+    <rect x="1376" y="380" width="328" height="96" rx="8" class="hb"/>
+    <text x="1388" y="402" class="t">ハーネス</text>
+    <text x="1388" y="424">その対象の手がかりを全件渡す（重複を</text>
+    <text x="1388" y="442">まとめ、並べただけ。組は作らない）</text>
+    <text x="1388" y="464">一覧の指紋と、組んだ番号と結果を記録</text>
+    <rect x="1376" y="500" width="328" height="110" rx="8" class="ab"/>
+    <text x="1388" y="522" class="t">組み合わせ役（1 体）</text>
+    <text x="1388" y="544">どの手がかりを組むかを自分で選ぶ</text>
+    <text x="1388" y="562">つながれば候補として出す</text>
+    <text x="1388" y="580">つながらなければ、組んだ番号と</text>
+    <text x="1388" y="598">理由を書く</text>
+    <rect x="1376" y="634" width="328" height="40" rx="8" class="nb"/>
+    <text x="1388" y="659">→ ⑤ 読み直し → ⑥ 再現 に合流する</text>
+    <text x="1376" y="710">根拠: 多段の脆弱性の公開記録（Wordfence</text>
+    <text x="1376" y="728">Argus、Elementor Pro の発見者の記事）では、</text>
+    <text x="1376" y="746">対象・方向・証明の要求を人が担っている。</text>
+    <text x="1376" y="764">いまの手がかりの質では、自動で組む根拠</text>
+    <text x="1376" y="782">の数字が無い。</text>
+  </g>
+  <g stroke="#c77700" stroke-width="1.6" fill="none" marker-end="url(#a)">
+    <path d="M1540 356 V378"/><path d="M1540 476 V498"/><path d="M1540 610 V632"/>
+  </g>
+  <path d="M1376 654 H1340" stroke="#c77700" stroke-width="1.6" fill="none" stroke-dasharray="4 3"/>
+
+  <g transform="translate(0,20)">
+  <!-- 下段 3 面 -->
+  <rect x="40" y="870" width="520" height="400" rx="10" fill="#f3f7fc" stroke="#c9d8ea"/>
+  <text x="56" y="898" class="H">ハーネスのコードに残す 7 つ</text>
+  <g class="t">
+    <text x="56" y="930">1. 隔離 — gVisor の使い捨ての箱、外向きは認証の仲介だけ</text>
+    <text x="56" y="958">2. 固定 — 版と指紋、同じ指紋のときだけ判定</text>
+    <text x="56" y="986">3. 割り当て — 区画に体、候補に体、順序を飛ばさせない</text>
+    <text x="56" y="1014">4. 出力の形の強制 — 決めた形、正規化、保留、差し戻し</text>
+    <text x="56" y="1042">5. 同根の鍵 — ヒントとして付ける。判定にはしない</text>
+    <text x="56" y="1070">6. 上限 — 体の数、時間、件数、差し戻しの回数</text>
+    <text x="56" y="1098">7. 記録 — 台帳は追記だけ。AI の判断ごとに機械の記録</text>
+    <text x="56" y="1140" class="s">しないこと: 中身を先に作る（床）、自由文を分類する、</text>
+    <text x="56" y="1160" class="s">区画を切り分ける、手がかりの組を作る、攻撃の型を列挙する、</text>
+    <text x="56" y="1180" class="s">prompt に体の数や最低時間を書く</text>
+  </g>
+
+  <rect x="580" y="870" width="520" height="400" rx="10" fill="#f3f9f3" stroke="#c6dcc6"/>
+  <text x="596" y="898" class="A">AI が持つ</text>
+  <g class="t">
+    <text x="596" y="930">・どこを入口・出口と見るか（道具は補助）</text>
+    <text x="596" y="958">・どう区画に切るか（機能のまとまり、文脈の 2〜3 割）</text>
+    <text x="596" y="986">・入口から出口へつながるか、どこで止まるか</text>
+    <text x="596" y="1014">・読み直しで通るか通らないか、同じ根か</text>
+    <text x="596" y="1042">・どの手がかりを組むか（名指しの段）</text>
+    <text x="596" y="1070">・前提を作り、手順を実行する（判定はしない）</text>
+    <text x="596" y="1112" class="s">判定（「再現した」）は合図の回収だけ。AI の自己申告、</text>
+    <text x="596" y="1132" class="s">追跡役の文章、読み直しの意見は証拠にしない。</text>
+    <text x="596" y="1160" class="s">人が決めるのは、提出前の確認と外へ出す行動の承認だけ。</text>
+    <text x="596" y="1180" class="s">名指しの段の起動も人。</text>
+  </g>
+
+  <rect x="1120" y="870" width="600" height="400" rx="10" fill="#fafafa" stroke="#bbb"/>
+  <text x="1136" y="898" class="h">部分ごとに参考にした公開の実装</text>
+  <g class="s">
+    <text x="1136" y="928">① 区画の切り方 … Shopify（AI が機能ごと、文脈の 2〜3 割）</text>
+    <text x="1136" y="950">① 道具は補助 … Google Mantis（索引は道具、ヒント）、Mandiant AVDH（入口の抽出）</text>
+    <text x="1136" y="972">② 形だけの検査と差し戻し … Cloudflare の監査スキル（形と状態機械の検査器）</text>
+    <text x="1136" y="994">③ 区画ごとの体、一発、基準なし … Shopify、Anthropic（探す体に採点させない）、</text>
+    <text x="1136" y="1012">　Cloudflare VDH（探す体に自分の宿題を採点させない）</text>
+    <text x="1136" y="1034">④ 鍵はヒント、台帳が網羅の主張 … Anthropic（重複の判断は AI、判断の強制は仕組み）、</text>
+    <text x="1136" y="1052">　Mantis（相関はヒント）、Cloudflare（台帳が主張、文章は証拠でない）</text>
+    <text x="1136" y="1074">⑤ 別の体、別のモデル … Cloudflare（候補ごとに新しい検証）、Mantis、Shopify</text>
+    <text x="1136" y="1096">⑥ 再現と合図 … 自前（公開実装に無い。ここが強み）</text>
+    <text x="1136" y="1118">⑥ 失敗は「未完」、否定にしない … Mantis（not_attempted、指紋の不一致で判定しない）</text>
+    <text x="1136" y="1140">上限と順序はコード … Anthropic、AVDH（段の順序は決定論）、Cloudflare（対象ごとの予算）</text>
+    <text x="1136" y="1162">名指しの段 … Wordfence Argus と Elementor Pro の発見記事の観察</text>
+    <text x="1136" y="1196" fill="#a33">採らなかった: Mantis の独自の流れ図エンジン、Cloudflare の攻撃クラスの格子と重大度欄、</text>
+    <text x="1136" y="1216" fill="#a33">AVDH の脅威モデル承認を輪に入れること、Anthropic のクラッシュ再現、Cloudflare 規模の並列</text>
+    <text x="1136" y="1250" class="s">詳細: docs/reviews/2026-10-28-adopted-design-for-approval.md</text>
+  </g>
+</g>
+</svg>

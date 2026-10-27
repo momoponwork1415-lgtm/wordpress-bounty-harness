@@ -2,7 +2,7 @@
 
 「調べて報告」の記録。正本ではない。所有者の指示（2026-10-28）: 調べた範囲で AI が良いと思うものを組み合わせて設計を組み立て、所有者が承認する。Cloudflare VDH / VVS、Mandiant AVDH、Anthropic defending harness は所有者が思いついた参考で、採用の義務は無い。
 
-この文書は [設計文書](2026-10-27-partitioned-exploration-design.md) と [決定した構造の図](2026-10-27-decided-structure.svg) の要約に、部分ごとに「何を採り、何を採らず、なぜか」を足したものである。承認されたら、段階 1 の PR の ADR にこの表を写す。
+この文書は [設計文書](2026-10-27-partitioned-exploration-design.md) と [構造の図（2026-10-28）](2026-10-28-architecture.svg) の要約に、部分ごとに「何を採り、何を採らず、なぜか」を足したものである。承認されたら、段階 1 の PR の ADR にこの表を写す。
 
 ## 1. 一言で
 
