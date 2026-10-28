@@ -93,6 +93,7 @@ function harness(options: {
     ReturnType<typeof observation> | ReturnType<typeof failed>
   >;
   programmeStatus?: "current" | "stale";
+  programmeAcceptsAsset?: boolean;
   clock?: string;
   /** The clock moves on by this much each time it is read, as a real one does. */
   advanceMsPerRead?: number;
@@ -127,9 +128,15 @@ function harness(options: {
               policy: {
                 programmeOpportunityBand: "high-impact-only",
                 eligibility: {
-                  assets: [
-                    { kind: "wordpress-plugin", scope: "publicly-distributed" },
-                  ],
+                  assets:
+                    options.programmeAcceptsAsset === false
+                      ? []
+                      : [
+                          {
+                            kind: "wordpress-plugin",
+                            scope: "publicly-distributed",
+                          },
+                        ],
                 },
               },
             },
@@ -607,5 +614,250 @@ describe("install queue (#533)", () => {
     expect(
       (await selection.select(queuePolicy)).map(({ slug }) => slug),
     ).toEqual(["popular", "small"]);
+  });
+});
+
+describe("operator candidate list (#520)", () => {
+  it("excludes a nominated version that differs from stable instead of silently changing it", async () => {
+    const selection = openWordPressSelection({
+      candidates: harness({
+        observations: { nominated: observation("nominated", [], 100_000) },
+        enumerateCandidates: async () => ({
+          status: "available",
+          candidates: [],
+          listings: [],
+        }),
+      }),
+      ledger: ledgerOf([]),
+    });
+    const policy = {
+      ...(await loadWordPressSelectionPolicy()),
+      operatorCandidates: [
+        { slug: "nominated", version: "1.2.2", evidenceDigest: digest("f") },
+      ],
+    };
+    const decision = await selection.decide(policy);
+    expect(decision.selected).toEqual([]);
+    expect(decision.inspections).toMatchObject([
+      {
+        slug: "nominated",
+        status: "ineligible",
+        reasons: ["operator-candidate-version-mismatch"],
+        operatorCandidate: policy.operatorCandidates[0],
+      },
+    ]);
+  });
+
+  it("adds nominated versions to the normal install queue with the same eligibility and Trial exclusions", async () => {
+    const observations = {
+      popular: observation("popular", [], 1_000_000),
+      nominated: observation("nominated", [], 500_000),
+      exposed: observation("exposed", [], 2_000_000),
+      small: observation("small", [], 5_000),
+    };
+    const candidates = harness({
+      observations,
+      enumerateCandidates: async () => ({
+        status: "available",
+        candidates: [
+          {
+            slug: "popular",
+            sourceKind: "popular",
+            sourcePage: 1,
+            sourceUrl: "https://api.wordpress.org/plugins/info/1.2/",
+            observedAt: now,
+            contentDigest: digest("d"),
+          },
+        ],
+        listings: [],
+      }),
+    });
+    const selection = openWordPressSelection({
+      candidates,
+      ledger: ledgerOf(exposedTrialWithFinding()),
+    });
+    const policy = {
+      ...(await loadWordPressSelectionPolicy()),
+      operatorCandidates: ["popular", "nominated", "exposed", "small"].map(
+        (slug) => ({
+          slug,
+          version: "1.2.3",
+          evidenceDigest: digest("f"),
+        }),
+      ),
+    };
+    const decision = await selection.decide(policy);
+    expect(decision.selected.map(({ slug }) => slug)).toEqual([
+      "popular",
+      "nominated",
+    ]);
+    expect(
+      decision.inspections.find(({ slug }) => slug === "exposed")?.reasons,
+    ).toEqual(["previously-selected"]);
+    expect(
+      decision.inspections.find(({ slug }) => slug === "small")?.reasons,
+    ).toEqual(["below-installation-threshold"]);
+    expect(
+      decision.inspections.find(({ slug }) => slug === "nominated"),
+    ).toMatchObject({
+      operatorCandidate: {
+        slug: "nominated",
+        version: "1.2.3",
+        evidenceDigest: digest("f"),
+      },
+    });
+    expect(JSON.stringify(decision.selected)).not.toContain(digest("f"));
+    observations.exposed.observation.stableVersion = "1.2.4";
+    const revisited = await selection.decide({
+      ...policy,
+      operatorCandidates: policy.operatorCandidates.map((candidate) =>
+        candidate.slug === "exposed"
+          ? { ...candidate, version: "1.2.4" }
+          : candidate,
+      ),
+    });
+    expect(revisited.selected.map(({ slug }) => slug)).toEqual([
+      "exposed",
+      "popular",
+      "nominated",
+    ]);
+    expect(revisited.selected[0]?.reason).toBe("version-increased");
+  });
+
+  it("applies current freshness, author, slug and Programme rules to nominated candidates", async () => {
+    const oldUpdate = observation("old-update", [], 100_000);
+    oldUpdate.observation.lastUpdated = "2025-01-01T00:00:00Z";
+    const oldObservation = observation("old-observation", [], 100_000);
+    oldObservation.observation.observedAt = "2026-10-01T00:00:00Z";
+    const excludedAuthor = observation("excluded-author", [], 100_000);
+    excludedAuthor.observation.author = "Automattic";
+    const observations = {
+      safe: observation("safe", [], 100_000),
+      blocked: observation("blocked", [], 100_000),
+      "excluded-author": excludedAuthor,
+      "old-update": oldUpdate,
+      "old-observation": oldObservation,
+      closed: failed("closed", "closed"),
+    };
+    const policy = {
+      ...(await loadWordPressSelectionPolicy()),
+      excludedSlugs: ["blocked"],
+      operatorCandidates: Object.keys(observations).map((slug) => ({
+        slug,
+        version: "1.2.3",
+        evidenceDigest: digest("f"),
+      })),
+    };
+    const source = {
+      observations,
+      enumerateCandidates: async () => ({
+        status: "available" as const,
+        candidates: [],
+        listings: [],
+      }),
+    };
+    const decision = await openWordPressSelection({
+      candidates: harness(source),
+      ledger: ledgerOf([]),
+    }).decide(policy);
+    expect(decision.selected.map(({ slug }) => slug)).toEqual(["safe"]);
+    expect(
+      decision.inspections.map(({ slug, reasons }) => [slug, reasons]),
+    ).toEqual([
+      ["safe", []],
+      ["blocked", ["excluded-slug"]],
+      ["excluded-author", ["excluded-author"]],
+      ["old-update", ["update-stale"]],
+      ["old-observation", ["observation-stale"]],
+      ["closed", ["distribution-closed"]],
+    ]);
+    for (const [settings, expected] of [
+      [{ programmeStatus: "stale" as const }, "programme-stale"],
+      [{ programmeAcceptsAsset: false }, "programme-asset-out-of-scope"],
+    ] as const) {
+      const blocked = await openWordPressSelection({
+        candidates: harness({ ...source, ...settings }),
+        ledger: ledgerOf([]),
+      }).decide(policy);
+      expect(blocked.selected).toEqual([]);
+      expect(
+        blocked.inspections.every(({ reasons }) => reasons.includes(expected)),
+      ).toBe(true);
+    }
+  });
+
+  it("binds references to the policy and refuses body fields, duplicate slugs and invalid references at the public boundary", async () => {
+    const selection = openWordPressSelection({
+      candidates: harness({
+        observations: { nominated: observation("nominated", [], 100_000) },
+        enumerateCandidates: async () => ({
+          status: "available",
+          candidates: [],
+          listings: [],
+        }),
+      }),
+      ledger: ledgerOf([]),
+    });
+    const candidate = {
+      slug: "nominated",
+      version: "1.2.3",
+      evidenceDigest: digest("f"),
+    };
+    const policy = {
+      ...(await loadWordPressSelectionPolicy()),
+      operatorCandidates: [candidate],
+    };
+    const selected = (await selection.decide(policy)).selected;
+    const changed = await selection.decide({
+      ...policy,
+      operatorCandidates: [{ ...candidate, evidenceDigest: digest("e") }],
+    });
+    expect(changed.selected[0]?.policy.digest).not.toBe(
+      selected[0]?.policy.digest,
+    );
+    for (const field of ["mechanism", "patch", "poc", "reproduction"]) {
+      await expect(
+        selection.decide({
+          ...policy,
+          operatorCandidates: [
+            { ...candidate, [field]: "synthetic forbidden body" },
+          ],
+        }),
+      ).rejects.toThrow();
+    }
+    for (const operatorCandidates of [
+      [candidate, candidate],
+      [{ ...candidate, evidenceDigest: "/private/evidence" }],
+      [{ ...candidate, version: "../old" }],
+      [{ ...candidate, slug: "../outside" }],
+    ])
+      await expect(
+        selection.decide({ ...policy, operatorCandidates }),
+      ).rejects.toThrow();
+    await expect(
+      selection.decide({ ...basePolicy, operatorCandidates: [candidate] }),
+    ).rejects.toThrow();
+  });
+
+  it("does not bypass a failed directory enumeration with operator candidates", async () => {
+    const selection = openWordPressSelection({
+      candidates: harness({
+        observations: { nominated: observation("nominated", [], 100_000) },
+        enumerateCandidates: async () => ({
+          status: "unavailable",
+          candidates: [],
+          listings: [],
+        }),
+      }),
+      ledger: ledgerOf([]),
+    });
+    const decision = await selection.decide({
+      ...(await loadWordPressSelectionPolicy()),
+      operatorCandidates: [
+        { slug: "nominated", version: "1.2.3", evidenceDigest: digest("f") },
+      ],
+    });
+    expect(decision.sourceStatus).toBe("unavailable");
+    expect(decision.selected).toEqual([]);
   });
 });

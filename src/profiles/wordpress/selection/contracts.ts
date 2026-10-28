@@ -20,6 +20,16 @@ const coreVersionSchema = z
   .max(32)
   .regex(/^[0-9]+(?:\.[0-9]+){1,3}$/);
 
+const operatorCandidateSchema = z.strictObject({
+  slug: slugSchema,
+  version: z.string().regex(/^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/),
+  evidenceDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+});
+
+export type WordPressOperatorCandidate = z.infer<
+  typeof operatorCandidateSchema
+>;
+
 const commonSelectionPolicy = {
   kind: z.literal("wordpress-selection-policy"),
   schemaVersion: z.literal(1),
@@ -80,6 +90,15 @@ const manualSelectionPolicy = z
 
 const automaticSelectionPolicy = z.strictObject({
   ...commonSelectionPolicy,
+  /** Operator nominations carry references only; they never override eligibility. */
+  operatorCandidates: z
+    .array(operatorCandidateSchema)
+    .refine(
+      (candidates) =>
+        new Set(candidates.map(({ slug }) => slug)).size === candidates.length,
+      { message: "Operator candidate slugs must be unique" },
+    )
+    .optional(),
   /** Undeclared runtime dependencies resolved to official stable at freeze. */
   pluginDependencySlugs: z
     .record(slugSchema, z.array(slugSchema).max(16))
@@ -108,6 +127,7 @@ export type WordPressSelectionPolicy = z.infer<
 >;
 
 export type SelectionReason =
+  | "operator-candidate-version-mismatch"
   | "observation-unavailable"
   | "distribution-closed"
   | "observation-stale"
@@ -234,6 +254,8 @@ export interface WordPressSelectionInspection {
   readonly reasons: readonly SelectionReason[];
   readonly selection?: WordPressTargetSelection;
   readonly observedAt?: string;
+  /** Kept in the selection report only, never in the target handed to discovery. */
+  readonly operatorCandidate?: WordPressOperatorCandidate;
   readonly enumeration?: {
     readonly sourceKind: "popular" | "tag";
     readonly sourceTag?: string;

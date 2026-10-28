@@ -52,7 +52,10 @@ import {
 import type { ProgrammeIntelligence } from "../../src/profiles/wordpress/programme-intelligence/index.js";
 import { loadWordpressScopePolicy } from "../../src/profiles/wordpress/scope-policy.js";
 import { loadWordPressDiscoveryAsset } from "../../src/profiles/wordpress/prompts/index.js";
-import { createWordPressSelection } from "../../src/profiles/wordpress/selection/index.js";
+import {
+  createWordPressSelection,
+  loadWordPressSelectionPolicy,
+} from "../../src/profiles/wordpress/selection/index.js";
 import type { WordPressOrgListingObservation } from "../../src/profiles/wordpress/selection/wordpress-org-candidate-enumerator.js";
 import {
   openSnapshot,
@@ -5353,6 +5356,80 @@ describe("harness CLI vertical slice", () => {
     expect(verified.basis?.kind).toBe("latest-version");
     expect(verified.promptVersion).toBe("wbh-verify/v11");
   });
+
+  it.each([
+    { version: undefined, nominated: false },
+    { version: undefined, nominated: true },
+    { version: "3.3", nominated: false },
+    { version: "3.3", nominated: true },
+  ])(
+    "re-verifies with operator candidates (version $version, nominated $nominated)",
+    async ({ version, nominated }) => {
+      const { seedHistory, run, configPath, root, ledger, frozenSelections } =
+        await harness();
+      const campaign = ["--campaign", "campaign-reverify-candidates"];
+      expect(
+        (
+          await run(
+            "campaign",
+            "run",
+            "--all",
+            ...campaign,
+            "--config",
+            configPath,
+          )
+        ).code,
+      ).toBe(0);
+      await seedHistory("campaign-reverify-candidates");
+      const queue = await run("review", ...campaign);
+      const finding = /^runtime-confirmed\s+\S+\s+finding (\S+)/m.exec(
+        queue.stdout,
+      )![1]!;
+      await writeFile(
+        join(root, "selection.json"),
+        JSON.stringify({
+          ...(await loadWordPressSelectionPolicy()),
+          wordpressVersion: "6.8",
+          operatorCandidates: nominated
+            ? [
+                {
+                  slug: "synthetic-plugin",
+                  version: "1.0.0",
+                  evidenceDigest: sha("f"),
+                },
+              ]
+            : [],
+        }),
+      );
+      const reverified = await run(
+        "review",
+        "reverify",
+        ...campaign,
+        "--finding",
+        finding,
+        "--config",
+        configPath,
+        "--handoff",
+        join(root, "handoff"),
+        ...(version === undefined ? [] : ["--version", version]),
+      );
+      expect(reverified.stderr).toBe("");
+      expect(reverified.code).toBe(0);
+      expect(frozenSelections.at(-1)).toMatchObject({
+        slug: "synthetic-plugin",
+        version: version ?? "9.9.9",
+        dependencyVersionPolicy: "pinned-only",
+      });
+      expect(
+        ledger()
+          .read({
+            campaignId: "campaign-reverify-candidates",
+            type: "verification-finished",
+          })
+          .at(-1)?.event,
+      ).toMatchObject({ result: { status: "incomplete" } });
+    },
+  );
 
   it("pins the original plugin sources when an automatic policy re-verifies a fixed version", async () => {
     const { seedHistory, run, configPath, root, ledger, frozenSelections } =

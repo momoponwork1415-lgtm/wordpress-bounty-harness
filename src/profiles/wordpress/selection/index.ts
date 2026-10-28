@@ -15,6 +15,7 @@ export {
   wordPressTargetSelectionSchema,
 } from "./contracts.js";
 export type {
+  WordPressOperatorCandidate,
   WordPressSelectionPolicy,
   WordPressTargetAdvisoryHistory,
   WordPressTargetSelection,

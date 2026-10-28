@@ -185,10 +185,20 @@ export function createWordPressSelection(
             ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
           })
         : undefined;
+    const operatorCandidates =
+      "operatorCandidates" in policy ? (policy.operatorCandidates ?? []) : [];
+    const operatorBySlug = new Map(
+      operatorCandidates.map((candidate) => [candidate.slug, candidate]),
+    );
     const candidateSlugs =
       "candidateSlugs" in policy
         ? policy.candidateSlugs
-        : (enumeration?.candidates.map((candidate) => candidate.slug) ?? []);
+        : enumeration?.status === "available"
+          ? [
+              ...enumeration.candidates.map((candidate) => candidate.slug),
+              ...operatorBySlug.keys(),
+            ]
+          : [];
     const candidateProvenance = new Map(
       enumeration?.candidates.map((candidate) => [candidate.slug, candidate]) ??
         [],
@@ -218,6 +228,7 @@ export function createWordPressSelection(
     const results: WordPressSelectionInspection[] = [];
     for (const slug of [...new Set(candidateSlugs)]) {
       const enumeration = candidateProvenance.get(slug);
+      const operatorCandidate = operatorBySlug.get(slug);
       const reasons: SelectionReason[] = [];
       if (!programmeCurrent) reasons.push("programme-stale");
       else if (!programmeAcceptsAsset)
@@ -240,11 +251,17 @@ export function createWordPressSelection(
           slug,
           status: "ineligible",
           reasons,
+          ...(operatorCandidate === undefined ? {} : { operatorCandidate }),
           ...(enumeration === undefined ? {} : { enumeration }),
         });
         continue;
       }
       const observation = result.observation;
+      if (
+        operatorCandidate !== undefined &&
+        operatorCandidate.version !== observation.stableVersion
+      )
+        reasons.push("operator-candidate-version-mismatch");
       // A live fetch stamps the observation after `now` was read.
       const observedAge = ageDays(
         observation.observedAt,
@@ -300,6 +317,7 @@ export function createWordPressSelection(
           status: "ineligible",
           reasons,
           observedAt: observation.observedAt,
+          ...(operatorCandidate === undefined ? {} : { operatorCandidate }),
           ...(enumeration === undefined ? {} : { enumeration }),
         });
         continue;
@@ -345,6 +363,7 @@ export function createWordPressSelection(
         reasons: [],
         selection,
         observedAt: observation.observedAt,
+        ...(operatorCandidate === undefined ? {} : { operatorCandidate }),
         ...(enumeration === undefined ? {} : { enumeration }),
       });
     }
