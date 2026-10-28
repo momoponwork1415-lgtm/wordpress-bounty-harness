@@ -2296,6 +2296,7 @@ export function createWordPressCliProfile(
                 ? (({
                     candidateSource: _candidateSource,
                     pluginDependencySlugs: _pluginDependencySlugs,
+                    operatorCandidates: _operatorCandidates,
                     ...rest
                   }) => rest)(policy)
                 : policy;
