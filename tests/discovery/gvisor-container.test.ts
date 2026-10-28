@@ -434,6 +434,42 @@ describe("gVisor container admission (invariant 2)", () => {
     hosts: { labHost: lab },
     options: [],
   };
+  it("identifies a refused mount path without emitting control characters (#588)", () => {
+    for (const [source, target, message] of [
+      ["/bad,source", "/workspace", 'source "/bad,source"'],
+      ["/source", "/bad:target", 'target "/bad:target"'],
+      ["/bad\nsource", "/workspace", 'source "/bad\\nsource"'],
+      ["/source", "/bad\0target", 'target "/bad\\u0000target"'],
+    ] as const) {
+      expect(() =>
+        gvisorRunArgs({
+          ...container,
+          agent: {
+            ...agent,
+            options: [{ mount: { source, target, readonly: true } }],
+          },
+        }),
+      ).toThrow(message);
+    }
+  });
+
+  it("refuses invalid Codex memory at construction before any execution (#588)", () => {
+    for (const memoryMiB of [0, 2047, 2048.5, 10241, NaN, Infinity]) {
+      expect(
+        () =>
+          new GvisorCodexSandbox({
+            dockerExecutablePath: "/usr/bin/docker",
+            image: `node@${digest}`,
+            bundledCatalogPath: "/opt/codex/model-catalog.json",
+            scratchRootDirectory: "/tmp/unused-codex-scratch",
+            maxOutputBytes: 1024 * 1024,
+            timeoutMs: 60_000,
+            memoryMiB,
+          }),
+      ).toThrow("Codex sandbox options are invalid");
+    }
+  });
+
   it.each<[string, GvisorContainer]>([
     ["the root user", { ...container, user: "0:0" }],
     ["the root group", { ...container, user: "1000:0" }],

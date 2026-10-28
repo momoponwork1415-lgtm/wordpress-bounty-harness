@@ -169,6 +169,15 @@ export type ContainerOption =
   /** A host outside the Lab, such as the broker's TLS name; dotted names allowed. */
   | { readonly host: ContainerHost };
 
+/** A bind mount shared by both runtimes; admission remains in `gvisorRunArgs`. */
+export function containerMount(
+  source: string,
+  target: string,
+  readonly: boolean,
+): ContainerOption {
+  return { mount: { source, target, readonly } };
+}
+
 export interface GvisorContainer {
   readonly user: string;
   readonly memoryMiB: number;
@@ -191,13 +200,14 @@ const unsafeMountPath = /[,:\n\0]/;
 function renderOption(option: ContainerOption): string {
   if ("mount" in option) {
     const { source, target, readonly } = option.mount;
-    if (
-      !isAbsolute(source) ||
-      !isAbsolute(target) ||
-      unsafeMountPath.test(source) ||
-      unsafeMountPath.test(target)
-    )
-      throw new Error("gVisor container mount is not admitted");
+    for (const [kind, path] of [
+      ["source", source],
+      ["target", target],
+    ] as const)
+      if (!isAbsolute(path) || unsafeMountPath.test(path))
+        throw new Error(
+          `gVisor container mount ${kind} ${JSON.stringify(path)} is not admitted`,
+        );
     return `--mount=type=bind,src=${source},dst=${target}${readonly ? ",readonly" : ""}`;
   }
   if ("workdir" in option) {
@@ -215,14 +225,18 @@ function renderOption(option: ContainerOption): string {
       ? `--env=${option.env}`
       : `--env=${option.env}=${option.value}`;
   }
+  return renderHost(option.host);
+}
+
+function renderHost(host: ContainerHost): string {
   if (
     !/^[a-z0-9][a-z0-9-]{0,62}(?:\.[a-z0-9][a-z0-9-]{0,62})*$/.test(
-      option.host.name,
+      host.name,
     ) ||
-    isIP(option.host.ipv4) !== 4
+    isIP(host.ipv4) !== 4
   )
     throw new Error("gVisor container host is not admitted");
-  return `--add-host=${option.host.name}:${option.host.ipv4}`;
+  return `--add-host=${host.name}:${host.ipv4}`;
 }
 
 /** The complete `docker run` argument list; throws on anything outside invariant 2. */
@@ -274,7 +288,7 @@ export function gvisorRunArgs(container: GvisorContainer): string[] {
     "--interactive",
     `--network=${agent.network}`,
     ...[labHost, databaseHost, controlHost].flatMap((host) =>
-      host === undefined ? [] : [`--add-host=${host.name}:${host.ipv4}`],
+      host === undefined ? [] : [renderHost(host)],
     ),
     ...agent.options.map(renderOption),
     ...tail,

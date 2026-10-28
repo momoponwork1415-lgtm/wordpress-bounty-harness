@@ -34,10 +34,10 @@ import {
   admittedDockerName,
   admittedLabHosts,
   brokerGrantFault,
+  containerMount,
   gvisorDockerClient,
   gvisorRunArgs,
   nonRootContainerUser,
-  type ContainerOption,
   type DockerRun,
   type GvisorContainer,
 } from "./gvisor-container.js";
@@ -672,15 +672,18 @@ export class GvisorCodexSandbox implements CodexSandbox {
       options.maxOutputBytes <= 0 ||
       !Number.isSafeInteger(options.timeoutMs) ||
       options.timeoutMs <= 0 ||
-      options.timeoutMs > 240 * 60_000 ||
-      (options.memoryMiB !== undefined &&
-        (!Number.isSafeInteger(options.memoryMiB) ||
-          options.memoryMiB < CODEX_SANDBOX_MEMORY_MIB ||
-          options.memoryMiB > CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB))
+      options.timeoutMs > 240 * 60_000
     ) {
       throw new Error("Codex sandbox options are invalid");
     }
     imageSchema.parse(options.image);
+    if (
+      options.memoryMiB !== undefined &&
+      (!Number.isSafeInteger(options.memoryMiB) ||
+        options.memoryMiB < CODEX_SANDBOX_MEMORY_MIB ||
+        options.memoryMiB > CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB)
+    )
+      throw new Error("Codex sandbox options are invalid");
     this.#options = options;
     this.#user = nonRootContainerUser("Codex sandbox");
   }
@@ -948,33 +951,33 @@ export class GvisorCodexSandbox implements CodexSandbox {
         );
         markerPath = path;
       }
-      const readonly = (source: string, target: string): ContainerOption => ({
-        mount: { source, target, readonly: true },
-      });
-      const writable = (source: string, target: string): ContainerOption => ({
-        mount: { source, target, readonly: false },
-      });
       const args = this.#runArgs({
         agent: {
           name: containerName,
           network: command.grant.dockerNetworkName,
           hosts: command,
           options: [
-            readonly(source, SANDBOX_SOURCE_MOUNT_PATH),
+            containerMount(source, SANDBOX_SOURCE_MOUNT_PATH, true),
             ...(dependency === undefined
               ? []
-              : [readonly(dependency.directory, dependency.path)]),
+              : [containerMount(dependency.directory, dependency.path, true)]),
             ...additionalDependencies.map((mount) =>
-              readonly(mount.directory, mount.path),
+              containerMount(mount.directory, mount.path, true),
             ),
             ...(researchDirectory === undefined
               ? []
-              : [writable(researchDirectory, SANDBOX_RESEARCH_MOUNT_PATH)]),
-            readonly(staging, "/opt/codex-support"),
+              : [
+                  containerMount(
+                    researchDirectory,
+                    SANDBOX_RESEARCH_MOUNT_PATH,
+                    false,
+                  ),
+                ]),
+            containerMount(staging, "/opt/codex-support", true),
             { workdir: SANDBOX_SOURCE_MOUNT_PATH },
             { env: "HOME", value: "/tmp" },
             { env: "CODEX_HOME", value: "/tmp/codex" },
-            writable(codexHome, "/tmp/codex"),
+            containerMount(codexHome, "/tmp/codex", false),
             ...(tls === undefined
               ? [{ env: "OPENAI_API_KEY", value: token }]
               : [

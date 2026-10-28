@@ -35,10 +35,10 @@ import {
   admittedDockerName,
   admittedLabHosts,
   brokerGrantFault,
+  containerMount,
   gvisorDockerClient,
   gvisorRunArgs,
   nonRootContainerUser,
-  type ContainerOption,
   type DockerRun,
   type GvisorContainer,
 } from "./gvisor-container.js";
@@ -503,11 +503,6 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
       const { cliVersion } = await this.probe();
       const model = command.input.model;
       const subagentModel = command.subagentModel;
-      const mount = (
-        source: string,
-        target: string,
-        readonly: boolean,
-      ): ContainerOption => ({ mount: { source, target, readonly } });
       const args = this.#runArgs(
         {
           agent: {
@@ -516,18 +511,18 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
             hosts: command,
             options: [
               ...verified.map(({ directory, path }) =>
-                mount(directory, path, true),
+                containerMount(directory, path, true),
               ),
-              mount(research, SANDBOX_RESEARCH_MOUNT_PATH, false),
+              containerMount(research, SANDBOX_RESEARCH_MOUNT_PATH, false),
               ...(oneShot === undefined
                 ? []
                 : [
-                    mount(input!, SANDBOX_INPUT_MOUNT_PATH, true),
-                    mount(tools!, SANDBOX_TOOLS_MOUNT_PATH, true),
-                    mount(output!, SANDBOX_OUTPUT_MOUNT_PATH, false),
+                    containerMount(input!, SANDBOX_INPUT_MOUNT_PATH, true),
+                    containerMount(tools!, SANDBOX_TOOLS_MOUNT_PATH, true),
+                    containerMount(output!, SANDBOX_OUTPUT_MOUNT_PATH, false),
                   ]),
-              mount(staging, "/opt/claude-support", true),
-              mount(home, CLAUDE_CONFIG_MOUNT, false),
+              containerMount(staging, "/opt/claude-support", true),
+              containerMount(home, CLAUDE_CONFIG_MOUNT, false),
               { workdir: SANDBOX_SOURCE_MOUNT_PATH },
               { env: "HOME", value: "/tmp" },
               { env: "CLAUDE_CONFIG_DIR", value: CLAUDE_CONFIG_MOUNT },
