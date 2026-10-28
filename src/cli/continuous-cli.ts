@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import {
   CAMPAIGN_PREFIX,
@@ -25,7 +26,7 @@ export type ContinuousHostStatus = {
   readonly loginExpiresAt: Date | null;
   readonly programmeObservedAt: Date;
   readonly freeBytes: number;
-  /** ceil(maximumTargets / maxConcurrentTargets) × (runWallTimeMinutes + 30 × 3 + 15). */
+  /** One target wall + 15 minutes, plus Lab reset time only when attached. */
   readonly loginMarginMinutes: number;
 };
 
@@ -359,7 +360,7 @@ export async function continuousCommand(
     statfs: async () => ({ freeBytes: (await host()).freeBytes }),
     loginMarginMinutes: (await host()).loginMarginMinutes,
     clock: state.clock,
-    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    sleep: (ms, signal) => sleep(ms, undefined, { signal }),
     signals: process,
     pidAlive,
     pid: process.pid,

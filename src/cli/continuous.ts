@@ -181,7 +181,7 @@ export interface ContinuousDeps {
     readonly selectionBatchId?: string;
     readonly stop: () => boolean;
     /** Re-read login immediately before starting a target; a wait leaves in-flight targets running. */
-    readonly beforeTarget: () => Promise<void>;
+    readonly beforeTarget: (signal: AbortSignal) => Promise<void>;
     readonly signal?: AbortSignal;
     /** Resume the campaign's runs whose host died instead of running them again (ADR 0036). */
     readonly resumeInterrupted: { log(line: string): void };
@@ -207,7 +207,7 @@ export interface ContinuousDeps {
   /** One target wall + 15 minutes, plus Lab reset time only when attached. */
   readonly loginMarginMinutes: number;
   clock(): Date;
-  sleep(ms: number): Promise<void>;
+  sleep(ms: number, signal?: AbortSignal): Promise<void>;
   readonly signals: Pick<NodeJS.Process, "on" | "off">;
   pidAlive(pid: number): boolean;
   readonly pid: number;
@@ -721,13 +721,19 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     state: string,
     ms: number,
     detail: Record<string, string> = {},
+    signal?: AbortSignal,
   ) => {
     const until = new Date(deps.clock().getTime() + ms);
     await enter(state, { until: until.toISOString(), ...detail });
-    while (!stopRequested() && deps.clock() < until)
-      await deps.sleep(
-        Math.min(MINUTE, until.getTime() - deps.clock().getTime()),
-      );
+    while (!stopRequested() && !signal?.aborted && deps.clock() < until)
+      await deps
+        .sleep(
+          Math.min(MINUTE, until.getTime() - deps.clock().getTime()),
+          signal,
+        )
+        .catch((error: unknown) => {
+          if (!signal?.aborted) throw error;
+        });
   };
   const stop = async (reason: ContinuousStopReason) => {
     if (reason !== "operator" && !existsSync(paths.stop))
@@ -882,8 +888,8 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       providerBackoffFinished = !stopRequested();
     }
     let loginWait: Promise<void> | undefined;
-    const waitForLogin = async () => {
-      if (stopRequested()) return;
+    const waitForLogin = async (signal: AbortSignal) => {
+      if (stopRequested() || signal.aborted) return;
       let auth = await deps.readAuth();
       const ready = () =>
         auth !== null &&
@@ -892,11 +898,16 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       if (ready()) return;
       // Concurrent starts each read auth, but share one wait while login is short.
       loginWait ??= (async () => {
-        while (!stopRequested() && !ready()) {
-          await hold("waiting-login", LOGIN_POLL_MINUTES * MINUTE, {
-            expiredAt: auth?.expiresAt.toISOString() ?? "unavailable",
-          });
-          if (!stopRequested()) auth = await deps.readAuth();
+        while (!stopRequested() && !signal.aborted && !ready()) {
+          await hold(
+            "waiting-login",
+            LOGIN_POLL_MINUTES * MINUTE,
+            {
+              expiredAt: auth?.expiresAt.toISOString() ?? "unavailable",
+            },
+            signal,
+          );
+          if (!stopRequested() && !signal.aborted) auth = await deps.readAuth();
         }
       })().finally(() => {
         loginWait = undefined;
@@ -981,9 +992,9 @@ export function createContinuousRunner(deps: ContinuousDeps) {
             ? {}
             : { selectionBatchId: current.selectionBatchId }),
           stop: stopRequested,
-          beforeTarget: async () => {
-            await waitForLogin();
-            if (!stopRequested() && memo.state !== "running")
+          beforeTarget: async (signal) => {
+            await waitForLogin(signal);
+            if (!stopRequested() && !signal.aborted && memo.state !== "running")
               await enter("running", { campaignId });
           },
           signal: operatorController.signal,

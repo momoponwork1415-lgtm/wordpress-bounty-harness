@@ -60,14 +60,19 @@ async function campaign(
   names: readonly string[],
   limited: ReadonlySet<string>,
   caps: boolean | RuntimeTargetCaps<Target> | undefined,
-  options: { readonly maxConcurrentTargets?: number; manual?: boolean } = {},
+  options: {
+    readonly maxConcurrentTargets?: number;
+    manual?: boolean;
+    readonly beforeTarget?: (signal: AbortSignal) => Promise<void>;
+    readonly evidenceBytes?: number;
+  } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-runtime-limit-"));
   roots.push(root);
   const store = new PrivateArtifactStore({
     rootDirectory: join(root, "evidence"),
     maxEntries: 64,
-    maxBytes: 1024 * 1024,
+    maxBytes: options.evidenceBytes ?? 1024 * 1024,
   });
   const ledger = new Ledger({
     databasePath: join(root, "ledger.sqlite"),
@@ -94,6 +99,9 @@ async function campaign(
     newId: () => `id-${++ids}`,
     discoveryLab: "none",
     maxConcurrentTargets: options.maxConcurrentTargets ?? 1,
+    ...(options.beforeTarget === undefined
+      ? {}
+      : { beforeTarget: options.beforeTarget }),
     ...(runtimeCaps === undefined ? {} : { runtimeCaps: runtimeCaps as never }),
     pipeline: {
       select: async () =>
@@ -267,6 +275,56 @@ describe("runtime-scoped stops", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     expect(condition()).toBe(true);
   };
+
+  it.each(["provider", "runtime-drained", "fatal"])(
+    "returns %s while the next target waits for login",
+    async (reason) => {
+      let calls = 0;
+      let releaseLogin = () => {};
+      let waiting = false;
+      const c = await campaign(
+        ["x1", "x2"],
+        new Set(["x1"]),
+        reason === "runtime-drained" ? true : undefined,
+        {
+          maxConcurrentTargets: 2,
+          manual: reason !== "fatal",
+          ...(reason === "fatal" ? { evidenceBytes: 1 } : {}),
+          beforeTarget: async (signal) => {
+            if (++calls === 1) return;
+            waiting = true;
+            await new Promise<void>((resolve) => {
+              releaseLogin = resolve;
+              signal?.addEventListener("abort", () => resolve(), {
+                once: true,
+              });
+            });
+          },
+        },
+      );
+      let returned = false;
+      const done = c.done
+        .catch((error: unknown) => error)
+        .then((summary) => {
+          returned = true;
+          return summary;
+        });
+      try {
+        await until(
+          () => waiting && (reason === "fatal" || c.gated().includes("x1")),
+        );
+        if (reason !== "fatal") c.end("x1");
+        await expect.poll(() => returned, { timeout: 500 }).toBe(true);
+        if (reason === "fatal")
+          expect(await done).toMatchObject({ code: "bounds-exceeded" });
+        else expect(await done).toMatchObject({ stopped: "provider-limit" });
+        expect(c.started()).toEqual(reason === "fatal" ? [] : ["x1"]);
+      } finally {
+        releaseLogin();
+        await done;
+      }
+    },
+  );
 
   it("with two targets in flight, starts no pending target of the limited runtime", async () => {
     const c = await campaign(

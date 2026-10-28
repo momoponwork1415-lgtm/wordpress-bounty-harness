@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -729,7 +730,7 @@ describe("continuous runner", () => {
     };
     t.deps.runCampaign = async (input) => {
       for (let target = 0; target < 2; target++) {
-        await input.beforeTarget?.();
+        await input.beforeTarget(new AbortController().signal);
         if (input.stop()) break;
         started.push(remaining);
         remaining = 134;
@@ -746,6 +747,48 @@ describe("continuous runner", () => {
     expect(started).toEqual([135, 135]);
     expect(t.states()).toContain("waiting-login");
     expect(t.hours()).toBe(1 / 6);
+  });
+
+  it("cancels login polling before handing a provider stop to backoff", async () => {
+    const t = await setup([], { loginMarginMinutes: 135 });
+    const starts = new AbortController();
+    let remaining = 135;
+    let polling = false;
+    t.deps.readAuth = async () => ({
+      expiresAt: new Date(t.deps.clock().getTime() + remaining * 60_000),
+    });
+    const normalSleep = t.deps.sleep;
+    t.deps.sleep = (ms, signal) => {
+      if (signal === undefined) return normalSleep(ms);
+      polling = true;
+      queueMicrotask(() => starts.abort());
+      return sleep(ms, undefined, { signal }).finally(() => {
+        polling = false;
+      });
+    };
+    const normalRun = t.deps.runCampaign;
+    t.deps.runCampaign = async (input) => {
+      if (starts.signal.aborted) return normalRun(input);
+      remaining = 134;
+      await t.trial(input.campaignId, {
+        outcome: "provider-limited",
+        reason: "provider",
+        providerLimit: "rate-limit",
+      });
+      await input.beforeTarget(starts.signal);
+      expect(polling).toBe(false);
+      remaining = 135;
+      return {
+        campaignId: input.campaignId,
+        targets: [],
+        skipped: [],
+        stopped: "provider-limit",
+      };
+    };
+    expect(await createContinuousRunner(t.deps).run()).toBe("operator");
+    expect(t.states()).toContain("waiting-login");
+    expect(t.states()).toContain("backoff");
+    expect(t.hours()).toBe(5 / 60);
   });
 
   it("waits for a renewed login without exiting", async () => {

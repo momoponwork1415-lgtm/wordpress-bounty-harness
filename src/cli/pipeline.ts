@@ -287,8 +287,8 @@ export async function runCampaignPipeline<
   readonly repeat?: number;
   /** Checked before each next target. True drains in-flight targets and stops as `operator`. */
   readonly stop?: () => boolean;
-  /** The runner waits for login here, while already running targets continue. */
-  readonly beforeTarget?: () => Promise<void>;
+  /** Waits for login; cancellation ends admission waits, not in-flight targets. */
+  readonly beforeTarget?: (signal: AbortSignal) => Promise<void>;
   readonly signal?: AbortSignal;
 }): Promise<CampaignSummary> {
   const { campaignId, ledger, pipeline, clock } = options;
@@ -325,6 +325,8 @@ export async function runCampaignPipeline<
   let selected: readonly Target[] = [];
   // Selection order; a target leaves when it starts.
   const pending: number[] = [];
+  // Cancels admission waits only; in-flight discovery keeps its existing signal.
+  const starts = new AbortController();
   const limitedRuntimes = new Set<string>();
   const runtimeOf = (target: Target): string | undefined =>
     options.runtimeCaps?.providerLimitPerRuntime === true
@@ -341,9 +343,11 @@ export async function runCampaignPipeline<
       for (let at = pending.length - 1; at >= 0; at--)
         if (runtimeOf(selected[pending[at]!]!) === runtime)
           pending.splice(at, 1);
+      if (pending.length === 0) starts.abort();
       return;
     }
     if (reason === "provider-limit" || stopped === undefined) stopped = reason;
+    starts.abort();
   };
 
   const selectedSnapshots = new Map<string, string>();
@@ -684,18 +688,20 @@ export async function runCampaignPipeline<
       // Wait without reserving a slot; a live limit may change during login.
       if (options.beforeTarget !== undefined && options.stop?.() !== true) {
         try {
-          await options.beforeTarget();
+          await options.beforeTarget(starts.signal);
         } catch (error) {
+          if (starts.signal.aborted) return;
           fatalError ??=
             error instanceof Error ? error : new Error(String(error));
           requestStop("incomplete");
           return;
         }
       }
-      if (stopped !== undefined) return;
+      if (stopped !== undefined || pending.length === 0) return;
       // Above the live limit, or with every pending target's runtime full, no
       // new target starts; the running ones go on.
       const claim = await scheduler.claim(pending);
+      if (pending.length === 0) starts.abort();
       if (claim.kind === "empty") return;
       if (stopped !== undefined) {
         if (claim.kind === "claimed") scheduler.release(claim.index);
@@ -710,7 +716,7 @@ export async function runCampaignPipeline<
       if (target === undefined || index === undefined) return;
       if (stopping) {
         if (stopped === undefined) {
-          stopped = "operator";
+          requestStop("operator");
           await append({
             schemaVersion: 1,
             campaignId,

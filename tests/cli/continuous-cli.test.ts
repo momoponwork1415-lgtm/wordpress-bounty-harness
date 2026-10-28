@@ -516,6 +516,10 @@ describe("continuous run", () => {
     let now = Date.parse(NOW);
     let remaining = initial;
     const started: string[] = [];
+    let firstStarted = () => {};
+    const firstReady = new Promise<void>((resolve) => {
+      firstStarted = resolve;
+    });
     let finishFirst: (() => void) | undefined;
     let firstFinished = false;
     let firstRunningAtWait = false;
@@ -581,10 +585,13 @@ describe("continuous run", () => {
               pipeline: {
                 select: async () => targets,
                 freeze: async (target) => {
+                  // Snapshot completion order is independent of selection order.
+                  if (target.targetId === "wporg:b") await firstReady;
                   started.push(target.targetId);
                   if (target.targetId === "wporg:a") {
                     await new Promise<void>((resolve) => {
                       finishFirst = resolve;
+                      firstStarted();
                     });
                     firstFinished = true;
                   } else if (target.targetId === "wporg:b") remaining = 134;
