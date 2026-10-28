@@ -386,3 +386,103 @@
 - 1 本目は pojo-accessibility（prod-20261020-5、d0023223）。segment 31baf33d が 13:37 に始まった。
 - 次の順番: woo-checkout-field-editor-pro、codepress-admin-columns。
 - 正本との差: ADR 0036 の追記 4 と AGENTS.md には「Claude の provider-refusal は終了」とある。この決定を残すには、ADR の追記が要る。
+
+## 14:32 JST
+
+- runner は running。batch prod-20261021-1 の 10 件のうち 8 件が終わった。
+  - 前回からの completed 4 本
+    - auto-image-attributes: 60 分、Lead 12
+    - popup-builder: 60 分、Finding 3
+    - image-widget: 69 分、Lead 1
+    - mystickymenu: 62 分、Lead 9
+  - 走っているもの: mainwp-child 6.3（55 分目）、header-and-footer-scripts 2.4.2（30 分目）。
+- 本日の累計: Trial 16、completed 11、findings queue 9。
+- Claude の拒否の再開（ADR 0036 の 2026-10-21 追記、#440 で merge 済み）
+
+  | 対象 | segment | 結果 |
+  | --- | --- | --- |
+  | pojo-accessibility | 31baf33d | 0 分で再び provider-refusal |
+  | woo-checkout-field-editor-pro | 7c74fd1a | 1 分で再び provider-refusal |
+  | codepress-admin-columns | 725b1bba | 14:23 に始まり、9 分目で走っている |
+
+  - 再び拒否された 2 本は、規則どおりこれ以上再開しない。
+  - **観測**: Claude の拒否は、再開の最初の turn ですぐにまた拒否される傾向がある（2 本中 2 本）。復元した会話をそのまま送り直すためとみられる。Codex の cyber-policy の再開は 9 本中 7 本が completed まで届いており、それとは違う。
+- 429 は 0 件。free は 4 GiB（available 40 GiB）、load は 0.8。
+
+## 15:19 JST
+
+- **Codex の quota**: host の codex CLI で最小の要求を 1 回送って確かめた。返事は「usage limit、次に使えるのは 2026-10-27 15:33」だった。週の上限とみられる。
+  - Codex は 10-27 まで使えない。runtimeShare を codex 0、`.codex` を 0 のままにする。
+  - Codex の再開 watcher も止まったままでよい。
+- runner は running。
+  - batch prod-20261021-1 は 15:11 に終わった。mainwp-child（60 分、Lead 19）と header-and-footer-scripts（61 分）が completed。
+  - 15:11 に batch prod-20261021-2 が自動で始まった。Claude 4 本が走っている: contact-form-cfdb7 1.4.2、flamingo 2.6.4、astra-widgets 1.2.17、ocean-extra 2.6.3。
+- Claude の拒否の再開: codepress-admin-columns の segment 725b1bba は 11 分走ったところで、再び provider-refusal になった。
+  - 3 本中 3 本が、再開した後にまた拒否された（0 分、1 分、11 分）。
+  - 再開で増えたのは、codepress の子 2 本の completed だけ。
+- 本日の累計: Trial 20、completed 13、findings queue 11。429 は 0 件。
+
+## 16:24 JST
+
+- runner は running。batch prod-20261021-2 の最初の 4 本は、どれも completed（61〜67 分）。Finding は 0 で、Lead はそれぞれ 23 / 8 / 9 / 17。
+- 続けて 4 本が走っている（5〜11 分目）: speedycache 1.4.3、menu-icons 0.13.25、so-widgets-bundle 1.75.0、suremails 2.0.3。
+- 本日の累計: Trial 24、completed 17、provider-refused 3、findings queue 11。
+- 新しい拒否は無い。429 は 0 件。free は 5 GiB（available 42 GiB）、disk の残りは 247 GB。
+
+## 17:24 JST
+
+- runner は running。batch prod-20261021-2 は 10 件中 8 件が終わった。
+  - completed: speedycache（67 分、Lead 17）、menu-icons（61 分、Lead 8）、suremails（61 分、Lead 12）。
+  - so-widgets-bundle: 27 分で provider-refusal になった。17:18 に再開したが、1 分以内にまた拒否された。
+  - 走っているもの: wp-mail-logging（39 分目）、shortcoder（5 分目）。この batch の最後の 2 本で、終わると次の batch が自動で選ばれる。
+- Claude の拒否の再開は、4 本中 4 本が再開した後にまた拒否された。
+- 本日の累計: Trial 26、completed 20、provider-refused 4、findings queue 11。429 は 0 件。
+
+## 18:58 JST 所有者の指示: 再開は数回まで、だめなら新しい Trial。Claude を 5 本に
+
+- Claude の同時数の上限を 5 にした。campaign 設定は claude 5 / 合計 8、live の値も 5。
+- `resume-watch-claude.sh` を書き換えた。
+  - 拒否で止まった Claude の Trial は、最新の segment を最大 2 回まで再開する。
+  - 2 回とも拒否されたら、同じ slug で新しい Trial を 1 回だけ起動する（`campaign run <slug> --campaign fresh-20261021-<slug>`）。prompt は変えない。
+  - どちらの作業も Claude 5 本の枠の中で回す。作業中は runner の上限を 4 に下げる。
+- 1 件目は pojo-accessibility の 2 回目の再開（18:57）。
+
+## 19:08 JST
+
+- pojo-accessibility は 2 回目の再開でも拒否されたので、新しい Trial に切り替えた。
+  - 最初の試みは「no selected target matched」で始まらなかった。本番の選定方針が、一度選ばれた slug を外すため。
+  - そこで、`selection-manual-retry-20261019.json` と同じ形の 1 件だけの方針（`~/.config/wordpress-bounty-harness/selection-fresh-<slug>.json`、candidateSlugs と pinnedVersions）を watcher が作るように直した。
+  - その方針で、`fresh-20261021-pojo-accessibility` が 19:07 に始まった（claude-code/v1、v8）。
+- runner は batch prod-20261021-3 を走らせている。
+  - completed 2 本: stackable（64 分）、yith-wishlist（68 分、Lead 8）。
+  - 走っているもの 4 本: wp-rollback、otter-blocks、surerank、chaty。
+  - Claude の上限は live で 5。watcher が作業している間は 4 に下げる。
+- 本日の累計: Trial 32、completed 23、provider-refused 5、findings queue 15。429 は 0 件。
+
+## 20:07 JST
+
+- Claude は 5 本が同時に走っている（runner 4 本 ＋ 探索のやり直し 1 本）。429 は 0 件。
+- runner（batch prod-20261021-3）
+  - completed 3 本: otter-blocks（64 分、Finding 3）、surerank（61 分、Lead 12）、chaty（61 分、Lead 5）。
+  - 走っているもの: tiktok-for-business（51 分目）、simple-cloudflare-turnstile（13 分目）、password-protected（5 分目）、aryo-activity-log（0 分目）。
+- 探索のやり直し: fresh-20261021-pojo-accessibility は 60 分目で、拒否されずに走っている。
+- 本日の累計: Trial 37、completed 27、provider-refused 5、findings queue 18。free は 4 GiB（available 42 GiB）。
+
+## 21:08 JST
+
+- runner は running。batch prod-20261021-3 は最後の 1 本（61 分目）だけが走っている。終わると次の batch が自動で選ばれる。
+- 前回からの completed 3 本: tiktok-for-business（60 分）、simple-cloudflare-turnstile（61 分）、password-protected（63 分、parked 11）。
+- 探索のやり直し
+  - pojo-accessibility は completed（67 分、Lead 59、parked 2）。
+  - codepress-admin-columns は 2 回目の再開でも止まったので、20:37 に新しい Trial にした。31 分目で走っている。
+- 本日の累計: Trial 38、completed 31、findings queue 18、parked 16。429 は 0 件。
+
+## 22:08 JST
+
+- runner: 動作中（prod19、pid 4124637）。ただし backoff 中（rate-limit、step 2、22:18 JST まで）。claude 5 / codex 0。
+- prod-20261021-4: so-css / gdpr-cookie-compliance / post-duplicator ほかが 21:22〜21:47 に開始し、33〜34 分で provider-limited になった。22:07 の再開 segment は 0 分で再び provider-limited。Claude を 5 本にしてから rate-limit が出ている。
+- fresh-20261021-codepress-admin-columns: completed（70 分）。
+- shortcoder の再開は exit=3（watcher の 2 回目）→ 次は新しい Trial になる。
+- 本日: Trial 38、completed 33、provider-limited 15、refused 5、Finding queue 28 + parked 19。
+- 資源: free 43 GiB。コンテナは registry だけ（backoff 中）。
+- 要確認: 5 本並列で rate-limit が出る。4 本に戻すかどうかは所有者が決める。

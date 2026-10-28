@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1760" height="980" viewBox="0 0 1760 980" font-family="'Noto Sans JP','Hiragino Sans','Yu Gothic',sans-serif">
+  <defs>
+    <marker id="m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#555"/></marker>
+    <marker id="mo" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#c77700"/></marker>
+    <marker id="mg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#2e7d32"/></marker>
+  </defs>
+  <style>
+    .title{font-size:26px;font-weight:700;fill:#222}
+    .sub{font-size:14px;fill:#555}
+    .lane{font-size:18px;font-weight:700;fill:#333}
+    .h{font-size:16px;font-weight:700;fill:#222}
+    .t{font-size:13px;fill:#333}
+    .n{font-size:12px;fill:#c77700;font-weight:700}
+    .have{fill:#eef4fb;stroke:#1f5fa8;stroke-width:1.8}
+    .todo{fill:#fff6e5;stroke:#c77700;stroke-width:1.8;stroke-dasharray:7 4}
+    .human{fill:#eef7ee;stroke:#2e7d32;stroke-width:1.8}
+    .gone{fill:#f3f3f3;stroke:#999;stroke-width:1.4;stroke-dasharray:4 4}
+    .ar{fill:none;stroke:#555;stroke-width:1.6;marker-end:url(#m)}
+    .aro{fill:none;stroke:#c77700;stroke-width:1.6;stroke-dasharray:7 4;marker-end:url(#mo)}
+    .arg{fill:none;stroke:#2e7d32;stroke-width:1.6;marker-end:url(#mg)}
+    .lanebox{fill:none;stroke:#ccc;stroke-width:1;stroke-dasharray:3 5}
+  </style>
+  <rect width="1760" height="980" fill="#fff"/>
+  <text x="40" y="44" class="title">目標の姿（2026-10-28）— 区画分配型の探索と、無人の検証、結果の還流</text>
+  <text x="40" y="68" class="sub">青 = ある（main に merge 済み）。橙の破線 = これから作る（Issue 番号）。緑 = 人が触る 2 点。灰 = 比較の腕として残し、数字で消す。</text>
+
+  <!-- lane 1 -->
+  <rect x="30" y="92" width="1700" height="300" class="lanebox"/>
+  <text x="44" y="118" class="lane">① 探索（無人、24 時間、Codex runtime）</text>
+
+  <rect x="40" y="150" width="200" height="100" rx="8" class="have"/>
+  <text x="56" y="176" class="h">選定</text>
+  <text x="56" y="198" class="t">install 帯、cascade、履歴</text>
+  <text x="56" y="218" class="t">+ 新版直後、修正直後</text>
+  <text x="56" y="238" class="n">+ 自分の Trial 数 k　#649</text>
+
+  <rect x="280" y="150" width="200" height="100" rx="8" class="have"/>
+  <text x="296" y="176" class="h">Snapshot</text>
+  <text x="296" y="198" class="t">plugin、core、PHP、依存を</text>
+  <text x="296" y="218" class="t">版と digest で固定</text>
+
+  <rect x="520" y="150" width="200" height="100" rx="8" class="have"/>
+  <text x="536" y="176" class="h">列挙役 1 体（一発）</text>
+  <text x="536" y="198" class="t">道具を自分で走らせ、入口と</text>
+  <text x="536" y="218" class="t">出口の一覧と区画の案を書く</text>
+  <text x="536" y="238" class="n">Codex #646　道具 v2 #647</text>
+
+  <rect x="760" y="150" width="200" height="100" rx="8" class="have"/>
+  <text x="776" y="176" class="h">Harness: 形の検査</text>
+  <text x="776" y="198" class="t">schema、重複行、上限。</text>
+  <text x="776" y="218" class="t">超えたら理由付きで差し戻し ≤2</text>
+  <text x="776" y="238" class="n">上限の既定値 #647</text>
+
+  <rect x="1000" y="150" width="200" height="100" rx="8" class="have"/>
+  <text x="1016" y="176" class="h">追跡役 ≤8 体（一発）</text>
+  <text x="1016" y="198" class="t">区画ごと 1 体、隔離、45 分。</text>
+  <text x="1016" y="218" class="t">出すのは Finding と Lead</text>
+  <text x="1016" y="238" class="n">Codex #646　並列 4→8</text>
+
+  <rect x="1240" y="150" width="200" height="100" rx="8" class="have"/>
+  <text x="1256" y="176" class="h">正規化・park・群</text>
+  <text x="1256" y="198" class="t">契約 v4-solo、Boundary 外は park</text>
+  <text x="1256" y="218" class="n">群の鍵を必須に、campaign を</text>
+  <text x="1256" y="238" class="n">またいで束ねる（未起票）</text>
+
+  <rect x="1480" y="150" width="200" height="100" rx="8" class="have"/>
+  <text x="1496" y="176" class="h">台帳 / Private Evidence</text>
+  <text x="1496" y="198" class="t">追記専用、digest 参照。</text>
+  <text x="1496" y="218" class="t">読んだ区画、出力の全件</text>
+
+  <path d="M240 200 H280" class="ar"/><path d="M480 200 H520" class="ar"/><path d="M720 200 H760" class="ar"/>
+  <path d="M960 200 H1000" class="ar"/><path d="M1200 200 H1240" class="ar"/><path d="M1440 200 H1480" class="ar"/>
+  <path d="M860 250 V275 H640 V250" class="ar"/><text x="660" y="292" class="t">差し戻し（前回の案と理由を添える）</text>
+
+  <rect x="1000" y="300" width="440" height="70" rx="8" class="gone"/>
+  <text x="1016" y="324" class="h" fill="#666">比較の腕: v14-wide（Root + 子 ≤8、1 対象）</text>
+  <text x="1016" y="346" class="t" fill="#666">群/Trial と 提出/Trial で負けたら archived にする。prompt の版はもう変えない</text>
+  <path d="M1340 300 V250" class="ar" stroke="#999"/>
+
+  <!-- lane 2 -->
+  <rect x="30" y="410" width="1700" height="300" class="lanebox"/>
+  <text x="44" y="436" class="lane">② 検証と提出（段 1b と検証は無人、人は 10 分の観測と提出だけ）</text>
+
+  <rect x="40" y="470" width="200" height="100" rx="8" class="have"/>
+  <text x="56" y="496" class="h">段 1b: 別の体が読み直す</text>
+  <text x="56" y="518" class="t">追跡役の文脈を持たない。</text>
+  <text x="56" y="538" class="t">固定ソースで 2 つの問い</text>
+  <text x="56" y="558" class="t">（wbh-screen / source-check）</text>
+
+  <rect x="280" y="470" width="200" height="100" rx="8" class="todo"/>
+  <text x="296" y="496" class="h">verify auto（一発、Lab 付き）</text>
+  <text x="296" y="518" class="t">Harness が Lab を立て、Codex が</text>
+  <text x="296" y="538" class="t">wbh-verify を headless で行う</text>
+  <text x="296" y="558" class="n">#650 → #651</text>
+
+  <rect x="520" y="470" width="200" height="100" rx="8" class="todo"/>
+  <text x="536" y="496" class="h">export v2</text>
+  <text x="536" y="518" class="t">送る request、見る画面、</text>
+  <text x="536" y="538" class="t">Lab の URL と期限。6 ファイル</text>
+  <text x="536" y="558" class="n">#652</text>
+
+  <rect x="760" y="470" width="200" height="100" rx="8" class="human"/>
+  <text x="776" y="496" class="h">人: 10 分の観測</text>
+  <text x="776" y="518" class="t">request を送り、自分の</text>
+  <text x="776" y="538" class="t">ブラウザで見る。記名申告</text>
+  <text x="776" y="558" class="t">（週末でも平日でも）</text>
+
+  <rect x="1000" y="470" width="200" height="100" rx="8" class="have"/>
+  <text x="1016" y="496" class="h">skill 3 本</text>
+  <text x="1016" y="518" class="t">wbh-dedupe（先例・重複）</text>
+  <text x="1016" y="538" class="t">wbh-destination、wbh-report</text>
+
+  <rect x="1240" y="470" width="200" height="100" rx="8" class="human"/>
+  <text x="1256" y="496" class="h">人: 提出</text>
+  <text x="1256" y="518" class="t">Wordfence / Patchstack の</text>
+  <text x="1256" y="538" class="t">フォーム。Harness は送らない</text>
+
+  <rect x="1480" y="470" width="200" height="100" rx="8" class="todo"/>
+  <text x="1496" y="496" class="h">結果の還流</text>
+  <text x="1496" y="518" class="t">採否、重複、報酬を台帳の</text>
+  <text x="1496" y="538" class="t">Finding に結ぶ</text>
+  <text x="1496" y="558" class="n">#601</text>
+
+  <path d="M240 520 H280" class="aro"/><path d="M480 520 H520" class="aro"/><path d="M720 520 H760" class="arg"/>
+  <path d="M960 520 H1000" class="ar"/><path d="M1200 520 H1240" class="arg"/><path d="M1440 520 H1480" class="aro"/>
+  <path d="M1580 250 V395 H140 V470" class="ar"/><text x="1300" y="412" class="t">群の代表が検証列に入ったら自動で起動</text>
+
+  <!-- feedback -->
+  <path d="M1580 570 V640 H18 V200 H40" class="aro"/>
+  <text x="560" y="662" class="n">群/Trial と 提出/Trial で版と腕を比べる。同じ対象で対にして k≥3。版の切り替えは月 1 回</text>
+
+  <!-- bottom -->
+  <text x="44" y="730" class="lane">変わらないもの</text>
+  <text x="44" y="756" class="t">不変条件 8 つ。gVisor と broker。Programme Boundary の出口で park。追記専用の台帳。Private Evidence は Git の外。判定器は置かず、人が Lab で見る。agent に渡る文章は owner-approved。</text>
+
+  <text x="44" y="800" class="lane">順序</text>
+  <text x="44" y="826" class="t">#647（道具 v2・上限）→ #646（Codex の一発 run）→ 本番を partitioned に切り替え（v14-wide は 1 対象の比較の腕）→ #650 → #651 → #652。並行: #649（選定）、#601（還流）、群の鍵（未起票）。</text>
+
+  <text x="44" y="870" class="lane">後で測ってから決めるもの</text>
+  <text x="44" y="896" class="t">種別で区画を切る（PRISM の形。本文の変更）。coverage critic。自分の確認済み Finding からの変種探索。失敗の要約を 2 回目の区画へ渡す。複数 model の和集合。</text>
+
+  <text x="44" y="940" class="sub">出典: docs/reviews/2026-10-28-adopted-design-for-approval.md、2026-10-28-harness-gap-analysis.md、2026-10-28-problems-and-next-steps.md。Issue #629 / #528 / #633 の 2026-10-28 の comment。</text>
+</svg>

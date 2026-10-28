@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1700" height="1180" viewBox="0 0 1700 1180" font-family="'Noto Sans JP','Hiragino Sans','Yu Gothic',sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#555"/></marker>
+    <marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#1f5fa8"/></marker>
+    <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#2e7d32"/></marker>
+  </defs>
+  <style>
+    .title{font-size:26px;font-weight:700;fill:#222}
+    .h{font-size:20px;font-weight:700;fill:#222}
+    .t{font-size:15px;fill:#222}
+    .s{font-size:13px;fill:#444}
+    .H{fill:#eef4fb;stroke:#1f5fa8;stroke-width:1.6}
+    .A{fill:#eef7ee;stroke:#2e7d32;stroke-width:1.6}
+    .G{fill:#f4f4f4;stroke:#999;stroke-width:1.2}
+    .N{fill:#fff;stroke:#bbb;stroke-width:1.2}
+    .chg{fill:#b3261e;font-size:13px;font-weight:700}
+    .lb{font-size:12px;fill:#1f5fa8}
+    .la{font-size:12px;fill:#2e7d32}
+  </style>
+  <rect width="1700" height="1180" fill="#fff"/>
+  <text x="40" y="44" class="title">探索の構造: 前（協調 Trial）と今（区画分配型）— 2026-10-28</text>
+  <text x="40" y="70" class="s">青 = ハーネス（決まった処理）、緑 = AI（判断）、灰 = 変わらない所。赤字 = 変わった点。</text>
+
+  <!-- 共通の外側 -->
+  <rect x="40" y="90" width="1620" height="64" rx="10" class="G"/>
+  <text x="56" y="116" class="h" fill="#555">外側の輪（変わらない）</text>
+  <text x="300" y="116" class="t">対象を選ぶ → ソースを版と指紋で固定 → 調べる → ふるい分けて確かめる → 台帳に残す</text>
+  <text x="300" y="138" class="s">gVisor の使い捨て環境、認証の仲介、台帳は追記だけ、人の判断点は 2 つ（提出前の確認、外へ出す行動の承認）</text>
+
+  <!-- 前 -->
+  <rect x="40" y="180" width="790" height="640" rx="10" fill="#fcfcfc" stroke="#999"/>
+  <text x="56" y="210" class="h">前: 協調 Trial（wide、v14）</text>
+  <text x="56" y="232" class="s">対象 1 つに 1 つの会話。親が文章で子に配り、親が最終報告をまとめる。</text>
+
+  <rect x="60" y="250" width="750" height="86" rx="8" class="H"/>
+  <text x="72" y="272" class="t">ハーネス: 起動</text>
+  <text x="72" y="292" class="s">目的の prompt（wp2shell の形 ＋ 体の数と最低時間の文）、契約 v4、信頼の境界、範囲の宣言をまとめて 1 つの箱に渡す</text>
+  <text x="72" y="312" class="s">上限: 子 8 体まで、120 分、最低 60 分は探す。箱は 1 つ（10 GiB）</text>
+
+  <rect x="60" y="360" width="750" height="250" rx="8" class="A"/>
+  <text x="72" y="382" class="t">AI: 親（Root）1 体 ＋ 子 最大 8 体、同じ会話の中</text>
+  <rect x="80" y="396" width="230" height="110" rx="8" class="N"/>
+  <text x="90" y="418" class="t">親</text>
+  <text x="90" y="438" class="s">どこを見るかを自分で決め、</text>
+  <text x="90" y="456" class="s">子に文章で割り振る</text>
+  <text x="90" y="474" class="s">子の報告を読み、</text>
+  <text x="90" y="492" class="s">最終報告に符号化して出す</text>
+  <g class="s">
+    <rect x="350" y="396" width="130" height="50" rx="6" class="N"/><text x="360" y="426">子 1（範囲は文章）</text>
+    <rect x="500" y="396" width="130" height="50" rx="6" class="N"/><text x="510" y="426">子 2</text>
+    <rect x="650" y="396" width="130" height="50" rx="6" class="N"/><text x="660" y="426">子 …8</text>
+  </g>
+  <g stroke="#2e7d32" stroke-width="1.4" fill="none" marker-end="url(#ag)">
+    <path d="M310 420 H348"/><path d="M310 426 C 330 426, 330 421, 498 421"/><path d="M310 432 C 330 432, 330 421, 648 421"/>
+  </g>
+  <text x="90" y="530" class="s">子の報告は親とは独立にも保存される（既存）。ただし「誰にどこを割り振ったか」は文章の中にしか無く、</text>
+  <text x="90" y="548" class="s">子の数・読む範囲・最終報告の形は prompt の文に頼る。</text>
+  <text x="90" y="574" class="chg">変わる点: 親を無くす。割り振りを文章ではなく JSON にし、ハーネスが形を検査して記録する。</text>
+  <text x="90" y="594" class="chg">体の数と時間の文を prompt から消し、code の上限だけにする。</text>
+
+  <rect x="60" y="630" width="750" height="60" rx="8" class="H"/>
+  <text x="72" y="652" class="t">ハーネス: 受け口（変わらない）</text>
+  <text x="72" y="674" class="s">正規化、保留、範囲外は脇に置く、同根の鍵。候補と手がかりを台帳と Private Evidence に残す</text>
+
+  <rect x="60" y="710" width="750" height="90" rx="8" class="G"/>
+  <text x="72" y="732" class="t" fill="#555">その先（変わらない）</text>
+  <text x="72" y="752" class="s">⑤ 別の体の読み直し（wbh-source-check、いまは人が session で回す）→ ⑥ 検証環境と合図、Codex の診断、人の観測</text>
+  <text x="72" y="772" class="s">→ 提出の判断は人</text>
+
+  <!-- 今 -->
+  <rect x="870" y="180" width="790" height="640" rx="10" fill="#fcfcfc" stroke="#999"/>
+  <text x="886" y="210" class="h">今: 区画分配型（PR #634 / #635 / #636、main 01a8375）</text>
+  <text x="886" y="232" class="s">対象 1 つを役ごとの一発の run に分け、ハーネスが順に起こす。役の定義は Markdown 1 枚。</text>
+
+  <rect x="890" y="250" width="750" height="60" rx="8" class="H"/>
+  <text x="902" y="272" class="t">ハーネス: 洗い出し役を起こす</text>
+  <text x="902" y="292" class="s">固定したソース ＋ 道具（登録を拾う script、出口を拾う script、本体の固定一覧）を読み取り専用で置く。箱は 4 GiB、20 分</text>
+
+  <rect x="890" y="322" width="750" height="70" rx="8" class="A"/>
+  <text x="902" y="344" class="t">AI: 洗い出し役（1 体、一発）</text>
+  <text x="902" y="364" class="s">道具を自分で走らせ点検し、拾えない分を足す。入口・出口の一覧（行ごとに番号と出どころ）と区画の案を JSON で出す</text>
+  <text x="902" y="382" class="s">区画は関連する機能でまとめ、1 区画を自分の文脈の 2〜3 割に</text>
+
+  <rect x="890" y="404" width="750" height="70" rx="8" class="H"/>
+  <text x="902" y="426" class="t">ハーネス: 形だけ検査 → 差し戻し（2 回まで）→ 割り当て</text>
+  <text x="902" y="446" class="s">決めた形、重複行、知らない行番号、1 区画 60 行、区画 8 まで。超えたら前の案と理由を添えて戻す。切り分けない。</text>
+  <text x="902" y="464" class="s">台帳: 洗い出しの記録（道具を走らせたか、道具の行と AI の行の数、差し戻しの回数）、区画の割り当て</text>
+
+  <rect x="890" y="486" width="750" height="120" rx="8" class="A"/>
+  <text x="902" y="508" class="t">AI: 追跡役（区画ごとに 1 体、一発、互いに見えない。同時 2 体）</text>
+  <g class="s">
+    <rect x="910" y="520" width="170" height="44" rx="6" class="N"/><text x="920" y="538">区画 1（JSON）</text><text x="920" y="556">45 分、箱 4 GiB</text>
+    <rect x="1100" y="520" width="170" height="44" rx="6" class="N"/><text x="1110" y="538">区画 2</text><text x="1110" y="556">45 分、箱 4 GiB</text>
+    <rect x="1290" y="520" width="170" height="44" rx="6" class="N"/><text x="1300" y="538">区画 …8</text><text x="1300" y="556">失敗は 1 回だけやり直し</text>
+  </g>
+  <text x="910" y="590" class="s">目的文 ＋ 契約 v4-solo ＋ 境界だけを受け取り、基準は渡されない。つながれば候補、止まれば手がかり（区画の番号付き）</text>
+
+  <rect x="890" y="630" width="750" height="60" rx="8" class="H"/>
+  <text x="902" y="652" class="t">ハーネス: 受け口（変わらない）＋ 区画の番号</text>
+  <text x="902" y="674" class="s">正規化、保留、脇に置く、同根の鍵。Trial 単位の未完（差し戻し尽き、全区画失敗）が funnel に出る</text>
+
+  <rect x="890" y="710" width="750" height="90" rx="8" class="G"/>
+  <text x="902" y="732" class="t" fill="#555">その先（変わらない）</text>
+  <text x="902" y="752" class="s">⑤ 別の体の読み直し → ⑥ 検証環境と合図、Codex の診断、人の観測 → 提出の判断は人</text>
+  <text x="902" y="772" class="s">名指しの段（手がかりを組む）はまだ作っていない。⑤ の自動化は測定の後。</text>
+
+  <g stroke="#555" stroke-width="1.4" fill="none" marker-end="url(#a)">
+    <path d="M1265 310 V320"/><path d="M1265 392 V402"/><path d="M1265 474 V484"/><path d="M1265 606 V628"/><path d="M1265 690 V708"/>
+    <path d="M435 336 V358"/><path d="M435 610 V628"/><path d="M435 690 V708"/>
+  </g>
+
+  <!-- 下段 -->
+  <rect x="40" y="850" width="790" height="300" rx="10" fill="#fff6f5" stroke="#b3261e"/>
+  <text x="56" y="880" class="h" fill="#b3261e">変わった所</text>
+  <g class="t">
+    <text x="56" y="912">・親（Root）が無い。役ごとに 1 入力・1 出力の一発の run</text>
+    <text x="56" y="940">・割り振りが文章から JSON になり、ハーネスが形を検査し差し戻し、台帳に残す</text>
+    <text x="56" y="968">・体の数・時間・区画の上限は code だけ。prompt には書かない</text>
+    <text x="56" y="996">・道具（script 2 本、本体の固定一覧）を箱に置き、AI が自分で走らせる</text>
+    <text x="56" y="1024">・箱が 10 GiB × 1 から 4 GiB × 同時 2 に（予算は設定で上げる）</text>
+    <text x="56" y="1052">・候補と手がかりに区画の番号。洗い出しと割り当ての記録が台帳に増えた</text>
+    <text x="56" y="1080">・Trial 単位の未完が funnel に出る（「候補 0 件」に混ざらない）</text>
+    <text x="56" y="1108">・Claude runtime だけ。Codex は v14-wide のまま（比較の分母）</text>
+  </g>
+  <rect x="870" y="850" width="790" height="300" rx="10" fill="#f7f7f7" stroke="#999"/>
+  <text x="886" y="880" class="h" fill="#555">変わらない所</text>
+  <g class="t">
+    <text x="886" y="912">・外側の輪、選定、Snapshot と指紋、gVisor と認証の仲介</text>
+    <text x="886" y="940">・契約 v4 の本文（solo は親と子の文を抜いただけ）、目的文の断片</text>
+    <text x="886" y="968">・受け口（正規化、保留、脇に置く、同根の鍵）と台帳の既存 event</text>
+    <text x="886" y="996">・⑤ 読み直し、⑥ 検証環境と合図、Codex の診断、人の観測、提出の判断</text>
+    <text x="886" y="1024">・「中身は AI、形はハーネス」。ハーネスは行も区画も作らず、自由文を分類しない</text>
+    <text x="886" y="1060" class="s">まだ無いもの: 名指しの段（手がかりを組む）、⑤ の自動化、Lead の群、</text>
+    <text x="886" y="1080" class="s">wide の親用の断片の削除（段階 5。測定の後）、Semgrep / Psalm の道具への置き換え</text>
+  </g>
+</svg>
