@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -67,6 +68,8 @@ it("runs the fixed skill in a one-shot Lab and seals all six files through its r
       reportArtifactDigest: digest,
     },
   );
+  const attackerSecret = randomUUID();
+  const setupSecret = randomUUID();
   const lab = {
     id: "lab-1",
     snapshotDigest: digest,
@@ -75,7 +78,9 @@ it("runs the fixed skill in a one-shot Lab and seals all six files through its r
     networkName: "wbh-lab-1-net",
     internalIp: "172.20.0.2",
     recorderIp: "172.20.0.4",
-    attackerAccounts: { subscriber: { username: "sub", password: "sub-pass" } },
+    attackerAccounts: {
+      subscriber: { username: "sub", password: attackerSecret },
+    },
   };
   const input: WordPressVerifierRun = {
     runId: "verify-1",
@@ -108,7 +113,7 @@ it("runs the fixed skill in a one-shot Lab and seals all six files through its r
           snapshotDigest: digest,
           accounts: { subscriber: { username: "sub" } },
         });
-        expect(attack).not.toContain("setup-pass");
+        expect(attack).not.toContain(setupSecret);
         return {
           receipt: createNativeRunReceipt({
             runId: run.runId,
@@ -135,7 +140,7 @@ it("runs the fixed skill in a one-shot Lab and seals all six files through its r
     lab: {
       reviewAdministrator: () => ({
         username: "harness-admin",
-        password: "setup-pass",
+        password: setupSecret,
       }),
     },
     sourceFor: async () => ({ directory: sourceDirectory, tree }),
@@ -158,7 +163,7 @@ it("runs the fixed skill in a one-shot Lab and seals all six files through its r
   expect(JSON.parse(captured!.lab!.labJson)).toMatchObject({
     administrator: { username: "harness-admin" },
   });
-  expect(captured!.lab!.labJson).not.toContain("sub-pass");
+  expect(captured!.lab!.labJson).not.toContain(attackerSecret);
   expect(restartCount).toBe(1);
   expect(captured?.inputFiles.map((file) => file.name)).toEqual([
     "review-export.json",
