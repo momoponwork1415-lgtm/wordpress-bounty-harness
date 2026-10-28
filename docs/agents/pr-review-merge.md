@@ -38,6 +38,9 @@ gh pr merge <n> --squash
 - merge の comment に「委任: 所有者の <日付> の指示に基づき AI が merge」と、根拠になった数字（campaign ID）を書く。
 - 1 コマンドで複数の PR を閉じる・merge するのは避け、1 件ずつ打つ。
 - worktree が branch を使っていると `--delete-branch` が失敗する。先に worktree を外す。
+- worktree は `/home/dev/worktree/<issue 番号>` だけに置く。
+- merge 後に worktree と branch を消す。
+- 本体 checkout は `main` に置く。
 
 ## 逆圧
 

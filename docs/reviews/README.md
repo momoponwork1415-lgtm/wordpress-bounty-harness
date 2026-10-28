@@ -54,6 +54,39 @@ Codex への依頼文:
 - [2026-10-16-codex-briefs-262-265-268.md](2026-10-16-codex-briefs-262-265-268.md): PR 3 本の修正の依頼文。
 - [2026-10-16-codex-briefs-issues.md](2026-10-16-codex-briefs-issues.md): Issue 6 本の依頼文。
 
+2026-10-21〜28 の報告と依頼文:
+
+- [2026-10-23-additional-library-and-platform-options.md](2026-10-23-additional-library-and-platform-options.md): 追加で検討したライブラリ・基盤。
+- [2026-10-23-architecture-adoption-priorities.md](2026-10-23-architecture-adoption-priorities.md): 技術採用と自作部分の整理：優先順位付きの推奨。
+- [2026-10-23-build-versus-buy-recommendation.md](2026-10-23-build-versus-buy-recommendation.md): 既存技術へ任せる範囲と、設計を直す範囲の推奨。
+- [2026-10-23-current-feature-inventory.md](2026-10-23-current-feature-inventory.md): 機能一覧と、Harness・スキル・人間の役割。
+- [2026-10-23-discovery-efficiency-review.md](2026-10-23-discovery-efficiency-review.md): 探索を続けながら効率を改善するための調査。
+- [2026-10-23-feature-disposition-recommendation.md](2026-10-23-feature-disposition-recommendation.md): 28 機能の採否と責務の推奨。
+- [2026-10-23-feature-map-and-removal-options.md](2026-10-23-feature-map-and-removal-options.md): 機能一覧・コード量・削除を判断するための資料。
+- [2026-10-23-feature-usage-and-design-audit.md](2026-10-23-feature-usage-and-design-audit.md): ハーネス全体の機能利用・削除候補・設計の棚卸し。
+- [2026-10-23-hytale-game-bounty-harness.md](2026-10-23-hytale-game-bounty-harness.md): Hytale 型ゲームのバグバウンティと最小ハーネスの調査。
+- [2026-10-23-library-and-platform-options.md](2026-10-23-library-and-platform-options.md): 既存ライブラリ・実行基盤を使う選択肢。
+- [2026-10-23-public-vulnerability-harness-landscape.md](2026-10-23-public-vulnerability-harness-landscape.md): 公開 AI 脆弱性探索ハーネス・研究・実運用の横断調査。
+- [2026-10-24-austin-ginder-deep-exploration-analysis.md](2026-10-24-austin-ginder-deep-exploration-analysis.md): Austin Ginder の「徹底探索」を一次資料から再構成する。
+- [2026-10-24-hytale-learning-and-transfer.md](2026-10-24-hytale-learning-and-transfer.md): Hytale Java サーバー研究の学習順序と WordPress 経験の移転。
+- [2026-10-24-recent-ai-security-discovery-architectures.md](2026-10-24-recent-ai-security-discovery-architectures.md): Intruder 以降の AI 脆弱性探索アーキテクチャ。
+- [2026-10-24-validation-screening-patterns.md](2026-10-24-validation-screening-patterns.md): 公開ハーネスの候補選別と検証の分担。
+- [2026-10-24-wordpress-concrete-hunting-methods.md](2026-10-24-wordpress-concrete-hunting-methods.md): WordPress プラグイン探索の具体的な公開手法。
+- [2026-10-24-wp2shell-article-first-deep-exploration.md](2026-10-24-wp2shell-article-first-deep-exploration.md): WP2Shell 原記事から始める独立した深掘り探索案。
+- [2026-10-25-discovery-prompt-decomposition.md](2026-10-25-discovery-prompt-decomposition.md): 探索プロンプトの分解と、Trial の中で誰が何をしたかを読む観測。
+- [2026-10-25-post-discovery-skill-flow-review.md](2026-10-25-post-discovery-skill-flow-review.md): 探索後のスキルと検証経路の整理。
+- [2026-10-26-discovery-prompts-japanese.md](2026-10-26-discovery-prompts-japanese.md): 探索プロンプト 2 種の日本語訳。
+- [2026-10-28-before-after.svg](2026-10-28-before-after.svg): 探索と検証の構成の変更前後を示す図。
+- [2026-10-28-codex-brief-cleanup.md](2026-10-28-codex-brief-cleanup.md): Codex への依頼文: 実装の前の整理。
+- [2026-10-28-codex-brief-codex-one-shot.md](2026-10-28-codex-brief-codex-one-shot.md): Codex への依頼文: 区画分配型を本番で回せるようにする。
+- [2026-10-28-codex-brief-partitioned.md](2026-10-28-codex-brief-partitioned.md): Codex への依頼: 区画分配型の探索（partitioned）を Claude runtime で本番に入れる。
+- [2026-10-28-codex-one-prompt.md](2026-10-28-codex-one-prompt.md): Codex に貼る 1 本のプロンプト（オーケストレーター、2026-10-28）。
+- [2026-10-28-codex-triage-and-verify.md](2026-10-28-codex-triage-and-verify.md): Codex への依頼: 振り分けと検証を列から回す。
+- [2026-10-28-harness-gap-analysis.md](2026-10-28-harness-gap-analysis.md): いまの Harness に足りないもの。
+- [2026-10-28-problems-and-next-steps.md](2026-10-28-problems-and-next-steps.md): 全体の問題と、これからどうするか。
+- [2026-10-28-target-system.svg](2026-10-28-target-system.svg): 現状とこれからの作業を示す全体図。
+- [2026-10-21-monitor-report.md](2026-10-21-monitor-report.md): 監視報告。
+
 ## 現状と違う点（2026-10-19 時点）
 
 - `2026-10-14-final-design.md`: 探索の Lab、即時の検証、`owner-approved` の付け手、Step 1 の「人手 0」の範囲は、2026-10-18〜19 の決定（ADR 0033〜0037、#238 の comment）で変わった。
