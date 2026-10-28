@@ -1,3 +1,4 @@
+import { writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -48,6 +49,7 @@ function fakeProfile(overrides: Partial<CliProfile> = {}): CliProfile {
 
 async function setup(
   makeProfile: CliProfile | ((stateDirectory: string) => CliProfile),
+  clock: () => Date = () => new Date(NOW),
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-continuous-cli-"));
   roots.push(root);
@@ -67,7 +69,7 @@ async function setup(
     ledger,
     store,
     stateDirectory: root,
-    clock: () => new Date(NOW),
+    clock,
     newId: () => `id-${++ids}`,
   };
   const stdout: string[] = [];
@@ -505,27 +507,33 @@ describe("continuous run", () => {
     );
   });
 
-  it.each([135, 134])(
-    "gates every target at the %s-minute login boundary",
-    async (initial) => {
-      let remaining = initial;
-      const started: string[] = [];
-      let finishFirst: (() => void) | undefined;
-      let firstFinished = false;
-      let firstRunningAtWait = false;
-      const targets = ["a", "b", "c"].map((name) => ({
-        targetId: `wporg:${name}`,
-        version: "1.0.0",
-        selectedAt: NOW,
-        score: 1,
-        policy: { id: "synthetic", digest: `sha256:${"a".repeat(64)}` },
-      }));
-      const t = await setup((stateDirectory) =>
+  it.each([
+    { name: "135-minute boundary", initial: 135, scenario: "boundary" },
+    { name: "134-minute boundary", initial: 134, scenario: "boundary" },
+    { name: "expiry while waiting for a slot", initial: 135, scenario: "slot" },
+    { name: "lower live limit during login", initial: 135, scenario: "limit" },
+  ])("gates every target: $name", async ({ initial, scenario }) => {
+    let now = Date.parse(NOW);
+    let remaining = initial;
+    const started: string[] = [];
+    let finishFirst: (() => void) | undefined;
+    let firstFinished = false;
+    let firstRunningAtWait = false;
+    let thirdStartedBeforeFirstFinished = false;
+    const targets = ["a", "b", "c"].map((name) => ({
+      targetId: `wporg:${name}`,
+      version: "1.0.0",
+      selectedAt: NOW,
+      score: 1,
+      policy: { id: "synthetic", digest: `sha256:${"a".repeat(64)}` },
+    }));
+    const t = await setup(
+      (stateDirectory) =>
         hostProfile({
           stateDirectory,
           sweeps: [],
           hostStatus: async () => ({
-            loginExpiresAt: new Date(Date.parse(NOW) + remaining * 60_000),
+            loginExpiresAt: new Date(now + remaining * 60_000),
             programmeObservedAt: new Date(NOW),
             freeBytes: 100 * 1024 ** 3,
             loginMarginMinutes: 135,
@@ -549,6 +557,27 @@ describe("continuous run", () => {
               maxConcurrentTargets: 2,
               stop: input.stop!,
               beforeTarget: input.beforeTarget!,
+              targetLimit: {
+                ...input.targetLimit!,
+                pollMs: 1,
+                read: async () => {
+                  const limit = await input.targetLimit!.read();
+                  // The slot stays occupied until the next contender has read
+                  // the live cap; release it after that claim has had to wait.
+                  if (
+                    started.includes("wporg:a") &&
+                    !firstFinished &&
+                    (scenario === "slot" ||
+                      (scenario === "limit" && now > Date.parse(NOW)))
+                  ) {
+                    setImmediate(() => {
+                      if (scenario === "slot") remaining = 134;
+                      finishFirst?.();
+                    });
+                  }
+                  return limit;
+                },
+              },
               pipeline: {
                 select: async () => targets,
                 freeze: async (target) => {
@@ -560,6 +589,7 @@ describe("continuous run", () => {
                     firstFinished = true;
                   } else if (target.targetId === "wporg:b") remaining = 134;
                   else {
+                    thirdStartedBeforeFirstFinished = !firstFinished;
                     finishFirst?.();
                     requestContinuousStop(stateDirectory);
                   }
@@ -572,26 +602,42 @@ describe("continuous run", () => {
               },
             }),
         }),
-      );
-      const output = t.io.stdout;
-      t.io.stdout = (line) => {
-        output(line);
-        if (line.includes(" waiting-login ")) {
-          firstRunningAtWait = started.includes("wporg:a") && !firstFinished;
+      () => new Date(now),
+    );
+    if (scenario === "slot") await writeFile(t.paths.concurrency, "1\n");
+    const output = t.io.stdout;
+    t.io.stdout = (line) => {
+      output(line);
+      if (line.includes(" waiting-login ")) {
+        firstRunningAtWait = started.includes("wporg:a") && !firstFinished;
+        if (scenario === "limit") {
+          writeFileSync(t.paths.concurrency, "1\n");
+          remaining = 135;
+          now += 10 * 60_000;
+        } else {
           finishFirst?.();
           requestContinuousStop(t.root);
         }
-      };
-      expect(await t.command("run", RUN_OPTIONS)).toBe(0);
-      expect(started).toEqual(initial === 135 ? ["wporg:a", "wporg:b"] : []);
-      expect(t.stdout.some((line) => line.includes(" waiting-login "))).toBe(
-        true,
-      );
-      expect(firstRunningAtWait).toBe(initial === 135);
-      expect(firstFinished).toBe(initial === 135);
-      expect(t.stdout.at(-1)).toMatch(/ stopped reason=operator$/);
-    },
-  );
+      }
+    };
+    expect(await t.command("run", RUN_OPTIONS)).toBe(0);
+    expect(started).toEqual(
+      initial === 134
+        ? []
+        : scenario === "slot"
+          ? ["wporg:a"]
+          : scenario === "limit"
+            ? ["wporg:a", "wporg:b", "wporg:c"]
+            : ["wporg:a", "wporg:b"],
+    );
+    expect(t.stdout.some((line) => line.includes(" waiting-login "))).toBe(
+      true,
+    );
+    expect(firstRunningAtWait).toBe(initial === 135 && scenario !== "slot");
+    expect(firstFinished).toBe(initial === 135);
+    expect(thirdStartedBeforeFirstFinished).toBe(false);
+    expect(t.stdout.at(-1)).toMatch(/ stopped reason=operator$/);
+  });
 
   it("stops when the host status says the programme is stale", async () => {
     const sweeps: string[] = [];
