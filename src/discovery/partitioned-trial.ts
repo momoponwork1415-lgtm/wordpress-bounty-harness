@@ -459,6 +459,36 @@ async function runRole(
     cancellation.dispose();
   }
   if (result !== undefined) {
+    // Returned files outlive receipt parsing/sealing: either failure must not
+    // discard bytes the transport already handed back (#637).
+    let captureFailure:
+      | { readonly stage: "output" | "research"; readonly error: unknown }
+      | undefined;
+    if (run.output === "files" && result.outputFiles?.length) {
+      try {
+        draft.outputDigest = await context.evidence.putFiles(
+          Object.fromEntries(
+            result.outputFiles.map((file) => [file.name, file.content]),
+          ),
+        );
+      } catch (error: unknown) {
+        captureFailure = { stage: "output", error };
+      }
+    }
+    if (result.researchArchive !== undefined) {
+      try {
+        if (
+          result.researchArchive.byteLength === 0 ||
+          result.researchArchive.byteLength > MAX_RESEARCH_ARCHIVE_BYTES
+        )
+          throw new ResearchArchiveSizeError();
+        draft.researchArtifactDigest = await context.evidence.putFiles({
+          "research.json": result.researchArchive,
+        });
+      } catch (error: unknown) {
+        captureFailure ??= { stage: "research", error };
+      }
+    }
     // The Harness's own bookkeeping after the run: a throw here is recorded
     // as missing evidence, with its message in Private Evidence only.
     let stage = "receipt";
@@ -481,24 +511,9 @@ async function runRole(
       );
       if (readPathsDigest !== undefined)
         draft.readPathsDigest = readPathsDigest;
-      if (run.output === "files" && result.outputFiles?.length) {
-        stage = "output";
-        draft.outputDigest = await context.evidence.putFiles(
-          Object.fromEntries(
-            result.outputFiles.map((file) => [file.name, file.content]),
-          ),
-        );
-      }
-      if (result.researchArchive !== undefined) {
-        stage = "research";
-        if (
-          result.researchArchive.byteLength === 0 ||
-          result.researchArchive.byteLength > MAX_RESEARCH_ARCHIVE_BYTES
-        )
-          throw new ResearchArchiveSizeError();
-        draft.researchArtifactDigest = await context.evidence.putFiles({
-          "research.json": result.researchArchive,
-        });
+      if (captureFailure !== undefined) {
+        stage = captureFailure.stage;
+        throw captureFailure.error;
       }
       if (
         receipt.runId !== run.runId ||

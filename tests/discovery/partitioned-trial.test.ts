@@ -1169,6 +1169,91 @@ describe("partitioned Trial executor (ADR 0042)", () => {
     });
   });
 
+  it.each(["invalid", "unsealed"] as const)(
+    "preserves returned JSON and research when the receipt is %s",
+    async (failure) => {
+      const { events, evidence } = await fixture({
+        brokenEvidenceFiles: failure === "unsealed" ? ["receipt.json"] : [],
+        script: (run, _attempt, helpers) => {
+          const returned = helpers.files(run, {
+            [ENUMERATION_OUTPUT_FILES.inventory]: inventory,
+            [ENUMERATION_OUTPUT_FILES.partitions]: proposal,
+          });
+          return {
+            ...returned,
+            researchArchive: Buffer.from("research kept outside Git"),
+            ...(failure === "invalid"
+              ? { receipt: { ...returned.receipt, runId: "" } }
+              : {}),
+          };
+        },
+      });
+      const finish = events.find(
+        (event) => event.type === "discovery-run-finished",
+      );
+      expect(finish).toMatchObject({
+        outcome: "failed",
+        reason: "evidence",
+        reasonDetail: "post-run-threw",
+      });
+      if (finish?.type !== "discovery-run-finished")
+        throw new Error("Missing enumerator finish");
+      const output = finish.artifacts.find(
+        (artifact) => artifact.kind === "enumeration-output",
+      );
+      const research = finish.artifacts.find(
+        (artifact) => artifact.kind === "research-archive",
+      );
+      expect(output).toBeDefined();
+      expect(research).toBeDefined();
+      expect(
+        await evidence.readFile(
+          output!.digest,
+          ENUMERATION_OUTPUT_FILES.inventory,
+          4096,
+        ),
+      ).toMatchObject({ status: "resolved" });
+      expect(
+        await evidence.readFile(research!.digest, "research.json", 4096),
+      ).toMatchObject({ status: "resolved" });
+    },
+  );
+
+  it("preserves the research archive when JSON output storage fails", async () => {
+    const { events, evidence } = await fixture({
+      brokenEvidenceFiles: [ENUMERATION_OUTPUT_FILES.inventory],
+      script: (run, _attempt, helpers) => ({
+        ...helpers.files(run, {
+          [ENUMERATION_OUTPUT_FILES.inventory]: inventory,
+          [ENUMERATION_OUTPUT_FILES.partitions]: proposal,
+        }),
+        researchArchive: Buffer.from("research kept outside Git"),
+      }),
+    });
+    const finish = events.find(
+      (event) => event.type === "discovery-run-finished",
+    );
+    expect(finish).toMatchObject({
+      outcome: "failed",
+      reason: "evidence",
+      reasonDetail: "post-run-threw",
+    });
+    if (finish?.type !== "discovery-run-finished")
+      throw new Error("Missing enumerator finish");
+    expect(
+      finish.artifacts.some(
+        (artifact) => artifact.kind === "enumeration-output",
+      ),
+    ).toBe(false);
+    const research = finish.artifacts.find(
+      (artifact) => artifact.kind === "research-archive",
+    );
+    expect(research).toBeDefined();
+    expect(
+      await evidence.readFile(research!.digest, "research.json", 4096),
+    ).toMatchObject({ status: "resolved" });
+  });
+
   it("ends the Trial incomplete once the send-backs are exhausted, with the last rejection's reasons", async () => {
     const { result, events, calls, ledger } = await fixture({
       limits: { maxResubmits: 1 },
@@ -1488,7 +1573,7 @@ describe("partitioned Trial executor (ADR 0042)", () => {
     }
     expect(errorOnly.result).toMatchObject({ stoppedBy: "incomplete" });
     // Neither the receipt nor the error file can be written: the finish
-    // carries the receipt's fields and no artifact; no start is left dangling.
+    // still carries the returned JSON output; no start is left dangling.
     const nothing = await fixture({
       brokenEvidenceFiles: ["receipt.json", "role-run-error.json"],
       script: (run, _attempt, helpers) =>
@@ -1507,7 +1592,7 @@ describe("partitioned Trial executor (ADR 0042)", () => {
       reason: "evidence",
       reasonDetail: "post-run-threw",
       observed: { filesRead: 3 },
-      artifacts: [],
+      artifacts: [{ kind: "enumeration-output" }],
     });
     expect(nothing.result).toMatchObject({
       stoppedBy: "incomplete",
