@@ -198,6 +198,28 @@ async function runtime(
 }
 
 describe("Claude one-shot runtime (ADR 0042)", () => {
+  it("rejects an unsupported Lab before requesting a grant", async () => {
+    const { runtime: oneShot, requests } = await runtime("");
+    const result = await oneShot.execute({
+      ...run("files"),
+      lab: {
+        endpoint: "http://wordpress",
+        networkName: "lab-internal",
+        internalIp: "172.20.0.2",
+        labJson: "{}",
+        administratorExpiresAt: end,
+        outputFileNames: [],
+        async closeSetup() {
+          return "{}";
+        },
+      },
+    });
+    expect(result.receipt).toMatchObject({
+      terminal: "incomplete",
+      reason: "policy",
+    });
+    expect(requests).toHaveLength(0);
+  });
   it("runs one turn without children, mounts the files and reads the output files of an enumerator", async () => {
     const {
       runtime: oneShot,

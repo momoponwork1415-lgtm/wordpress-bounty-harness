@@ -61,6 +61,7 @@ type Failure = {
 function admitted(run: OneShotRun, sandboxImage: string): boolean {
   const profile = run.profile;
   return (
+    run.lab === undefined &&
     profile.transportKind === "claude-code/v1" &&
     admitAgentRuntimeProfile(profile, sandboxImage).status === "admitted" &&
     run.prompt.length > 0 &&

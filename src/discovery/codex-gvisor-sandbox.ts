@@ -58,6 +58,7 @@ import {
   ONE_SHOT_MAX_WALL_MS,
 } from "./one-shot-run.js";
 import { MINIMUM_ACTIVE_RUNNER_SOURCE } from "./minimum-active-runner.js";
+import { admittedOneShotLab, watchOneShotLab } from "./one-shot-lab.js";
 import {
   codexThreadIdSchema,
   isCodexSessionPath,
@@ -784,7 +785,16 @@ export class GvisorCodexSandbox implements CodexSandbox {
     if (
       command.executable !== "codex" ||
       (command.oneShot !== undefined &&
-        (command.minimumActiveMs !== undefined ||
+        (!admittedOneShotLab(command.oneShot, Date.now()) ||
+          (command.oneShot.lab !== undefined &&
+            (command.grant.dockerNetworkName !==
+              command.oneShot.lab.networkName ||
+              command.labHost?.name !==
+                new URL(command.oneShot.lab.endpoint).hostname ||
+              command.labHost?.ipv4 !== command.oneShot.lab.internalIp ||
+              command.databaseHost !== undefined ||
+              command.controlHost !== undefined)) ||
+          command.minimumActiveMs !== undefined ||
           command.resume !== undefined ||
           command.researchMount !== undefined ||
           command.runMarker !== undefined ||
@@ -937,6 +947,12 @@ export class GvisorCodexSandbox implements CodexSandbox {
           );
         [input, tools, output] = oneShotDirectories;
         await stageOneShotFiles(input!, tools!, command.oneShot);
+        if (command.oneShot.lab !== undefined)
+          await writeFile(
+            join(input!, "lab.json"),
+            command.oneShot.lab.labJson,
+            { flag: "wx", mode: 0o600 },
+          );
       }
       await writeFile(
         join(staging, "report-schema.json"),
@@ -1080,6 +1096,16 @@ export class GvisorCodexSandbox implements CodexSandbox {
       signal?.addEventListener("abort", onAbort, { once: true });
       if (signal?.aborted) onAbort();
       const wallTimer = setTimeout(() => controller.abort("wall"), wallMs);
+      const handoff =
+        command.oneShot?.lab === undefined
+          ? undefined
+          : watchOneShotLab(
+              input!,
+              output!,
+              command.oneShot.lab,
+              () => controller.abort("lab"),
+              controller.signal,
+            );
       try {
         const client = runDocker(
           args,
@@ -1129,6 +1155,7 @@ export class GvisorCodexSandbox implements CodexSandbox {
           undefined,
           20_000,
         ).catch(() => undefined);
+        await handoff?.stop();
         await owner.release().catch(() => undefined);
       }
       const completedAt = now().toISOString();
@@ -1145,9 +1172,13 @@ export class GvisorCodexSandbox implements CodexSandbox {
         cliVersion,
         bundledCatalogDigest,
         ...captured,
+        ...(handoff === undefined ? {} : { labHandoff: handoff.state }),
         ...(output === undefined
           ? {}
-          : await collectOutputFiles(output).then(
+          : await collectOutputFiles(
+              output,
+              command.oneShot?.lab?.outputFileNames,
+            ).then(
               (outputFiles) => ({ outputFiles }),
               () => ({ outputFailure: "capture-failed" as const }),
             )),

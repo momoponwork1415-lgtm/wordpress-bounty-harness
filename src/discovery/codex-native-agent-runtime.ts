@@ -280,7 +280,10 @@ export type CodexSandboxResumeSeed = {
   }[];
 };
 export interface CodexSandboxCommand {
-  readonly oneShot?: Pick<OneShotRun, "inputFiles" | "toolFiles" | "wallMs">;
+  readonly oneShot?: Pick<
+    OneShotRun,
+    "inputFiles" | "toolFiles" | "wallMs" | "lab"
+  >;
   readonly executable: "codex";
   readonly args: readonly string[];
   readonly stdin: string;
@@ -336,6 +339,7 @@ export interface CodexSandboxCommand {
   readonly controlHost?: { readonly name: string; readonly ipv4: string };
 }
 export interface CodexSandboxResult {
+  readonly labHandoff?: import("./one-shot-lab.js").OneShotLabHandoff;
   readonly outputFiles?: readonly OneShotFile[];
   readonly outputFailure?: "capture-failed";
   readonly status: "exited" | "failed";
