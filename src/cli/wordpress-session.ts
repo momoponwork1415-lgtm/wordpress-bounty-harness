@@ -4,9 +4,10 @@ import { z } from "zod";
 
 import {
   assignDiscoveryRuntime,
+  agentRuntimeProfileDefinitionSchema,
   claudeEffortSchema,
   claudeModelSchema,
-  CLAUDE_ONE_SHOT_SANDBOX_MEMORY_MIB,
+  ONE_SHOT_SANDBOX_MEMORY_MIB,
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB,
   DEFAULT_MAX_CHILDREN,
   MAX_CHILDREN_LIMIT,
@@ -90,21 +91,31 @@ const WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES = {
 } as const;
 
 /**
- * ADR 0042: the roles of a partitioned Trial. Stage 1 runs every role on the
- * Claude runtime, one sandbox per run, without children. The defaults keep
- * one target inside the sandbox ceiling with one tracer at a time.
+ * ADR 0042: partitioned roles run on Claude or Codex, without children.
+ * Both use the same one-shot memory and wall ceilings.
  */
 const PARTITIONED_TARGET_CEILING_MINUTES = 240;
 /** One tracer run: the one-shot sandbox plus its broker (design 2026-10-28 §6 Q2). */
 export const PARTITIONED_TRACER_RUN_MEMORY_MIB =
-  CLAUDE_ONE_SHOT_SANDBOX_MEMORY_MIB + EGRESS_BROKER_MEMORY_MIB;
-const partitionedRoleFields = {
-  runtime: z.literal("claude").default("claude"),
-  model: claudeModelSchema.optional(),
-  effort: claudeEffortSchema.optional(),
-};
-const enumeratorSchema = z.strictObject({
-  ...partitionedRoleFields,
+  ONE_SHOT_SANDBOX_MEMORY_MIB + EGRESS_BROKER_MEMORY_MIB;
+const roleSchema = <T extends z.ZodRawShape>(fields: T) =>
+  z.union([
+    z.strictObject({
+      runtime: z.literal("claude").default("claude"),
+      model: claudeModelSchema.optional(),
+      effort: claudeEffortSchema.optional(),
+      ...fields,
+    }),
+    z.strictObject({
+      runtime: z.literal("codex"),
+      model:
+        agentRuntimeProfileDefinitionSchema.shape.requestedModelId.optional(),
+      effort:
+        agentRuntimeProfileDefinitionSchema.shape.requestedEffort.optional(),
+      ...fields,
+    }),
+  ]);
+const enumeratorSchema = roleSchema({
   wallMinutes: z.number().int().min(5).max(60).default(20),
   /** The tool files mounted read-only at /workspace/tools; the enumerator runs them itself. */
   tools: z
@@ -130,8 +141,7 @@ const partitionSchema = z.strictObject({
   maxPartitions: z.number().int().min(1).max(16).default(8),
   maxResubmits: z.number().int().min(0).max(5).default(2),
 });
-const tracerSchema = z.strictObject({
-  ...partitionedRoleFields,
+const tracerSchema = roleSchema({
   wallMinutes: z.number().int().min(5).max(120).default(45),
   maxParallel: z.number().int().min(1).max(8).default(2),
 });
@@ -309,7 +319,14 @@ export const wordpressCampaignConfigSchema = z
       });
     const caps = config.resources.maxConcurrentTargetsByRuntime;
     if (caps !== undefined) {
-      const share = config.discovery.runtimeShare ?? { codex: 1, claude: 0 };
+      const roleRuntime = config.discovery.enumerator?.runtime ?? "claude";
+      const share =
+        mode === "partitioned"
+          ? {
+              codex: Number(roleRuntime === "codex"),
+              claude: Number(roleRuntime === "claude"),
+            }
+          : (config.discovery.runtimeShare ?? { codex: 1, claude: 0 });
       for (const runtime of ["codex", "claude"] as const) {
         const cap = caps[runtime];
         if (cap !== undefined && cap > config.resources.maxConcurrentTargets)
@@ -409,7 +426,7 @@ export interface WordPressCampaignBoundaries {
   };
   /**
    * The Claude discovery runtime, present when the host configures it and the
-   * campaign's share uses it or its mode is `partitioned`. `oneShot` runs the
+   * campaign's share or partitioned roles use it. `oneShot` runs the
    * roles of a partitioned Trial (ADR 0042).
    */
   readonly claude?: {
@@ -417,6 +434,8 @@ export interface WordPressCampaignBoundaries {
     readonly executor: WordPressCampaignBoundaries["executor"];
     readonly oneShot?: OneShotExecutor;
   };
+  /** The host Codex transport for partitioned roles (ADR 0042). */
+  readonly oneShot?: OneShotExecutor;
   readonly attachments: ProviderAttachmentStore;
   /** Legacy injected adapters may provide one; the real host no longer does. */
   readonly verifier?: Verifier<WordPressFinding, WordPressLabHandle>;
@@ -502,11 +521,17 @@ export function wordPressRuntimeCaps(
   if (config.resources.maxConcurrentTargetsByRuntime === undefined && !share)
     return undefined;
   return {
-    // The same identity and share that pick the runtime at discovery.
-    runtimeOf: (target) => assignDiscoveryRuntime(target.targetId, share),
+    // Roles choose the runtime directly; cooperative runs use the target share.
+    runtimeOf: (target) =>
+      config.discovery.mode === "partitioned"
+        ? config.discovery.enumerator!.runtime
+        : assignDiscoveryRuntime(target.targetId, share),
     ceilings: wordPressRuntimeCeilings(config),
     providerLimitPerRuntime:
-      share !== undefined && share.codex > 0 && share.claude > 0,
+      config.discovery.mode !== "partitioned" &&
+      share !== undefined &&
+      share.codex > 0 &&
+      share.claude > 0,
   };
 }
 

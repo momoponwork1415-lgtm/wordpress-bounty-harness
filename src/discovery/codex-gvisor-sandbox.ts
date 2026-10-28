@@ -48,12 +48,24 @@ import type {
   CodexSandboxResumeSeed,
   CodexSandboxResult,
 } from "./codex-native-agent-runtime.js";
+import {
+  admittedOneShotFiles,
+  collectOutputFiles,
+  stageOneShotFiles,
+  ONE_SHOT_SANDBOX_MEMORY_MIB,
+  ONE_SHOT_MAX_INPUT_BYTES,
+  ONE_SHOT_MAX_TOOL_BYTES,
+  ONE_SHOT_MAX_WALL_MS,
+} from "./one-shot-run.js";
 import { MINIMUM_ACTIVE_RUNNER_SOURCE } from "./minimum-active-runner.js";
 import {
   codexThreadIdSchema,
   isCodexSessionPath,
 } from "./native-run-receipts.js";
 import {
+  SANDBOX_INPUT_MOUNT_PATH,
+  SANDBOX_OUTPUT_MOUNT_PATH,
+  SANDBOX_TOOLS_MOUNT_PATH,
   SANDBOX_RESEARCH_MOUNT_PATH,
   SANDBOX_SOURCE_MOUNT_PATH,
   dependencyMountPathsAreDisjoint,
@@ -746,7 +758,8 @@ export class GvisorCodexSandbox implements CodexSandbox {
   }
 
   #runArgs(
-    container: Pick<GvisorContainer, "entrypoint" | "command" | "agent">,
+    container: Pick<GvisorContainer, "entrypoint" | "command" | "agent"> &
+      Partial<Pick<GvisorContainer, "memoryMiB">>,
   ): string[] {
     return gvisorRunArgs({
       user: this.#user,
@@ -770,6 +783,23 @@ export class GvisorCodexSandbox implements CodexSandbox {
       throw new Error("Provider grant is invalid");
     if (
       command.executable !== "codex" ||
+      (command.oneShot !== undefined &&
+        (command.minimumActiveMs !== undefined ||
+          command.resume !== undefined ||
+          command.researchMount !== undefined ||
+          command.runMarker !== undefined ||
+          !command.args.includes("features.multi_agent=false") ||
+          !Number.isSafeInteger(command.oneShot.wallMs) ||
+          command.oneShot.wallMs <= 0 ||
+          command.oneShot.wallMs > ONE_SHOT_MAX_WALL_MS ||
+          !admittedOneShotFiles(
+            command.oneShot.inputFiles,
+            ONE_SHOT_MAX_INPUT_BYTES,
+          ) ||
+          !admittedOneShotFiles(
+            command.oneShot.toolFiles,
+            ONE_SHOT_MAX_TOOL_BYTES,
+          ))) ||
       !admittedLabHosts(command) ||
       command.sourceMount.mode !== "ro" ||
       command.sourceMount.path !== SANDBOX_SOURCE_MOUNT_PATH ||
@@ -827,6 +857,7 @@ export class GvisorCodexSandbox implements CodexSandbox {
     ) {
       throw new Error("Codex sandbox command is not admitted");
     }
+    const wallMs = command.oneShot?.wallMs ?? this.#options.timeoutMs;
     const mountOf = async (mount: {
       readonly directory: string;
       readonly expectedTree: ExpectedSourceTree;
@@ -894,7 +925,19 @@ export class GvisorCodexSandbox implements CodexSandbox {
     const token = command.grant.authorization.replace(/^Bearer /, "");
     const runDocker = this.#docker(scratchRoot, token);
     let markerPath: string | undefined;
+    const oneShotDirectories: string[] = [];
+    let input: string | undefined,
+      tools: string | undefined,
+      output: string | undefined;
     try {
+      if (command.oneShot !== undefined) {
+        for (const name of ["input", "tools", "output"])
+          oneShotDirectories.push(
+            await mkdtemp(join(scratchRoot, `codex-${name}-`)),
+          );
+        [input, tools, output] = oneShotDirectories;
+        await stageOneShotFiles(input!, tools!, command.oneShot);
+      }
       await writeFile(
         join(staging, "report-schema.json"),
         command.supportFiles[0].content,
@@ -952,6 +995,9 @@ export class GvisorCodexSandbox implements CodexSandbox {
         markerPath = path;
       }
       const args = this.#runArgs({
+        ...(command.oneShot === undefined
+          ? {}
+          : { memoryMiB: ONE_SHOT_SANDBOX_MEMORY_MIB }),
         agent: {
           name: containerName,
           network: command.grant.dockerNetworkName,
@@ -972,6 +1018,13 @@ export class GvisorCodexSandbox implements CodexSandbox {
                     SANDBOX_RESEARCH_MOUNT_PATH,
                     false,
                   ),
+                ]),
+            ...(command.oneShot === undefined
+              ? []
+              : [
+                  containerMount(input!, SANDBOX_INPUT_MOUNT_PATH, true),
+                  containerMount(tools!, SANDBOX_TOOLS_MOUNT_PATH, true),
+                  containerMount(output!, SANDBOX_OUTPUT_MOUNT_PATH, false),
                 ]),
             containerMount(staging, "/opt/codex-support", true),
             { workdir: SANDBOX_SOURCE_MOUNT_PATH },
@@ -1026,15 +1079,12 @@ export class GvisorCodexSandbox implements CodexSandbox {
         controller.abort(signal?.reason === "operator" ? "operator" : "wall");
       signal?.addEventListener("abort", onAbort, { once: true });
       if (signal?.aborted) onAbort();
-      const wallTimer = setTimeout(
-        () => controller.abort("wall"),
-        this.#options.timeoutMs,
-      );
+      const wallTimer = setTimeout(() => controller.abort("wall"), wallMs);
       try {
         const client = runDocker(
           args,
           command.stdin,
-          this.#options.timeoutMs,
+          wallMs,
           controller.signal,
         );
         const aborted = new Promise<NativeModelProcessResult>((resolve) => {
@@ -1095,9 +1145,17 @@ export class GvisorCodexSandbox implements CodexSandbox {
         cliVersion,
         bundledCatalogDigest,
         ...captured,
+        ...(output === undefined
+          ? {}
+          : await collectOutputFiles(output).then(
+              (outputFiles) => ({ outputFiles }),
+              () => ({ outputFailure: "capture-failed" as const }),
+            )),
         isolation: GVISOR_ISOLATION,
       };
     } finally {
+      for (const directory of oneShotDirectories)
+        await rm(directory, { recursive: true, force: true });
       await rm(staging, { recursive: true, force: true });
       // A marked run keeps its marker, sessions and notes until its finish is
       // in the ledger; a crash before that leaves them for `leftover` (#512).

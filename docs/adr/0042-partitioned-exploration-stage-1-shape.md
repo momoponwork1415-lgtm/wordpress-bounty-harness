@@ -47,7 +47,7 @@ amends: 0029（単一協調 Trial の主経路）と 0039（探索の mode）に
 }
 ```
 
-- 3 つの節は `partitioned` のときだけ書ける。省略した値は既定値になる。段階 1 の runtime は Claude だけ。
+- 3 つの節は `partitioned` のときだけ書ける。省略した値は既定値になる。runtime は Claude と Codex を選べ、省略時は Claude（追記 3）。
 - 1 対象の最悪時間（列挙 × (1 + 差し戻し) + ceil(区画数 / 並列) × 追跡）は 240 分以内。並列の追跡役は memory 予算 ÷ (一発の sandbox 4,096 MiB + broker 512 MiB) 以内（所有者決定 2026-10-28、本番の予算 10,752 MiB なら 2）。
 - `rowSource: "script-only"` は段階 3 の比較の腕で、Harness が script を先に走らせ、列挙役は区画の案だけ出す。測定にだけ使う。
 - 例は `examples/campaign-partitioned.json`。
@@ -97,6 +97,17 @@ amends: 0029（単一協調 Trial の主経路）と 0039（探索の mode）に
 所有者決定（2026-10-28）。機械は 64 GB で、Ubuntu への割り当てを 56 GB に上げられる。追跡役は区画ごとに 1 体なので、区画の上限 8 と同じ 8 まで並べられるように `tracer.maxParallel` の schema の上限を 4 から 8 にする。既定値 2 は変えない。memory の検査（1 対象あたり、対象をまたいで）はそのまま効くので、予算 `memoryBudgetMiB` を上げなければ並列は増えない。本番の最初の構成は、追跡役 8 並列（4,608 MiB × 8 = 36,864 MiB）と Codex の v14-wide 1 本とする。
 
 消し方: `max(8)` を `max(4)` に戻す。
+
+
+## 追記 3（2026-10-28）: Codex の一発 run
+
+[所有者決定（#646）](https://github.com/momoponwork1415-lgtm/wordpress-bounty-harness/issues/646)。設計の問答の決定 9「段階 1〜3 の本番は Claude runtime だけ」を撤回し、Claude と Codex で動かす。Claude の token が無く、`prod-part` ランナーは 2026-10-28 02:30 JST に Trial 0 件のまま停止した（#633 の記録）。Codex の token は使い続けられ、区画分配型はまだ 1 Trial も測られていない。段階 3（#633）の比較の分母は v14-wide（Codex）のまま、比較の腕は Codex の partitioned にする。
+
+役の `runtime` は `claude` / `codex`（既定 `claude`）で、Codex の model / effort は既存の wide と同じ schema を使う。両役は同じ profile digest にそろえる。Codex も 1 turn、子なし、役ごとの wall とし、既存の Responses broker と上限（2,000 request、request / response 各 8 MiB）、NativeRunReceipt、台帳の event を使う。input / tools は読み取り専用、output の JSON 回収は Claude と同じ上限と処理で行う。役の Markdown、目的文、v2 の互換 tool pack は変えない。
+
+Codex の一発 sandbox も既存の役用の 4,096 MiB を使う。子のない役を両 runtime で同じ予算経路に数え、broker 込み 4,608 MiB とするためである。追跡 4 並列は 18,432 MiB、8 並列は 36,864 MiB、比較用 wide 1 本 10,752 MiB を加えた最大は 47,616 MiB となる。時間・memory の検査と既定予算は緩めず、runtime 別の同時対象上限は選んだ役の runtime に適用する。本番設定と起動、比較は #633 で行う。
+
+消し方: Codex の one-shot runtime と host 配線、mount / 回収の分岐を戻し、役の runtime を Claude に戻す。記録済みの receipt と event は残す。
 
 
 ## 追記 4（2026-10-28）: output を関数ごとに畳み、区画の既定値を実測に合わせる

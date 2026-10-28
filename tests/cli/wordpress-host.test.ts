@@ -1,4 +1,12 @@
-import { chmod, lstat, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -201,6 +209,23 @@ describe("WordPress host entry", () => {
     );
     expect(calls.length).toBeGreaterThan(0);
     expect(startedContainers(calls)).toEqual([]);
+  });
+
+  it("opens Codex partitioned roles without a Claude host section", async () => {
+    const { run, configPath } = await setup();
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        ...config,
+        discovery: {
+          mode: "partitioned",
+          enumerator: { runtime: "codex" },
+          tracer: { runtime: "codex" },
+        },
+      }),
+    );
+    expect((await run()).code).toBe(0);
   });
 
   it("checks the host, then compares the probed Codex image with the runtime profile", async () => {

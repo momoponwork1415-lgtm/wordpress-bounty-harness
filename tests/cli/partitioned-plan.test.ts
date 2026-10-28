@@ -93,6 +93,7 @@ async function context(config: Awaited<ReturnType<typeof exampleConfig>>) {
     }),
     runtimeProfile: codexProfile,
     executor: { execute: unused },
+    oneShot: { execute: unused },
     claude: {
       runtimeProfile: hostProfile,
       executor: { execute: unused },
@@ -184,8 +185,18 @@ describe("planWordPressPartitionedDiscovery (ADR 0042)", () => {
     ]);
   });
 
-  it("hands the enumerator its role, the limits and the sources, and the tracer its role, the objective, the contract and both boundaries", async () => {
-    const config = await exampleConfig();
+  it.each(["claude", "codex"])("keeps %s role inputs", async (runtime) => {
+    const role =
+      runtime === "codex"
+        ? { runtime, model: "gpt-6-luna", effort: "ultra" }
+        : { runtime };
+    const config = await exampleConfig({
+      discovery: {
+        mode: "partitioned",
+        enumerator: role,
+        tracer: role,
+      },
+    });
     const plan = await planWordPressPartitionedDiscovery(
       input,
       await context(config),
@@ -282,7 +293,29 @@ describe("planWordPressPartitionedDiscovery (ADR 0042)", () => {
       maxPartitions: 8,
       maxResubmits: 2,
     });
-    expect(plan.input.modelProfileDigest).toBe(hostProfile.digest);
+    expect(plan.input.modelProfileDigest).toBe(
+      partitioned.enumerate.run.profile.digest,
+    );
+    if (runtime === "claude")
+      expect(plan.input.modelProfileDigest).toBe(hostProfile.digest);
+    else {
+      expect(plan.input.modelProfileDigest).not.toBe(codexProfile.digest);
+      expect(partitioned.enumerate.run.profile).toMatchObject({
+        transportKind: "codex-native/v1",
+        requestedModelId: "gpt-6-luna",
+        requestedEffort: "ultra",
+      });
+      expect(partitioned.trace.run.profile.digest).toBe(
+        plan.input.modelProfileDigest,
+      );
+    }
+    const missing = await context(config);
+    const boundary =
+      runtime === "claude" ? missing.boundaries.claude! : missing.boundaries;
+    delete (boundary as { oneShot?: unknown }).oneShot;
+    await expect(
+      planWordPressPartitionedDiscovery(input, missing),
+    ).rejects.toThrow(`${runtime} runtime with one-shot`);
     expect(plan.input.promptDigest).toBe(objective.digest);
   });
 
@@ -315,6 +348,6 @@ describe("planWordPressPartitionedDiscovery (ADR 0042)", () => {
     ).claude.runtimeProfile = codexProfile;
     await expect(
       planWordPressPartitionedDiscovery(input, codexHost),
-    ).rejects.toThrow("Claude runtime only");
+    ).rejects.toThrow("claude runtime profile");
   });
 });

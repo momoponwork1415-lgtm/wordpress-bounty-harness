@@ -72,7 +72,7 @@ PR 1（形: schema、検査、台帳、設定、役の Markdown、道具、test�
 | 6 | 本体の固定一覧 | 置く。プラグインのソースだけでは見つからない「本体の機能の悪用」は、全プラグイン共通の固定知識として脅威モデルの形で用意する |
 | 7 | ⑤ の起動 | 候補が列に入ったら自動。人が触るのは ⑥ から |
 | 8 | 比較の分母 | 台帳にある v14-wide の Trial（同じ対象、契約 v4）。新しく走らせるのは partitioned だけ。版が変わった対象は外す |
-| 9 | 段階 1〜3 の本番 | Codex runtime は v14-wide のまま。partitioned は Claude runtime だけ |
+| 9 | 段階 1〜3 の本番 | partitioned は Claude と Codex（2026-10-28 の所有者決定、#646、ADR 0042 追記 3）。#633 は v14-wide（Codex）と partitioned（Codex）を比較する |
 | 10 | dev set の受け入れ試験 | 照合 script は repo に置き、所有者の記録の path だけ設定で渡す。記録は Git 外のまま |
 | 11 | 固定一覧の作り方 | AI が Wordfence mirror の先例を集計し、機能の粒度で書き、先例の件数を優先度の目安として添える。slug や事例は書かない。導出の表は docs/reviews、一覧は agent に渡る文章として委任でラベル |
 | 12 | 固定一覧を渡す役 | 洗い出し役と追跡役。⑤ には渡さない |

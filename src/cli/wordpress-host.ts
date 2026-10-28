@@ -10,6 +10,7 @@ import {
   ClaudeOneShotRuntime,
   claudeRuntimeProfileDefinitionSchema,
   CodexNativeAgentRuntime,
+  CodexOneShotRuntime,
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB,
   createProviderCredentialEgressBroker,
   defineAgentRuntimeProfile,
@@ -461,22 +462,25 @@ export async function createWordPressHostProfile(options: {
       wordPressLabCommandRule,
       state.clock,
     );
-    // ADR 0042: a partitioned campaign runs every role on Claude, whatever the share.
-    const claude =
-      (config.discovery.runtimeShare?.claude ?? 0) === 0 &&
-      config.discovery.mode !== "partitioned"
-        ? undefined
-        : await claudeBoundary({
-            host,
-            runDocker,
-            ...(options.runDocker === undefined
-              ? {}
-              : { sandboxDocker: options.runDocker }),
-            proxyBundleDirectory,
-            attachments,
-            runWallTimeMinutes: config.runWallTimeMinutes,
-            clock: state.clock,
-          });
+    // Partitioned roles choose their runtime directly, independently of the share.
+    const claude = !(config.discovery.mode === "partitioned"
+      ? [
+          config.discovery.enumerator?.runtime,
+          config.discovery.tracer?.runtime,
+        ].includes("claude")
+      : (config.discovery.runtimeShare?.claude ?? 0) > 0)
+      ? undefined
+      : await claudeBoundary({
+          host,
+          runDocker,
+          ...(options.runDocker === undefined
+            ? {}
+            : { sandboxDocker: options.runDocker }),
+          proxyBundleDirectory,
+          attachments,
+          runWallTimeMinutes: config.runWallTimeMinutes,
+          clock: state.clock,
+        });
 
     // Selection needs the programme transcription; commands that never select do not.
     let selection: ReturnType<typeof createWordPressSelection> | undefined;
@@ -568,6 +572,14 @@ export async function createWordPressHostProfile(options: {
       runtimeProfile,
       probeRuntime: () => sandbox.probe(),
       executor: runtime,
+      oneShot: new CodexOneShotRuntime(
+        sandbox,
+        runtime.broker,
+        attachments,
+        host.images.codex,
+        wordPressLabCommandRule,
+        state.clock,
+      ),
       ...(claude === undefined ? {} : { claude }),
       attachments,
       // The Harness owns the records; the transport hands the Lab to a skill (#352).

@@ -312,6 +312,37 @@ describe("runtime-scoped stops", () => {
     },
   );
 
+  it.each(["codex", "claude"] as const)(
+    "accounts partitioned %s roles independently of the wide runtime share",
+    (runtime) => {
+      const base = config({ codex: 1, claude: 1 });
+      const parsed = wordpressCampaignConfigSchema.parse({
+        ...base,
+        promptId: "objective-partition-v1",
+        discovery: {
+          ...base.discovery,
+          mode: "partitioned",
+          enumerator: { runtime },
+          tracer: { runtime },
+        },
+        resources: {
+          ...base.resources,
+          maxConcurrentTargets: 1,
+          maxConcurrentTargetsByRuntime: {
+            codex: runtime === "codex" ? 1 : 0,
+            claude: runtime === "claude" ? 1 : 0,
+          },
+        },
+      });
+      const caps = wordPressRuntimeCaps(parsed)!;
+      expect(caps.runtimeOf({ targetId: "wporg:fixed" } as never)).toBe(
+        runtime,
+      );
+      expect(caps.providerLimitPerRuntime).toBe(false);
+      expect(caps.ceilings[runtime]).toBe(1);
+    },
+  );
+
   it("keeps the whole-campaign stop for a {codex: 1, claude: 0} campaign", async () => {
     expect(wordPressRuntimeCaps(config(undefined))).toBeUndefined();
     const c = await campaign(
