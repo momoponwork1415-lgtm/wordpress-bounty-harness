@@ -29,6 +29,7 @@ import {
   holdWordPressVerificationLab,
   releaseHeldLabRecord,
   wordPressReviewLabDown,
+  type HeldVerificationLabSession,
 } from "../../../src/profiles/wordpress/lab/review-lab.js";
 import { presentHeldVerificationLab } from "../../../src/cli/index.js";
 import { liveLabOwner } from "../../../src/infrastructure/lab-owner-record.js";
@@ -171,6 +172,8 @@ function daemon(host: DockerHost, args: readonly string[]) {
 }
 
 type Scenario = {
+  /** Distinguishes simultaneous Findings in a shared state directory. */
+  readonly caseId?: string;
   readonly impact?: WordPressFinding["impact"];
   /** The skill sends no attacker request after `setup-done`. */
   readonly silent?: boolean;
@@ -245,12 +248,18 @@ async function verifyThroughHandoff(
     readonly host: DockerHost;
     readonly ownerDirectory?: string;
     readonly ports: { readonly http: number; readonly database: number };
+    readonly state?: {
+      readonly root: string;
+      readonly store: PrivateArtifactStore;
+      readonly ledger: Ledger;
+    };
   } = { host: dockerHost(), ports: { http: 18080, database: 13307 } },
 ) {
-  const root = await mkdtemp(join(tmpdir(), "wbh-handoff-e2e-"));
-  directories.push(root);
+  const root =
+    shared.state?.root ?? (await mkdtemp(join(tmpdir(), "wbh-handoff-e2e-")));
+  if (shared.state === undefined) directories.push(root);
   const sourceDirectory = join(root, "source");
-  await mkdir(sourceDirectory);
+  await mkdir(sourceDirectory, { recursive: true });
   await writeFile(join(sourceDirectory, "example.php"), "<?php // harmless\n");
   const tree = await measureCanonicalSourceTree(sourceDirectory, {
     maxEntries: 10,
@@ -356,18 +365,22 @@ async function verifyThroughHandoff(
     },
     healthAttempts: 1,
   });
-  const store = new PrivateArtifactStore({
-    rootDirectory: join(root, "evidence"),
-    maxEntries: 20,
-    maxBytes: 1024 * 1024,
-  });
-  const ledger = new Ledger({
-    databasePath: join(root, "ledger.sqlite"),
-    artifactStore: store,
-  });
+  const store =
+    shared.state?.store ??
+    new PrivateArtifactStore({
+      rootDirectory: join(root, "evidence"),
+      maxEntries: 20,
+      maxBytes: 1024 * 1024,
+    });
+  const ledger =
+    shared.state?.ledger ??
+    new Ledger({
+      databasePath: join(root, "ledger.sqlite"),
+      artifactStore: store,
+    });
   const finding = admitWordPressFinding(
     {
-      claim: "Synthetic subscriber escalation claim",
+      claim: `Synthetic subscriber escalation claim${scenario.caseId ?? ""}`,
       attackerPosition: "subscriber",
       impact: scenario.impact ?? "privesc-to-admin",
       configurationPrecondition: "default",
@@ -387,7 +400,7 @@ async function verifyThroughHandoff(
   });
   await ledger.append({
     schemaVersion: 1,
-    identity: "finding",
+    identity: `finding${scenario.caseId ?? ""}`,
     campaignId: "campaign-1",
     snapshotDigest: snapshot.digest,
     occurredAt: "2026-10-21T00:00:00Z",
@@ -412,7 +425,7 @@ async function verifyThroughHandoff(
       ),
     });
   const clock = () => new Date();
-  const directory = join(root, "handoff");
+  const directory = join(root, `handoff${scenario.caseId ?? ""}`);
   const verification = new Verification({
     ledger,
     store,
@@ -449,7 +462,7 @@ async function verifyThroughHandoff(
     verification.verify({
       campaignId: "campaign-1",
       findingId: finding.findingId,
-      verificationId: "verification-1",
+      verificationId: `verification-${scenario.caseId ?? "1"}`,
       snapshot,
       ...(scenario.ordinaryLatestVersion === true
         ? {
@@ -485,8 +498,12 @@ async function verifyThroughHandoff(
     skill(directory, state, scenario),
   ]);
   const event = ledger
-    .read({ campaignId: "campaign-1", type: "verification-finished" })
-    .at(0)?.event;
+    .read({
+      campaignId: "campaign-1",
+      findingId: finding.findingId,
+      type: "verification-finished",
+    })
+    .at(-1)?.event;
   return {
     result,
     event,
@@ -508,6 +525,159 @@ const AWAITING = {
 } as const;
 
 describe("handoff verification through the real transport and observer (#525)", () => {
+  it("holds two verification Labs in one state for separate human observations and Lab-id teardown (#605)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wbh-two-held-labs-"));
+    directories.push(root);
+    const store = new PrivateArtifactStore({
+      rootDirectory: join(root, "evidence"),
+      maxEntries: 100,
+      maxBytes: 1024 * 1024,
+    });
+    const ledger = new Ledger({
+      databasePath: join(root, "ledger.sqlite"),
+      artifactStore: store,
+    });
+    const host = dockerHost();
+    const shared = {
+      host,
+      ports: { http: 18080, database: 13307 },
+      state: { root, store, ledger },
+    };
+    const open = (caseId: string) => {
+      const signals = new EventEmitter();
+      let ready!: () => void;
+      const presented = new Promise<void>((resolve) => (ready = resolve));
+      let context!: HoldContext;
+      let session!: HeldVerificationLabSession;
+      let ownerAlive = true;
+      const run = verifyThroughHandoff(
+        {
+          caseId,
+          hold: async (heldContext) => {
+            context = heldContext;
+            const kept = await holdWordPressVerificationLab({
+              held: context.held,
+              lab: context.lab,
+              ledger,
+              store,
+              stateDirectory: root,
+              clock: () => new Date(),
+              wallMs: 60 * 60_000,
+              present: (heldSession) => {
+                session = heldSession;
+                return presentHeldVerificationLab(
+                  heldSession,
+                  {
+                    stdout(line) {
+                      if (line.startsWith("Run lab down")) ready();
+                    },
+                    stderr: () => undefined,
+                  },
+                  signals,
+                );
+              },
+            });
+            expect(kept).toEqual({ status: "held" });
+          },
+        },
+        shared,
+      ).then(async (result) => {
+        if (context !== undefined)
+          await releaseHeldLabRecord({
+            stateDirectory: root,
+            labId: context.held.lab.id,
+            lab: context.lab,
+          });
+        ownerAlive = false;
+        return result;
+      });
+      return {
+        presented,
+        run,
+        get context() {
+          return context;
+        },
+        get session() {
+          return session;
+        },
+        async down() {
+          return wordPressReviewLabDown({
+            stateDirectory: root,
+            lab: context.lab,
+            labId: session.labId,
+            ownerOf: async (id) =>
+              id === session.labId && ownerAlive ? process.pid : null,
+            signal: () => signals.emit("SIGTERM"),
+            waitMs: 10_000,
+          });
+        },
+        release() {
+          signals.emit("SIGTERM");
+        },
+      };
+    };
+
+    const first = open("one");
+    try {
+      await first.presented;
+      const second = open("two");
+      try {
+        expect(
+          await Promise.race([
+            second.presented.then(() => "ready"),
+            second.run.then(() => "finished"),
+          ]),
+        ).toBe("ready");
+        expect(second.session.labId).not.toBe(first.session.labId);
+        for (const held of [first, second]) {
+          const admitted = await observedReviewLabPackage({
+            ledger,
+            store,
+            ref: held.context.held.ref,
+          });
+          expect(admitted).not.toBeNull();
+          const recorded = await recordManualObservation({
+            ledger,
+            store,
+            ref: held.context.held.ref,
+            packageDigest: admitted!.packageDigest,
+            sessionReceiptDigest: held.session.receipt.digest,
+            evidence: new TextEncoder().encode("person saw the result"),
+            result: "match",
+            recordedBy: "owner",
+          });
+          expect(recorded).toMatchObject({
+            type: "manual-observation-recorded",
+            result: "match",
+          });
+        }
+        const downFirst = await first.down();
+        expect(downFirst?.labId).toBe(first.session.labId);
+        expect(
+          await readFile(
+            join(root, "review-labs", `${second.session.labId}.json`),
+          ),
+        ).toBeTruthy();
+        expect(
+          [...host.containers].some((name) =>
+            name.includes(second.session.labId),
+          ),
+        ).toBe(true);
+        const downSecond = await second.down();
+        expect(downSecond?.labId).toBe(second.session.labId);
+        expect([...host.containers, ...host.networks, ...host.volumes]).toEqual(
+          [],
+        );
+      } finally {
+        second.release();
+        await second.run;
+      }
+    } finally {
+      first.release();
+      await first.run;
+    }
+  });
+
   it("records a finished handoff as awaiting a human observation, with the Harness capture", async () => {
     const { result, event, store, attack, revokedBeforeAttack } =
       await verifyThroughHandoff({});
@@ -1025,7 +1195,7 @@ describe("handoff verification through the real transport and observer (#525)", 
                       });
                       const record = JSON.parse(
                         await readFile(
-                          join(stateDirectory, "review-lab.json"),
+                          join(stateDirectory, "review-labs", `${labId}.json`),
                           "utf8",
                         ),
                       ) as unknown;
@@ -1108,7 +1278,9 @@ describe("handoff verification through the real transport and observer (#525)", 
       "observation window closed; removing the verification Lab",
     );
     expect([...host.containers, ...host.networks, ...host.volumes]).toEqual([]);
-    await expect(readFile(join(root, "review-lab.json"))).rejects.toThrow();
+    await expect(
+      readFile(join(root, "review-labs", `${labId}.json`)),
+    ).rejects.toThrow();
     expect(signals.listenerCount("SIGTERM")).toBe(0);
   });
 
@@ -1148,7 +1320,9 @@ describe("handoff verification through the real transport and observer (#525)", 
       "observation window closed; removing the verification Lab",
     );
     expect([...host.containers, ...host.networks, ...host.volumes]).toEqual([]);
-    await expect(readFile(join(root, "review-lab.json"))).rejects.toThrow();
+    await expect(
+      readFile(join(root, "review-labs", `${labId}.json`)),
+    ).rejects.toThrow();
   });
 
   it("does not keep a Lab whose attempt has no Harness capture (#600)", async () => {
@@ -1163,12 +1337,17 @@ describe("handoff verification through the real transport and observer (#525)", 
     expect(held).toBe(false);
     expect([...host.containers, ...host.networks, ...host.volumes]).toEqual([]);
   });
-  it("does not keep the Lab while another Lab is held for a person in the state directory (#600)", async () => {
+  it("does not replace a record for the same held Lab id (#605)", async () => {
     let kept: unknown;
     const { result, host } = await verifyThroughHandoff({
       hold: async (context) => {
+        await mkdir(join(context.stateDirectory, "review-labs"));
         await writeFile(
-          join(context.stateDirectory, "review-lab.json"),
+          join(
+            context.stateDirectory,
+            "review-labs",
+            `${context.held.lab.id}.json`,
+          ),
           JSON.stringify({ schemaVersion: 1 }),
         );
         kept = await holdWordPressVerificationLab({
@@ -1186,8 +1365,7 @@ describe("handoff verification through the real transport and observer (#525)", 
     expect(result).toMatchObject(AWAITING);
     expect(kept).toEqual({
       status: "not-held",
-      reason:
-        "another Lab is held for a person in this state directory; run lab down first",
+      reason: "this Lab is already held for a person in this state directory",
     });
     expect([...host.containers, ...host.networks, ...host.volumes]).toEqual([]);
   });

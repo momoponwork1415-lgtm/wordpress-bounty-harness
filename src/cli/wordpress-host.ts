@@ -672,12 +672,15 @@ export async function createWordPressHostProfile(options: {
       }),
     /** A review Lab recorded by `lab up --for-review` first, then an earlier `lab up` (#592). */
     async labDown(state, input) {
-      return (
-        (await wordPressReviewLabDown({
-          stateDirectory: state.stateDirectory,
-          lab: reviewLabs(),
-        })) ?? profile.labDown(state, input)
-      );
+      const recorded = await wordPressReviewLabDown({
+        stateDirectory: state.stateDirectory,
+        lab: reviewLabs(),
+        ...(input.labId === undefined ? {} : { labId: input.labId }),
+      });
+      if (recorded !== null) return recorded;
+      if (input.labId !== undefined)
+        throw new Error(`Lab ${input.labId} is not recorded`);
+      return profile.labDown(state, input);
     },
     reviewLabPackage: (state, ref) =>
       observedReviewLabPackage({

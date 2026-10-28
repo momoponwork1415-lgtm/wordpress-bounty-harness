@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -9,6 +9,7 @@ import {
   CLI_USAGE,
   runCli,
   type CliEnvironment,
+  type CliProfile,
 } from "../../src/cli/index.js";
 
 // The usage text as it was before the commands became a table (2026-10-18).
@@ -31,7 +32,7 @@ const PINNED_USAGE = [
   "  review dedupe --campaign <id> --finding <id>",
   "  review scope --campaign <id> --finding <id>",
   "  review reverify --campaign <id> --finding <id> --config <path> [--version <target-version>] [--handoff <dir> [--port <n>] [--db-port <n>]]",
-  "  verify next --config <path> --handoff <dir> [--campaign <id> [--finding <id>]] [--port <n>] [--db-port <n>]",
+  "  verify next --config <path> --handoff <dir> [--campaign <id> [--finding <id>]] [--port <n>] [--db-port <n>] [--hold-minutes <n>]",
   "  review draft --campaign <id> --finding <id> --programme <id> --file <path> [--prepared-by human|ai]",
   "  review authorize --candidate <id> --draft <digest> --to <destination> --by <name>",
   "  review submitted --candidate <id> --draft <digest> --to <destination>",
@@ -46,7 +47,7 @@ const PINNED_USAGE = [
   "  runtime check --config <path>",
   "  lab cleanup --config <path> [--remove]",
   "  lab up --for-review --campaign <id> --finding <id>",
-  "  lab down [--config <path>]",
+  "  lab down [--lab <id>] [--config <path>]",
   // Added after the table (ADR 0036); registered last so the pinned lines above stay in place.
   "  campaign resume --campaign <id> --run <runId> --config <path>",
   "  continuous concurrency [<n>] [--runtime <name>] --config <path>",
@@ -85,6 +86,111 @@ async function run(...argv: string[]) {
 }
 
 describe("command table", () => {
+  it("passes a bounded human observation hold window from verify next to the profile (#605)", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "wbh-hold-window-"));
+    directories.push(directory);
+    let wallMs: number | undefined;
+    const lines: string[] = [];
+    const code = await runCli(
+      [
+        "verify",
+        "next",
+        "--config",
+        "/unused/campaign.json",
+        "--handoff",
+        join(directory, "handoff"),
+        "--hold-minutes",
+        "180",
+      ],
+      {
+        stateDirectory: directory,
+        profile: {
+          verifyNext: async (
+            _state: unknown,
+            input: Parameters<NonNullable<CliProfile["verifyNext"]>>[1],
+          ) => {
+            wallMs = input.observation?.wallMs;
+            await input.observation?.present({
+              ref: { campaignId: "c", findingId: "f", verificationId: "v" },
+              labId: "0f0e0d0c-0b0a-4908-8706-050403020100",
+              endpoint: "http://wordpress",
+              attackerAccounts: {
+                subscriber: {
+                  username: "attacker",
+                  password: "attacker-secret",
+                },
+              },
+              administrator: { username: "admin", password: "admin-secret" },
+              host: {
+                url: "http://127.0.0.1:80",
+                hostHeader: "wordpress",
+                port: 80,
+              },
+              receipt: { digest: `sha256:${"a".repeat(64)}`, path: "/receipt" },
+              expiresAt: new Date(0).toISOString(),
+            });
+            return null;
+          },
+        },
+      } as unknown as CliEnvironment,
+      {
+        stdout: (line) => lines.push(line),
+        stderr: (line) => lines.push(line),
+      },
+    );
+    expect(code).toBe(0);
+    expect(wallMs).toBe(180 * 60_000);
+    expect(lines).toContain("no verification pending");
+    const accessLine = lines.find((line) =>
+      line.startsWith("review administrator: private Lab access file "),
+    );
+    expect(accessLine).toBeDefined();
+    const accessPath = accessLine!.slice(
+      "review administrator: private Lab access file ".length,
+    );
+    expect(JSON.parse(await readFile(accessPath, "utf8"))).toMatchObject({
+      administrator: { password: "admin-secret" },
+      attackerAccounts: { subscriber: { password: "attacker-secret" } },
+    });
+    expect((await stat(accessPath)).mode & 0o777).toBe(0o600);
+    expect(lines.join("\n")).not.toContain("admin-secret");
+    expect(lines.join("\n")).not.toContain("attacker-secret");
+  });
+
+  it("routes lab down --lab to the named Lab without choosing another Lab (#605)", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "wbh-lab-id-down-"));
+    directories.push(directory);
+    const labId = "0f0e0d0c-0b0a-4908-8706-050403020100";
+    let requested: string | undefined;
+    const lines: string[] = [];
+    const code = await runCli(
+      ["lab", "down", "--lab", labId],
+      {
+        stateDirectory: directory,
+        profile: {
+          labDown: async (
+            _state: unknown,
+            input: Parameters<CliProfile["labDown"]>[1],
+          ) => {
+            requested = input.labId;
+            return {
+              labId,
+              removed: { containers: [], networks: [], volumes: [] },
+              remaining: { containers: [], networks: [], volumes: [] },
+            };
+          },
+        },
+      } as unknown as CliEnvironment,
+      {
+        stdout: (line) => lines.push(line),
+        stderr: (line) => lines.push(line),
+      },
+    );
+    expect(code).toBe(0);
+    expect(requested).toBe(labId);
+    expect(lines[0]).toBe(`lab ${labId} down`);
+  });
+
   it("renders the usage text from the rows, byte for byte as before", () => {
     expect(CLI_USAGE).toBe(PINNED_USAGE);
   });
