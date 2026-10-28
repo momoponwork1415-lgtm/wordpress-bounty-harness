@@ -226,3 +226,14 @@ Lead は v14-wide の水準に戻ったが、Finding は戻らなかった。10-
 - 比較候補の v15-wide は `candidate` のまま変えない。`deep` の v11 も変えない。
 - 測った数字: 上の表と pass@3 の 6 / 38。
 - 消し方: 追記 11 の手順をもう一度行う（v16-wide を `current`・`mode: "wide"` に、v14-wide を `archived`・契約 v4 に、2 つの campaign 設定の `promptId` を v16-wide に）。
+
+## 2026-10-28 追記 13: `wide` の比較候補 v18-wide（v16-wide の本文を契約 v4 で測る、#639）
+
+追記 12 で v14-wide に戻した後、同日の ADR 0038 追記 15 で Finding の減りは契約 v5 に帰した。v16-wide は契約 v5 の下でしか走っていないので、所有者が 2026-10-26 に指示した文 1（ベンダーだけが置ける内容は攻撃者入力ではない。`strategy/sinks-v16`）を、それだけで測った記録は無い。2026-10-28 02:34〜04:21 の Codex v14-wide（契約 v4、同時 1 対象、`prod-20261027-14`〜`17`）は 12 Trial で Finding 12 件、Lead 27 件だったが、Finding 12 件のうち 9 件（wp-carousel-free 2、insert-php 1、login-customizer 4、koko-analytics 2）はベンダーだけが書く配信（pattern library、snippet library、Freemius API、ニュース feed）を攻撃者入力とする前提に乗っていた。段 1 の `wbh-screen` は 12 件のうち 11 件を提出不可にし、残る 1 件（wp-ulike、Subscriber の表示名）だけを Lab に回した。
+
+- `wp2shell-bounty-v18-wide` を `wide` の `candidate` として足す。本文は v16-wide とバイト単位で同じ（同じ fragment、同じ digest `sha256:1ffb15f4f3f7ad6de70e330e10fd24c31513e41d250c8e0d6885b760a0a5c1f3`）で、契約だけが v4 である。契約節は Harness が生成する節なので、目的文の digest は変わらない（ADR 0019）。
+- v16-wide の行を書き換えずに別の id にするのは、台帳の `configuration.promptVariant` で契約 v5 の v16-wide の Trial と分け、比較の分母に混ぜないためである。v16-wide は `archived`・契約 v5 のまま残す。
+- `wide` の `current` は v14-wide のまま変えない。ADR 0038 追記 15 の 20 Codex Trial（契約 v4 の v14-wide）を先に満たし、その後に runner の `promptId` を v18-wide に替えて、同じ選定帯・同じ子の上限 8・同じ契約 v4 で 20 Codex Trial を回す。`campaign.json` と `examples/campaign-wide-20.json` は変えない。
+- 比較候補の v15-wide は `candidate` のまま変えない（`sinks-v14` を使う）。`deep` の v11 も変えない。
+- 測った数字: 上の 12 Trial の内訳（Finding 12 件のうちベンダー配信の前提が 9 件、`wbh-screen` で提出不可 11 件）。v18-wide の数字は #639 に書く。比べるのは、Trial あたりの scope 内 Finding、Finding が 1 件以上出た Trial の割合、Finding のうちベンダーだけが書く内容を前提にする割合、Trial あたりの Lead、Root の分と読んだ file 数。
+- 消し方: v18-wide の行と `wp2shell-bounty-v18-wide.md` を消す（Trial が走った後なら `archived` にして残す）。採る版が決まったら、採る版を `current`、もう一方を `archived` にし、`candidate` の行を残さない（追記 8）。
