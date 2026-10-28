@@ -1,8 +1,8 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { canonicalDigest } from "../../src/infrastructure/canonical-json.js";
 import { wordPressLabCommandRule } from "../../src/profiles/wordpress/discovery/lab-commands.js";
 import { CodexOneShotRuntime } from "../../src/discovery/codex-one-shot-runtime.js";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -27,6 +27,10 @@ import {
   type PlannedTrial,
 } from "../../src/discovery/index.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
+import {
+  readDiscoveryOwners,
+  recordDiscoveryOwner,
+} from "../../src/infrastructure/lab-owner-record.js";
 import { Ledger, type LedgerEventV1 } from "../../src/ledger/index.js";
 import { recordWordPressReport } from "../../src/profiles/wordpress/discovery/candidate-admission.js";
 
@@ -124,6 +128,11 @@ async function fixture(options: {
   readonly evidenceMaxBytes?: number;
   /** Makes Private Evidence refuse any `putFiles` that names one of these files. */
   readonly brokenEvidenceFiles?: readonly string[];
+  readonly beforeRun?: (input: {
+    ledger: Ledger;
+    evidence: PrivateArtifactStore;
+    ownerDirectory: string;
+  }) => Promise<void>;
 }) {
   const profile = options.profile ?? defaultProfile;
   const root = await mkdtemp(join(tmpdir(), "wbh-partitioned-"));
@@ -138,6 +147,7 @@ async function fixture(options: {
     databasePath: join(root, "ledger.sqlite"),
     artifactStore: evidence,
   });
+  const ownerDirectory = join(root, "one-shot-owners");
   const broken = options.brokenEvidenceFiles ?? [];
   const trialEvidence =
     broken.length === 0
@@ -301,6 +311,7 @@ async function fixture(options: {
     },
     partitioned: plan,
   };
+  await options.beforeRun?.({ ledger, evidence, ownerDirectory });
   const result = await runDiscoveryCampaign({
     campaignId: "campaign-1",
     input: {
@@ -319,6 +330,7 @@ async function fixture(options: {
       execute: () => Promise.reject(new Error("cooperative executor unused")),
     },
     oneShotExecutor: executor,
+    oneShotOwnerDirectory: ownerDirectory,
     attachments,
     evidence: trialEvidence,
     ledger,
@@ -329,7 +341,7 @@ async function fixture(options: {
   const events = ledger
     .readAll({ campaignId: "campaign-1" })
     .map(({ event }) => event);
-  return { result, events, calls, trialId, ledger, evidence };
+  return { result, events, calls, trialId, ledger, evidence, ownerDirectory };
 }
 
 /** Three partitions of one row each, for the pool tests. */
@@ -357,6 +369,208 @@ const summary = (events: readonly LedgerEventV1[]) =>
   );
 
 describe("partitioned Trial executor (ADR 0042)", () => {
+  it.each(["enumerate", "trace"] as const)(
+    "seals a dead %s owner before the replacement Trial starts",
+    async (runKind) => {
+      const oldRunId = runKind === "enumerate" ? "old-trial" : "old-trace";
+      let preservedDigest = "";
+      let seededLedger: Ledger | undefined;
+      let ownerDir = "";
+      const result = await fixture({
+        beforeRun: async ({ ledger, evidence, ownerDirectory }) => {
+          seededLedger = ledger;
+          ownerDir = ownerDirectory;
+          preservedDigest = await evidence.putFiles({
+            "private-note.json": JSON.stringify({ note: "kept outside Git" }),
+          });
+          if (runKind === "trace") {
+            await ledger.append({
+              schemaVersion: 1,
+              campaignId: "campaign-1",
+              snapshotDigest: digest,
+              occurredAt: start,
+              identity: "discovery-start-old-enumerator",
+              type: "discovery-run-started",
+              runId: "old-enumerator",
+              trialId: "old-trial",
+              trialOrdinal: 0,
+              runKind: "enumerate",
+              labAttached: false,
+              history: { mode: "none" },
+              configuration: {
+                promptVariant: "objective-partition-v1",
+                promptDigest: digest,
+                mode: "partitioned",
+                role: { kind: "enumerator", definitionDigest: digest },
+              },
+            });
+            await ledger.append({
+              schemaVersion: 1,
+              campaignId: "campaign-1",
+              snapshotDigest: digest,
+              occurredAt: start,
+              identity: "discovery-finish-old-enumerator",
+              type: "discovery-run-finished",
+              runId: "old-enumerator",
+              outcome: "completed",
+              costUsd: "unavailable",
+              wallTimeMs: 1,
+            });
+            await ledger.append({
+              schemaVersion: 1,
+              campaignId: "campaign-1",
+              snapshotDigest: digest,
+              occurredAt: start,
+              identity: "enumeration-recorded-old-trial",
+              type: "enumeration-recorded",
+              trialId: "old-trial",
+              runId: "old-enumerator",
+              accepted: true,
+              resubmits: 0,
+              inventoryDigest: digest,
+              partitionsDigest: other,
+              scriptRan: true,
+              scriptRowCount: 1,
+              agentRowCount: 0,
+              duplicateRowCount: 0,
+              partitionCount: 1,
+              definitionDigest: digest,
+              toolsDigest: other,
+              rowSource: "agent",
+            });
+          }
+          await ledger.append({
+            schemaVersion: 1,
+            campaignId: "campaign-1",
+            snapshotDigest: digest,
+            occurredAt: start,
+            identity: `discovery-start-${oldRunId}`,
+            type: "discovery-run-started",
+            runId: oldRunId,
+            trialId: "old-trial",
+            trialOrdinal: 0,
+            runKind,
+            labAttached: false,
+            history: { mode: "none" },
+            configuration: {
+              promptVariant: "objective-partition-v1",
+              promptDigest: digest,
+              mode: "partitioned",
+              role: { kind: runKind, definitionDigest: digest },
+            },
+          });
+          const resource = `one-shot-${createHash("sha256")
+            .update(`campaign-1\0${digest}\0${oldRunId}`)
+            .digest("hex")}`;
+          await recordDiscoveryOwner({ resource, directory: ownerDirectory });
+          const marker = join(ownerDirectory, `${resource}.json`);
+          const raw = JSON.parse(await readFile(marker, "utf8")) as {
+            owner: { pid: number };
+          };
+          raw.owner.pid = 999_999_999;
+          await writeFile(marker, JSON.stringify(raw));
+        },
+        script: async (run, _attempt, helpers) => {
+          const currentResource = `one-shot-${createHash("sha256")
+            .update(`campaign-1\0${digest}\0${run.runId}`)
+            .digest("hex")}`;
+          expect(
+            (await readDiscoveryOwners(ownerDir)).live.has(currentResource),
+          ).toBe(true);
+          const finish = seededLedger
+            ?.readAll({
+              campaignId: "campaign-1",
+              type: "discovery-run-finished",
+            })
+            .find(
+              ({ event }) =>
+                event.type === "discovery-run-finished" &&
+                event.runId === oldRunId,
+            )?.event;
+          expect(finish).toMatchObject({
+            outcome: "failed",
+            reason: "interrupted",
+          });
+          return run.output === "files"
+            ? helpers.files(run, {
+                "inventory.json": inventory,
+                "partitions.json": proposal,
+              })
+            : helpers.report(run, "new Trial finding");
+        },
+      });
+      expect(
+        result.events.find(
+          (event) =>
+            event.type === "discovery-run-finished" && event.runId === oldRunId,
+        ),
+      ).toMatchObject({
+        outcome: "failed",
+        reason: "interrupted",
+      });
+      const preserved = await result.evidence.readFile(
+        preservedDigest,
+        "private-note.json",
+        4096,
+      );
+      expect(preserved.status).toBe("resolved");
+      if (preserved.status === "resolved")
+        expect(preserved.bytes.toString("utf8")).toBe(
+          JSON.stringify({ note: "kept outside Git" }),
+        );
+      expect(await readdir(result.ownerDirectory)).toEqual([]);
+      expect(result.calls.length).toBeGreaterThan(0);
+    },
+  );
+  it.each(["live", "missing"] as const)(
+    "does not seal a one-shot start with a %s owner marker",
+    async (marker) => {
+      const oldRunId = "old-live-enumerator";
+      const result = await fixture({
+        beforeRun: async ({ ledger, ownerDirectory }) => {
+          await ledger.append({
+            schemaVersion: 1,
+            campaignId: "campaign-1",
+            snapshotDigest: digest,
+            occurredAt: start,
+            identity: `discovery-start-${oldRunId}`,
+            type: "discovery-run-started",
+            runId: oldRunId,
+            trialId: oldRunId,
+            trialOrdinal: 0,
+            runKind: "enumerate",
+            labAttached: false,
+            history: { mode: "none" },
+            configuration: {
+              promptVariant: "objective-partition-v1",
+              promptDigest: digest,
+              mode: "partitioned",
+              role: { kind: "enumerator", definitionDigest: digest },
+            },
+          });
+          if (marker === "live") {
+            const resource = `one-shot-${createHash("sha256")
+              .update(`campaign-1\0${digest}\0${oldRunId}`)
+              .digest("hex")}`;
+            await recordDiscoveryOwner({ resource, directory: ownerDirectory });
+          }
+        },
+        script: (run, _attempt, helpers) =>
+          run.output === "files"
+            ? helpers.files(run, {
+                "inventory.json": inventory,
+                "partitions.json": proposal,
+              })
+            : helpers.report(run, "live owner remains unsealed"),
+      });
+      expect(
+        result.events.find(
+          (event) =>
+            event.type === "discovery-run-finished" && event.runId === oldRunId,
+        ),
+      ).toBeUndefined();
+    },
+  );
   it.each([
     undefined,
     "wall",

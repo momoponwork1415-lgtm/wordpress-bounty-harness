@@ -22,6 +22,7 @@ import {
 import type { OneShotExecutor } from "./one-shot-run.js";
 import {
   executePartitionedTrial,
+  sealDeadOneShotRuns,
   type PartitionedTrialPlan,
 } from "./partitioned-trial.js";
 import type { ProviderAttachmentStore } from "./provider-research-report.js";
@@ -181,6 +182,8 @@ export async function runDiscoveryCampaign(options: {
   };
   /** Runs the roles of partitioned Trials (ADR 0042); required when any planned Trial is one. */
   readonly oneShotExecutor?: OneShotExecutor;
+  /** Host-only one-shot owner markers; tests may use an isolated directory. */
+  readonly oneShotOwnerDirectory?: string;
   readonly attachments: ProviderAttachmentStore;
   readonly evidence: PrivateArtifactStore;
   readonly ledger: Ledger;
@@ -239,15 +242,6 @@ export async function runDiscoveryCampaign(options: {
   const concurrency = options.concurrency ?? 1;
   if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 4)
     throw new Error("Invalid discovery concurrency");
-  const target = {
-    ledger: options.ledger,
-    campaignId: options.campaignId,
-    snapshotDigest: input.snapshotDigest,
-  };
-  // A concluded target is done; otherwise continue after the runs already spent.
-  const progress = readResumeProgress(target);
-  if (progress.concluded !== undefined)
-    return { runCount: 0, findingsRecorded: 0, stoppedBy: progress.concluded };
   if (
     options.runWallTimeMs !== undefined &&
     (!Number.isSafeInteger(options.runWallTimeMs) ||
@@ -255,6 +249,25 @@ export async function runDiscoveryCampaign(options: {
       options.runWallTimeMs > 240 * 60_000)
   )
     throw new Error("Invalid exploration wall time");
+  const target = {
+    ledger: options.ledger,
+    campaignId: options.campaignId,
+    snapshotDigest: input.snapshotDigest,
+  };
+  if (options.oneShotExecutor !== undefined)
+    await sealDeadOneShotRuns({
+      ledger: options.ledger,
+      campaignId: options.campaignId,
+      snapshotDigest: input.snapshotDigest,
+      clock,
+      ...(options.oneShotOwnerDirectory === undefined
+        ? {}
+        : { ownerDirectory: options.oneShotOwnerDirectory }),
+    });
+  // A concluded target is done; otherwise continue after the runs already spent.
+  const progress = readResumeProgress(target);
+  if (progress.concluded !== undefined)
+    return { runCount: 0, findingsRecorded: 0, stoppedBy: progress.concluded };
   const startedExplorations = new Set(progress.startedExplorations);
   const context: TrialContext = {
     campaignId: options.campaignId,
@@ -269,6 +282,9 @@ export async function runDiscoveryCampaign(options: {
     ...(options.oneShotExecutor === undefined
       ? {}
       : { oneShotExecutor: options.oneShotExecutor }),
+    ...(options.oneShotOwnerDirectory === undefined
+      ? {}
+      : { oneShotOwnerDirectory: options.oneShotOwnerDirectory }),
     attachments: options.attachments,
     evidence: options.evidence,
     ledger: options.ledger,

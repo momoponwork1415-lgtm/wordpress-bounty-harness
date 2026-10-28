@@ -292,8 +292,13 @@ export function readResumeProgress(target: CampaignTarget): ResumeProgress {
   const spentPartitioned = (event: StartedEvent): boolean => {
     if (event.runKind !== "enumerate" || event.trialId !== event.runId)
       return false;
-    const outcome = partitioned.get(event.trialId)?.outcome;
-    return outcome === "completed" || outcome === "incomplete";
+    const result = partitioned.get(event.trialId);
+    // A dead one-shot owner is sealed for the ledger, then the ordinal runs
+    // again because the interrupted role has no proved Trial outcome.
+    return (
+      result?.outcome === "completed" ||
+      (result?.outcome === "incomplete" && result.reason !== "interrupted")
+    );
   };
   for (const { event } of target.ledger.readAll({
     campaignId: target.campaignId,
