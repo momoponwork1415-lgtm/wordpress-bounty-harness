@@ -31,7 +31,7 @@ v16-wide の行を契約 v4 に書き換えると、台帳の `configuration.pro
 | --- | --- |
 | Trial | 12 |
 | Finding | 12（全部 stored-xss、7 グループ） |
-| Finding が 1 件以上出た Trial | 7 / 12 |
+| Finding が 1 件以上出た Trial | 6 / 12（7 はグループの数） |
 | Lead | 27 |
 | Finding のうち、ベンダーだけが書く配信を攻撃者入力とする前提のもの | 9 / 12（wp-carousel-free 2、insert-php 1、login-customizer 4、koko-analytics 2） |
 | `wbh-screen` v2.2 の結果 | 提出不可 11、提出可 1（wp-ulike、Subscriber の表示名が BuddyPress 通知の属性へ） |
