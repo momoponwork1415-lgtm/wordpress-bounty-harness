@@ -1144,6 +1144,99 @@ async function harness(
   };
 }
 
+/** Reproduce a large, digest-addressed automatic batch at the public CLI seam. */
+async function largeReservedSelectionFixture(reportBytes: number) {
+  const fixture = await harness({ candidates: ["item-a"] });
+  const { run, root, ledger, store, configPath, profile } = fixture;
+  const policyPath = join(root, "selection.json");
+  const manual = JSON.parse(await readFile(policyPath, "utf8")) as Record<
+    string,
+    unknown
+  >;
+  delete manual.candidateSlugs;
+  delete manual.pinnedVersions;
+  const policy = {
+    ...manual,
+    promptVariant: "wp2shell-bounty-v11",
+    revisitPolicy: { kind: "version-increased" },
+    wordpressVersion: "6.8",
+    maximumTargets: 3,
+    candidateSource: {
+      kind: "wordpress-org",
+      tags: [],
+      perPage: 20,
+      maxAgeDays: 1,
+    },
+  };
+  await writeFile(policyPath, JSON.stringify(policy));
+  const selection = await run(
+    "select",
+    "--config",
+    policyPath,
+    "--minimum",
+    "1",
+  );
+  expect(selection).toMatchObject({ code: 0, stderr: "" });
+  const selected = ledger()
+    .read({ type: "target-selected" })
+    .map(({ event }) => event)
+    .filter((event) => event.type === "target-selected");
+  expect(selected).toHaveLength(1);
+  const original = selected[0]!;
+  const originalReport = original.artifacts.find(
+    (artifact) => artifact.kind === "selection-report",
+  );
+  if (originalReport === undefined) throw new Error("selection report missing");
+  const file = await store().readFile(
+    originalReport.digest,
+    "selection-report.json",
+    2 * 1024 * 1024,
+  );
+  if (file.status !== "resolved")
+    throw new Error("selection report unavailable");
+  const report = JSON.parse(file.bytes.toString("utf8")) as object;
+  const base = JSON.stringify({ ...report, padding: "" });
+  const padded = JSON.stringify({
+    ...report,
+    padding: "x".repeat(reportBytes - Buffer.byteLength(base)),
+  });
+  expect(Buffer.byteLength(padded)).toBe(reportBytes);
+  const largeDigest = await store().putFiles({
+    "selection-report.json": padded,
+  });
+  const batchId = "selection-large-report";
+  expect(
+    await ledger().append({
+      ...original,
+      identity: "large-reserved-selection",
+      campaignId: batchId,
+      artifacts: original.artifacts.map((artifact) =>
+        artifact.kind === "selection-report"
+          ? { kind: "selection-report" as const, digest: largeDigest }
+          : artifact,
+      ),
+    }),
+  ).toMatchObject({ status: "appended" });
+  (profile as { hostStatus?: unknown }).hostStatus = async () => ({
+    loginExpiresAt: new Date("2027-01-01T00:00:00Z"),
+    programmeObservedAt: new Date(now),
+    freeBytes: 100 * 1024 ** 3,
+    loginMarginMinutes: 60,
+  });
+  const runner = () =>
+    run(
+      "continuous",
+      "run",
+      "--config",
+      configPath,
+      "--selection",
+      policyPath,
+      "--notify",
+      `grep -q ' running campaignId=prod-[0-9]*-1$' || touch '${join(root, "state", "continuous.stop")}'`,
+    );
+  return { ...fixture, batchId, largeDigest, policy, policyPath, runner };
+}
+
 /** A local mirror with one public record for the synthetic plugin, published before its last update. */
 function syntheticMirror(root: string) {
   const databasePath = join(root, "wordfence.sqlite");
@@ -4971,6 +5064,73 @@ describe("harness CLI vertical slice", () => {
       "last error",
     );
   });
+
+  it("binds a 3.25 MB reserved selection report in continuous run (#665)", async () => {
+    const { runner, run, ledger, batchId, largeDigest } =
+      await largeReservedSelectionFixture(3_247_138);
+    const result = await runner();
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    expect(result.stdout).not.toContain("holding-error");
+    expect((await run("continuous", "status")).stdout).not.toContain(
+      "last error",
+    );
+    expect(
+      ledger().read({ type: "selection-batch-bound" })[0]?.event,
+    ).toMatchObject({
+      selectionBatchId: batchId,
+      artifacts: [{ kind: "selection-report", digest: largeDigest }],
+    });
+  });
+
+  it("discards a stale 3.25 MB reserved selection report in continuous run (#665)", async () => {
+    const { runner, run, ledger, batchId, policyPath, policy } =
+      await largeReservedSelectionFixture(3_247_138);
+    await writeFile(
+      policyPath,
+      JSON.stringify({ ...policy, maximumUpdateAgeDays: 364 }),
+    );
+    const result = await runner();
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    expect(result.stdout).toContain(
+      `selection-batch-discarded batch=${batchId}`,
+    );
+    expect(result.stdout).not.toContain("holding-error");
+    expect(
+      ledger().read({ type: "selection-batch-discarded" })[0]?.event,
+    ).toMatchObject({
+      campaignId: batchId,
+      reason: "policy-changed",
+    });
+    expect((await run("continuous", "status")).stdout).not.toContain(
+      "last error",
+    );
+  });
+
+  it.each([
+    ["current", false],
+    ["stale", true],
+  ] as const)(
+    "records a clear error when a %s reserved selection report exceeds 8 MiB (#665)",
+    async (_name, stale) => {
+      const { runner, run, ledger, policyPath, policy } =
+        await largeReservedSelectionFixture(8 * 1024 * 1024 + 1);
+      if (stale)
+        await writeFile(
+          policyPath,
+          JSON.stringify({ ...policy, maximumUpdateAgeDays: 364 }),
+        );
+      const result = await runner();
+      expect(result).toMatchObject({ code: 0, stderr: "" });
+      expect(result.stdout).toContain("holding-error");
+      expect((await run("continuous", "status")).stdout).toContain(
+        "Reserved selection report exceeds 8388608 bytes",
+      );
+      expect(ledger().read({ type: "selection-batch-bound" })).toHaveLength(0);
+      expect(ledger().read({ type: "selection-batch-discarded" })).toHaveLength(
+        0,
+      );
+    },
+  );
 
   it("runs the continuous runner on the host status, stops it, and reports it", async () => {
     const { run, root, profile, configPath, ledger } = await harness();

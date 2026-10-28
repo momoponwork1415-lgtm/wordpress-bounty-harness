@@ -1,8 +1,13 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import {
+  canonicalDigest,
+  canonicalJson,
+} from "../../src/infrastructure/canonical-json.js";
+import { admitFindingGroup } from "../../src/ledger/finding-groups.js";
 import { reviewExportV1Schema } from "../../src/review/index.js";
 import {
   RECORDED_PROMPT_VARIANT,
@@ -11,6 +16,50 @@ import {
 
 /** Admin commands on a recorded ledger; no selection, discovery or Lab runs (#495). */
 describe("review operations on recorded history", () => {
+  it("writes a digest-only legacy group cache once without changing the ledger", async () => {
+    const { run, root, ledger, store, snapshotDigest } =
+      await recordedReviewState();
+    const artifactDigest = await store.putFiles({
+      "finding.json": canonicalJson({
+        sourceTrace: [
+          { file: "includes/old.php", function: "handle", line: 2 },
+        ],
+      }),
+    });
+    await ledger.append({
+      schemaVersion: 1,
+      identity: "legacy-ungrouped",
+      campaignId: "campaign-1",
+      snapshotDigest,
+      occurredAt: "2026-10-28T00:00:00Z",
+      type: "finding-recorded",
+      findingId: "legacy-ungrouped",
+      runId: "recorded-run-1",
+      category: "sqli",
+      artifacts: [{ kind: "finding", digest: artifactDigest }],
+    });
+    const output = join(root, "group-key-cache.json");
+    const before = ledger.readAll().length;
+    const created = await run("review", "group-cache", "--output", output);
+    expect(created.code).toBe(0);
+    const bytes = await readFile(output, "utf8");
+    const parsed = JSON.parse(bytes) as {
+      readonly ruleVersion: string;
+      readonly entries: readonly unknown[];
+    };
+    expect(parsed.ruleVersion).toBe("profile-file-function/v1");
+    expect(parsed.entries).toContainEqual({
+      artifactDigest,
+      keyDigests: [expect.stringMatching(/^sha256:/)],
+    });
+    expect(bytes).not.toContain("includes/old.php");
+    expect((await stat(output)).mode & 0o777).toBe(0o600);
+    expect(ledger.readAll()).toHaveLength(before);
+    const repeated = await run("review", "group-cache", "--output", output);
+    expect(repeated.code).not.toBe(0);
+    expect(await readFile(output, "utf8")).toBe(bytes);
+  });
+
   it("fails a command that reaches selection, discovery or a Lab", async () => {
     const { run, root, executions } = await recordedReviewState();
     const config = ["--config", join(root, "campaign.json")];
@@ -72,6 +121,112 @@ describe("review operations on recorded history", () => {
     expect(listed.stdout.split("lead-a").length).toBe(2);
     const none = await run("review", "leads");
     expect(none.code).not.toBe(0);
+  });
+
+  it("shows every matching Finding group for a Lead without dropping unmatched Leads", async () => {
+    const { run, ledger, store } = await recordedReviewState();
+    const snapshotDigest = `sha256:${"c".repeat(64)}`;
+    for (const [campaignId, findingId, fn] of [
+      ["earlier-campaign", "group-one", "one"],
+      ["campaign-leads", "group-two", "two"],
+    ] as const) {
+      await ledger.append({
+        schemaVersion: 1,
+        identity: findingId,
+        campaignId,
+        snapshotDigest,
+        occurredAt: "2026-10-28T00:00:00Z",
+        type: "finding-recorded",
+        findingId,
+        runId: "run-1",
+        category: "sqli",
+        group: {
+          id: findingId,
+          keys: [canonicalDigest(canonicalJson(["includes/a.php", fn]))],
+        },
+      });
+    }
+    for (const [leadId, functions] of [
+      ["lead-matched", ["one", "two"]],
+      ["lead-unmatched", ["three"]],
+    ] as const) {
+      const digest = await store.putFiles({
+        "lead.json": canonicalJson({
+          summary: leadId,
+          attackerPosition: "unauthenticated",
+          sourceTrace: functions.map((fn) => ({
+            file: "includes/a.php",
+            function: fn,
+            line: 1,
+          })),
+        }),
+      });
+      await ledger.append({
+        schemaVersion: 1,
+        identity: leadId,
+        campaignId: "campaign-leads",
+        snapshotDigest,
+        occurredAt: "2026-10-28T00:00:00Z",
+        type: "lead-recorded",
+        leadId,
+        runId: "run-1",
+        trialId: "trial-1",
+        missingEdge: "consumer",
+        primitive: "partial-execution",
+        storageKind: "option",
+        artifacts: [{ kind: "lead", digest }],
+      });
+    }
+    const listed = await run("review", "leads", "--campaign", "campaign-leads");
+    expect(listed.code).toBe(0);
+    expect(listed.stdout).toContain("lead-matched");
+    expect(listed.stdout).toContain(
+      `groups ${canonicalDigest(["earlier-campaign", "group-one"])},${canonicalDigest(["campaign-leads", "group-two"])}`,
+    );
+    expect(listed.stdout).toContain("lead-unmatched");
+    expect(listed.stdout).toContain("groups none");
+  });
+
+  it("keeps all in-scope Findings in the review queue with cross-campaign representatives first", async () => {
+    const { run, ledger, snapshotDigest } = await recordedReviewState();
+    for (const [campaignId, findingId, key] of [
+      ["first-campaign", "cross-first", "shared"],
+      ["second-campaign", "cross-later", "shared"],
+      ["second-campaign", "cross-other", "different"],
+    ] as const) {
+      const group = admitFindingGroup(ledger, {
+        campaignId,
+        findingId,
+        snapshotDigest,
+        keys: [`includes/cross.php:${key}`],
+      });
+      await ledger.append({
+        schemaVersion: 1,
+        identity: findingId,
+        campaignId,
+        snapshotDigest,
+        occurredAt: "2026-10-28T00:00:00Z",
+        type: "finding-recorded",
+        findingId,
+        runId: "recorded-run-1",
+        category: "sqli",
+        group,
+      });
+    }
+    const listed = await run("review");
+    expect(listed.code).toBe(0);
+    const first = listed.stdout.indexOf("finding cross-first");
+    const other = listed.stdout.indexOf("finding cross-other");
+    const later = listed.stdout.indexOf("finding cross-later");
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(other).toBeGreaterThan(first);
+    expect(later).toBeGreaterThan(other);
+    expect(listed.stdout).toContain(
+      `group ${canonicalDigest(["first-campaign", "cross-first"])}  2 finding(s)`,
+    );
+    const scoped = await run("review", "--campaign", "second-campaign");
+    expect(scoped.stdout).toContain("finding cross-later");
+    expect(scoped.stdout).toContain("finding cross-other");
   });
 
   it("lists parked Findings by one-line property and says when there are none (#185)", async () => {

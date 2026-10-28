@@ -56,6 +56,28 @@ async function fixture() {
 }
 
 describe("funnel display of retired metrics", () => {
+  it("shows the number of unkeyed in-scope Findings", async () => {
+    const ledger = await fixture();
+    await ledger.append({
+      ...common("unkeyed"),
+      type: "finding-recorded",
+      findingId: "unkeyed",
+      runId: "current",
+      category: "sqli",
+    });
+    await ledger.append({
+      ...common("keyed"),
+      type: "finding-recorded",
+      findingId: "keyed",
+      runId: "current",
+      category: "sqli",
+      group: { id: "keyed", keys: [`sha256:${"b".repeat(64)}`] },
+    });
+    expect(formatFunnel(ledger.funnel("campaign-1")).join("\n")).toContain(
+      "unkeyed findings 1",
+    );
+  });
+
   it("keeps current Lab failures visible without empty historical classifications", async () => {
     const ledger = await fixture();
     const output = formatFunnel(ledger.funnel("campaign-1")).join("\n");

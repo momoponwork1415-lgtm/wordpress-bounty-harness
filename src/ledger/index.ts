@@ -1018,6 +1018,8 @@ type AttemptOutcomes = {
 
 export type CampaignFunnel = FunnelCounts & {
   readonly campaignId: string;
+  /** In-scope Findings with no plugin-side group key, after a loaded legacy cache. */
+  readonly unkeyedFindings: number;
   readonly discoveryAttempts: number;
   readonly attemptOutcomes: AttemptOutcomes;
   readonly incompleteDepth: number;
@@ -1170,12 +1172,15 @@ export class Ledger {
   readonly #db: DatabaseSync;
   readonly #artifacts: PrivateArtifactStore;
   readonly #readOnly: boolean;
+  readonly #findingGroupKeyCache: ReadonlyMap<string, readonly string[]>;
 
   constructor(options: {
     readonly databasePath: string;
     readonly artifactStore: PrivateArtifactStore;
     /** Open an existing ledger without initialization or append capability. */
     readonly readOnly?: boolean;
+    /** Digest-only projection of legacy Finding keys from Private Evidence. */
+    readonly findingGroupKeyCache?: ReadonlyMap<string, readonly string[]>;
   }) {
     this.#readOnly = options.readOnly ?? false;
     this.#db = new DatabaseSync(options.databasePath, {
@@ -1186,6 +1191,7 @@ export class Ledger {
     // turns a short transaction into a failed Trial.
     this.#db.exec("PRAGMA busy_timeout = 30000");
     this.#artifacts = options.artifactStore;
+    this.#findingGroupKeyCache = options.findingGroupKeyCache ?? new Map();
     if (this.#readOnly) return;
     this.#db.exec(`
       CREATE TABLE IF NOT EXISTS ledger_events (
@@ -1200,6 +1206,17 @@ export class Ledger {
       CREATE INDEX IF NOT EXISTS ledger_campaign_sequence
         ON ledger_events (campaign_id, sequence);
     `);
+  }
+
+  /** Read a current event's keys or a versioned cache entry for an old event. */
+  findingGroupKeyDigests(
+    event: Extract<LedgerEventV1, { type: "finding-recorded" }>,
+  ): readonly string[] {
+    if (event.group !== undefined) return event.group.keys;
+    const artifact = event.artifacts.find((ref) => ref.kind === "finding");
+    return artifact === undefined
+      ? []
+      : (this.#findingGroupKeyCache.get(artifact.digest) ?? []);
   }
 
   async append(
@@ -2023,6 +2040,7 @@ export class Ledger {
     const inScopeByProgramme: Record<string, number> = Object.create(
       null,
     ) as Record<string, number>;
+    let unkeyedFindings = 0;
     for (const finding of findings.values()) {
       if (finding.derivationKind === "fixed-version-control") continue;
       if (parkedFindings.has(finding.findingId)) continue;
@@ -2097,6 +2115,7 @@ export class Ledger {
     for (const finding of findings.values()) {
       if (finding.derivationKind === "fixed-version-control") continue;
       if (parkedFindings.has(finding.findingId)) continue;
+      if (this.findingGroupKeyDigests(finding).length === 0) unkeyedFindings++;
       const category = (byCategory[finding.category] ??= emptyCounts());
       for (const count of [totals, category, objective(finding.runId)]) {
         count.accepted++;
@@ -2347,6 +2366,7 @@ export class Ledger {
     );
     return {
       campaignId: campaign,
+      unkeyedFindings,
       discoveryAttempts,
       attemptOutcomes,
       incompleteDepth,
