@@ -158,6 +158,42 @@ async function fixture(options: {
 }
 
 describe("HandoffVerifier (#352)", () => {
+  it("hands off the versioned set-file instructions with Harness-owned fixtures (#576)", async () => {
+    const skill = await readFile(SKILL_PATH, "utf8");
+    expect(skill).toContain(
+      "`set-file`（`selector`、`fixture`、省略できる `fileName`）",
+    );
+    for (const rule of [
+      "`image-png` は `.png`",
+      "`image-jpeg` は `.jpg`",
+      "`text-plain` は `.txt`",
+      "中身は route から渡せない",
+    ])
+      expect(skill).toContain(rule);
+    const f = await fixture({});
+    const pending = f.transport.run(f.run);
+    await until(() => f.exists("lab.json"));
+    const lab = JSON.parse(
+      await readFile(join(f.directory, "lab.json"), "utf8"),
+    );
+    await f.place("abort", "handoff-interrupted");
+    const result = await pending;
+    expect(lab.skill).toBe("wbh-verify/v12");
+    expect(result.receipt).toMatchObject({ skill: "wbh-verify/v12" });
+    expect(result.promptDigest).not.toBe(
+      `sha256:${createHash("sha256")
+        .update(
+          await readFile(
+            new URL(
+              "../../../.claude/skills/wbh-verify/versions/v11.md",
+              import.meta.url,
+            ),
+          ),
+        )
+        .digest("hex")}`,
+    );
+  });
+
   it.each([
     "setup-done",
     "observation-ready",

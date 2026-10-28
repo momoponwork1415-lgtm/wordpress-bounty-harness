@@ -10,6 +10,7 @@ AI に「調べて報告」を頼んだときの成果物を、日付付きで�
 
 設計と方針の出典:
 
+- [2026-10-28-wbh-verify-v12.md](2026-10-28-wbh-verify-v12.md): #576 の set-file 案内の出典対照と v12 全文。
 - [2026-10-11-harness-completeness-review.md](2026-10-11-harness-completeness-review.md): 報奨を得る装置としての完成度を、探索・検証・選定の 3 領域で監査した。
 - [2026-10-11-thorough-design-review.md](2026-10-11-thorough-design-review.md): 不変条件が守られているかと、削るべき構造を 4 本の監査で調べた。
 - [2026-10-11-comparison-with-public-harnesses.md](2026-10-11-comparison-with-public-harnesses.md): 公開ハーネスと比べた作り込みの過不足。
