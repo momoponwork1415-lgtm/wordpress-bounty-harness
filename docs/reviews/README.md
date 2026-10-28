@@ -81,11 +81,74 @@ Codex への依頼文:
 - [2026-10-28-codex-brief-codex-one-shot.md](2026-10-28-codex-brief-codex-one-shot.md): Codex への依頼文: 区画分配型を本番で回せるようにする。
 - [2026-10-28-codex-brief-partitioned.md](2026-10-28-codex-brief-partitioned.md): Codex への依頼: 区画分配型の探索（partitioned）を Claude runtime で本番に入れる。
 - [2026-10-28-codex-one-prompt.md](2026-10-28-codex-one-prompt.md): Codex に貼る 1 本のプロンプト（オーケストレーター、2026-10-28）。
-- [2026-10-28-codex-triage-and-verify.md](2026-10-28-codex-triage-and-verify.md): Codex への依頼: 振り分けと検証を列から回す。
+- [2026-10-28-codex-triage-and-verify.md](2026-10-28-codex-triage-and-verify.md): Codex への依頼: 振り分けと検証を列から回す（非機密参照）。
 - [2026-10-28-harness-gap-analysis.md](2026-10-28-harness-gap-analysis.md): いまの Harness に足りないもの。
 - [2026-10-28-problems-and-next-steps.md](2026-10-28-problems-and-next-steps.md): 全体の問題と、これからどうするか。
 - [2026-10-28-target-system.svg](2026-10-28-target-system.svg): 現状とこれからの作業を示す全体図。
 - [2026-10-21-monitor-report.md](2026-10-21-monitor-report.md): 監視報告。
+
+この階の報告と図の追加索引（原題）:
+
+- [2026-10-19-opus-runtime-plan.md](2026-10-19-opus-runtime-plan.md): Claude Opus の探索・検証 runtime を戻す計画
+- [2026-10-19-wbh-verify-v3.md](2026-10-19-wbh-verify-v3.md): wbh-verify v3 の全文と出典対照（2026-10-19）
+- [2026-10-20-design-issues-from-production-results.md](2026-10-20-design-issues-from-production-results.md): 本番の探索結果から読む設計課題（2026-10-20）
+- [2026-10-20-discovery-child-model-assessment.md](2026-10-20-discovery-child-model-assessment.md): 探索の子エージェントに必要なモデル能力（2026-10-20）
+- [2026-10-20-multi-agent-discovery-audit.md](2026-10-20-multi-agent-discovery-audit.md): Multi-Agent 探索アーキテクチャの監査と比較計画（2026-10-20）
+- [2026-10-20-short-lived-discovery-agents.md](2026-10-20-short-lived-discovery-agents.md): 探索の子を短命の独立試行にするか（2026-10-20）
+- [2026-10-20-wbh-verify-v4.md](2026-10-20-wbh-verify-v4.md): wbh-verify v4 の全文と出典対照（2026-10-20）
+- [2026-10-21-monitor-brief.md](2026-10-21-monitor-brief.md): 監視セッションの依頼文（子モデル実験 ＋ 本番 runner、2026-10-21）
+- [2026-10-21-public-harness-alignment.md](2026-10-21-public-harness-alignment.md): 公開ハーネスの共通点を設計に取り込む（2026-10-21）
+- [2026-10-21-selection-to-discovery-check.md](2026-10-21-selection-to-discovery-check.md): 選定から探索までの安定性の確認（2026-10-21）
+- [2026-10-21-wordfence-review-prescreen-skill.md](2026-10-21-wordfence-review-prescreen-skill.md): wbh-review 変更後の全文と日本語訳
+- [2026-10-23-feature-boundaries-implementation.md](2026-10-23-feature-boundaries-implementation.md): 機能の責務整理と F14 の移行条件確認
+- [2026-10-23-remaining-review-design-issues.md](2026-10-23-remaining-review-design-issues.md): リファクタリング後に残るレビュー・保存・CLIの設計課題
+- [2026-10-23-review-storage-refactor.md](2026-10-23-review-storage-refactor.md): レビュー・保存・CLI・静的解析の責任整理
+- [2026-10-23-skill-code-responsibility-audit.md](2026-10-23-skill-code-responsibility-audit.md): 現行コードのスキル移管・削除候補
+- [2026-10-23-verification-status.md](2026-10-23-verification-status.md): 検証部分の現状（2026-10-23）
+- [2026-10-23-wordfence-form-options.md](2026-10-23-wordfence-form-options.md): Wordfence 提出フォームの選択肢（2026-10-23）
+- [2026-10-23-wordfence-mirror-screen-evidence.md](2026-10-23-wordfence-mirror-screen-evidence.md): Wordfence 公開履歴 mirror を段 1 の候補選別に使う範囲（2026-10-23）
+- [2026-10-23-wordpress-normal-configuration-sources.md](2026-10-23-wordpress-normal-configuration-sources.md): WordPress.org で通常構成を確認する方法（2026-10-23）
+- [2026-10-24-light-verification-and-report-flow.md](2026-10-24-light-verification-and-report-flow.md): 軽量な発火観測と Wordfence 報告への経路（2026-10-24 調査）
+- [2026-10-24-precondition-park-false-positive.md](2026-10-24-precondition-park-false-positive.md): 検証前に誤って park された Finding の確認（2026-10-24）
+- [2026-10-24-validation-status-model.md](2026-10-24-validation-status-model.md): 検証ステータスの再設計案（2026-10-24）
+- [2026-10-24-verification-admission-gate.md](2026-10-24-verification-admission-gate.md): 管理者設定の文言で検証を止めていた経路（2026-10-24）
+- [2026-10-24-verification-first-screen.md](2026-10-24-verification-first-screen.md): 検証前の選別を明示除外に絞る（2026-10-24）
+- [2026-10-24-wbh-report-v7-source-map.md](2026-10-24-wbh-report-v7-source-map.md): `wbh-report` v7 全文・日本語訳・出典対照表（2026-10-24）
+- [2026-10-24-wbh-verify-v8-review.md](2026-10-24-wbh-verify-v8-review.md): wbh-verify v8 本文確認（2026-10-24）
+- [2026-10-24-wbh-verify-v9-review.md](2026-10-24-wbh-verify-v9-review.md): wbh-verify v9 本文確認（2026-10-24）
+- [2026-10-24-wordpress-lab-self-request-dns.md](2026-10-24-wordpress-lab-self-request-dns.md): WordPress Lab の自己 HTTP 要求の DNS 失敗
+- [2026-10-25-conversational-submission-session.md](2026-10-25-conversational-submission-session.md): 対話型の連続提出セッション（2026-10-25）
+- [2026-10-25-exploration-architecture-redesign.md](2026-10-25-exploration-architecture-redesign.md): 探索アーキテクチャの再設計と改善計画（2026-10-25）
+- [2026-10-25-wordfence-argus-and-prism.md](2026-10-25-wordfence-argus-and-prism.md): Wordfence Argus と PRISM の公開情報（2026-10-25 時点）
+- [2026-10-25-wordfence-mirror-as-exploration-input.md](2026-10-25-wordfence-mirror-as-exploration-input.md): Wordfence mirror の公開事例を探索の入力にする（2026-10-25）
+- [2026-10-25-wordfence-prism-argus-method-and-cases.md](2026-10-25-wordfence-prism-argus-method-and-cases.md): Wordfence PRISM / Argus の記事と事例から読む探索手法と、本リポジトリの設計をそこへ寄せる差分（2026-10-25）
+- [2026-10-25-wordpress-bug-hunter-methods.md](2026-10-25-wordpress-bug-hunter-methods.md): WordPress プラグインの上位研究者は、どう脆弱性を見つけているか（公開資料の調査）
+- [2026-10-25-wp2shell-bounty-v10-wide.md](2026-10-25-wp2shell-bounty-v10-wide.md): 下限なしの探索 prompt v10-wide（2026-10-25）
+- [2026-10-25-wp2shell-bounty-v11-wide.md](2026-10-25-wp2shell-bounty-v11-wide.md): 種別ごとの専門エージェントで探す探索 prompt v11-wide（2026-10-25）
+- [2026-10-25-wp2shell-bounty-v11.md](2026-10-25-wp2shell-bounty-v11.md): 探索 prompt v11: v10 から子の寿命と数値の文を外し、子の交代の段落を足す（2026-10-25、2026-10-26 改訂）
+- [2026-10-25-wp2shell-bounty-v12-wide.md](2026-10-25-wp2shell-bounty-v12-wide.md): PRISM の記事と公開記録に寄せた探索 prompt v12-wide（2026-10-25）
+- [2026-10-25-wp2shell-bounty-v13-wide.md](2026-10-25-wp2shell-bounty-v13-wide.md): 探索 prompt v13-wide: v12-wide から子の寿命と体数の文を外し、子の交代の段落を足す（2026-10-25、2026-10-26 改訂）
+- [2026-10-26-codex-brief-prompt-v14-wide.md](2026-10-26-codex-brief-prompt-v14-wide.md): Codex brief: wp2shell-bounty-v14-wide (2026-10-26)
+- [2026-10-26-system-audit.md](2026-10-26-system-audit.md): システム全体の監査: 評価指標、探索の深さ、要らない機能、正本とコードの食い違い（2026-10-26）
+- [2026-10-26-system-history-and-metrics.md](2026-10-26-system-history-and-metrics.md): システムの変遷と、世代ごとに測れた数字・測れなかった数字（2026-10-26）
+- [2026-10-26-v14-wide-japanese-by-codex.md](2026-10-26-v14-wide-japanese-by-codex.md): 日本語訳
+- [2026-10-26-verification-flow-options.md](2026-10-26-verification-flow-options.md): 検証から提出までの流れ: 自動実行を基本にし、人間の確認を軽くする（2026-10-26）
+- [2026-10-26-wbh-submit-normal-ui-evidence.md](2026-10-26-wbh-submit-normal-ui-evidence.md): 提出スキルの通常導線と操作証拠（2026-10-26）
+- [2026-10-26-wp2shell-bounty-v14-wide-japanese.md](2026-10-26-wp2shell-bounty-v14-wide-japanese.md): wp2shell-bounty-v14-wide 日本語訳（読むための訳。エージェントには渡さない）
+- [2026-10-26-wp2shell-bounty-v14-wide-source-table.md](2026-10-26-wp2shell-bounty-v14-wide-source-table.md): wp2shell-bounty-v14-wide の出典対照表（2026-10-26）
+- [2026-10-26-wp2shell-bounty-v15-wide.md](2026-10-26-wp2shell-bounty-v15-wide.md): wp2shell-bounty-v15-wide の本文と出典対照表（2026-10-26）
+- [2026-10-26-wp2shell-bounty-v16-wide-japanese.md](2026-10-26-wp2shell-bounty-v16-wide-japanese.md): wp2shell-bounty-v16-wide 日本語訳（読むための訳。エージェントには渡さない）
+- [2026-10-26-wp2shell-bounty-v16-wide.md](2026-10-26-wp2shell-bounty-v16-wide.md): wp2shell-bounty-v16-wide の本文と出典対照表（2026-10-26）
+- [2026-10-27-608-skill-reference-source-table.md](2026-10-27-608-skill-reference-source-table.md): #608 skill と OPERATIONS の古い参照 4 点の出典対照表（2026-10-27）
+- [2026-10-27-decided-structure.svg](2026-10-27-decided-structure.svg): 決めた構造（2026-10-27）
+- [2026-10-27-partitioned-exploration-overview.svg](2026-10-27-partitioned-exploration-overview.svg): 全体像: 外側の Harness と内側の Harness
+- [2026-10-27-partitioned-exploration-target-flow.svg](2026-10-27-partitioned-exploration-target-flow.svg): プラグイン 1 本を調べる流れ（提案）
+- [2026-10-27-wbh-source-check-source-table.md](2026-10-27-wbh-source-check-source-table.md): wbh-source-check v1 の出典対照表（2026-10-27）
+- [2026-10-27-wp2shell-bounty-v17-wide-japanese.md](2026-10-27-wp2shell-bounty-v17-wide-japanese.md): wp2shell-bounty-v17-wide 日本語訳（読むための訳。エージェントには渡さない）
+- [2026-10-27-wp2shell-bounty-v17-wide.md](2026-10-27-wp2shell-bounty-v17-wide.md): wp2shell-bounty-v17-wide の本文と出典対照表（2026-10-27）
+- [2026-10-28-architecture-refactor-review.md](2026-10-28-architecture-refactor-review.md): 新設計を基準にした構造レビューと管理一覧テストの整理
+- [2026-10-28-architecture.svg](2026-10-28-architecture.svg): 探索の仕組み（2026-10-28、承認用）— 中身は AI、形はハーネス
+- [2026-10-28-wp2shell-bounty-v18-wide.md](2026-10-28-wp2shell-bounty-v18-wide.md): wp2shell-bounty-v18-wide の本文と出典対照表（2026-10-28）
 
 ## 現状と違う点（2026-10-19 時点）
 
