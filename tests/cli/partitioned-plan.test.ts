@@ -1,5 +1,8 @@
-import { readFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 
 import { describe, expect, it } from "vitest";
 
@@ -14,7 +17,10 @@ import {
   PARTITIONED_TARGET_CEILING_MS,
 } from "../../src/discovery/index.js";
 import { wordPressDiscoveryOutputContractV4Solo } from "../../src/profiles/wordpress/discovery/output-contract.js";
-import { WORDPRESS_ENUMERATION_TOOLS } from "../../src/profiles/wordpress/discovery/tools.js";
+import {
+  loadWordPressEnumerationTool,
+  WORDPRESS_ENUMERATION_TOOLS,
+} from "../../src/profiles/wordpress/discovery/tools.js";
 import {
   loadWordPressDiscoveryAsset,
   WORDPRESS_TRUST_BOUNDARY,
@@ -133,6 +139,51 @@ const input = {
 } as unknown as Parameters<typeof planWordPressPartitionedDiscovery>[0];
 
 describe("planWordPressPartitionedDiscovery (ADR 0042)", () => {
+  it("runs the selected v2 bytes at the filename named by the unchanged role and keeps an explicit v1 pack intact", async () => {
+    const config = await exampleConfig();
+    const plan = await planWordPressPartitionedDiscovery(
+      input,
+      await context(config),
+    );
+    const files = plan.plannedTrials[0]!.partitioned!.enumerate.run.toolFiles;
+    const v2 = await loadWordPressEnumerationTool("enumerate-sinks-v2");
+    const alias = files.find((file) => file.name === "enumerate-sinks-v1.sh")!;
+    expect(alias.content).toEqual(v2.bytes);
+    const root = await mkdtemp(join(tmpdir(), "wbh-role-tool-"));
+    try {
+      await writeFile(join(root, alias.name), alias.content);
+      await writeFile(
+        join(root, "plugin.php"),
+        "<?php\necho $one;\necho $two;\n",
+      );
+      expect(
+        (await promisify(execFile)("sh", [join(root, alias.name), root]))
+          .stdout,
+      ).toBe("output\tplugin.php\t2\techo $one; (+1)\n");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+    const old = await exampleConfig({
+      discovery: {
+        mode: "partitioned",
+        enumerator: { tools: ["enumerate-sinks-v1"] },
+      },
+    });
+    const oldPlan = await planWordPressPartitionedDiscovery(
+      input,
+      await context(old),
+    );
+    expect(
+      oldPlan.plannedTrials[0]!.partitioned!.enumerate.run.toolFiles,
+    ).toEqual([
+      {
+        name: "enumerate-sinks-v1.sh",
+        content: (await loadWordPressEnumerationTool("enumerate-sinks-v1"))
+          .bytes,
+      },
+    ]);
+  });
+
   it("hands the enumerator its role, the limits and the sources, and the tracer its role, the objective, the contract and both boundaries", async () => {
     const config = await exampleConfig();
     const plan = await planWordPressPartitionedDiscovery(
@@ -187,7 +238,12 @@ describe("planWordPressPartitionedDiscovery (ADR 0042)", () => {
     expect(tracer).not.toContain("## Partition limits");
 
     // Every configured tool is mounted for both roles.
-    const toolFiles = WORDPRESS_ENUMERATION_TOOLS.map((tool) => tool.file);
+    const toolFiles = [
+      ...WORDPRESS_ENUMERATION_TOOLS.filter(
+        (tool) => tool.status === "current",
+      ).map((tool) => tool.file),
+      "enumerate-sinks-v1.sh",
+    ];
     expect(
       partitioned.enumerate.run.toolFiles.map((file) => file.name),
     ).toEqual(toolFiles);
@@ -222,7 +278,7 @@ describe("planWordPressPartitionedDiscovery (ADR 0042)", () => {
     expect(partitioned.targetWallMs).toBe(PARTITIONED_TARGET_CEILING_MS);
     expect(partitioned.maxParallel).toBe(2);
     expect(partitioned.limits).toEqual({
-      maxEntriesPerPartition: 60,
+      maxEntriesPerPartition: 300,
       maxPartitions: 8,
       maxResubmits: 2,
     });

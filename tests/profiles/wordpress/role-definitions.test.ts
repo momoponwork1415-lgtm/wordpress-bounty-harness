@@ -122,6 +122,111 @@ afterEach(async () => {
 });
 
 describe("WordPress enumeration tools", () => {
+  it("collapses output matches by function and file while keeping every other sink row", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wbh-tools-v2-"));
+    directories.push(root);
+    await writeFile(
+      join(root, "plugin.php"),
+      [
+        "<?php",
+        "echo $top;",
+        "function render() {",
+        '  echo "{$value}"; // } function fake() {',
+        "  if ($value) { print $value; }",
+        "  $callback = function () {",
+        "    echo $nested;",
+        "    printf($nested);",
+        "  };",
+        "  echo $last;",
+        "  $wpdb->query($sql);",
+        "  $wpdb->query($other);",
+        "  include $path;",
+        "  include $other;",
+        "  unserialize($data);",
+        "  maybe_unserialize($other);",
+        "  update_option('demo', $value);",
+        "  update_option('demo', $other);",
+        "  wp_mail($to, $subject, $body);",
+        "  wp_mail($other, $subject, $body);",
+        "}",
+        "class First { function render() { echo $first; } }",
+        "class Second { function render() { echo $second; } }",
+        "?> <p><?= $topAgain ?></p>",
+      ].join("\n"),
+    );
+    await writeFile(join(root, "other.php"), "<?php echo $other;");
+    const rows = async (version: number) =>
+      (
+        await run("sh", [
+          new URL(`enumerate-sinks-v${version}.sh`, toolsUrl).pathname,
+          root,
+        ])
+      ).stdout
+        .trim()
+        .split("\n")
+        .map((line) => line.split("\t"));
+    const current = await rows(2);
+    const previous = await rows(1);
+    expect(current.filter(([kind]) => kind === "output").sort()).toEqual(
+      [
+        ["output", "other.php", "1", "<?php echo $other; (+0)"],
+        ["output", "plugin.php", "2", "echo $top; (+1)"],
+        [
+          "output",
+          "plugin.php",
+          "4",
+          'echo "{$value}"; // } function fake() { (+2)',
+        ],
+        ["output", "plugin.php", "7", "echo $nested; (+1)"],
+        [
+          "output",
+          "plugin.php",
+          "22",
+          "class First { function render() { echo $first; } } (+0)",
+        ],
+        [
+          "output",
+          "plugin.php",
+          "23",
+          "class Second { function render() { echo $second; } } (+0)",
+        ],
+      ].sort(),
+    );
+    expect(current.filter(([kind]) => kind !== "output")).toEqual(
+      previous.filter(([kind]) => kind !== "output"),
+    );
+  });
+
+  it("keeps arrow functions separate and resumes the containing scope after their expressions", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wbh-tools-arrow-"));
+    directories.push(root);
+    await writeFile(
+      join(root, "plugin.php"),
+      [
+        "<?php",
+        "echo $before;",
+        "$a = fn($x) => [",
+        "  printf($x),",
+        "  printf($x),",
+        "];",
+        "$b = fn($x) => printf($x);",
+        "echo $after;",
+        "$c = fn($x) => printf($x) ?>",
+        "<?= $last ?>",
+      ].join("\r\n"),
+    );
+    const { stdout } = await run("sh", [
+      new URL("enumerate-sinks-v2.sh", toolsUrl).pathname,
+      root,
+    ]);
+    expect(stdout.trim().split("\n")).toEqual([
+      "output\tplugin.php\t2\techo $before; (+2)",
+      "output\tplugin.php\t4\tprintf($x), (+1)",
+      "output\tplugin.php\t7\t$b = fn($x) => printf($x); (+0)",
+      "output\tplugin.php\t9\t$c = fn($x) => printf($x) ?> (+0)",
+    ]);
+  });
+
   it("pins every tool file to its digest and digests a tool set by its sorted ids", async () => {
     for (const row of WORDPRESS_ENUMERATION_TOOLS) {
       const tool = await loadWordPressEnumerationTool(row.id);
@@ -143,11 +248,14 @@ describe("WordPress enumeration tools", () => {
     expect(WORDPRESS_ENUMERATION_TOOL_IDS).toEqual([
       "enumerate-hooks-v1",
       "enumerate-sinks-v1",
+      "enumerate-sinks-v2",
       "core-fixed-list-v1",
     ]);
-    expect(WORDPRESS_CURRENT_ENUMERATION_TOOL_IDS).toEqual(
-      WORDPRESS_ENUMERATION_TOOL_IDS,
-    );
+    expect(WORDPRESS_CURRENT_ENUMERATION_TOOL_IDS).toEqual([
+      "enumerate-hooks-v1",
+      "enumerate-sinks-v2",
+      "core-fixed-list-v1",
+    ]);
     expect(
       wordPressEnumerationToolsDigest([
         "enumerate-sinks-v1",

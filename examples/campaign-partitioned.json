@@ -10,13 +10,13 @@
       "wallMinutes": 20,
       "tools": [
         "enumerate-hooks-v1",
-        "enumerate-sinks-v1",
+        "enumerate-sinks-v2",
         "core-fixed-list-v1"
       ],
       "rowSource": "agent"
     },
     "partition": {
-      "maxEntriesPerPartition": 60,
+      "maxEntriesPerPartition": 300,
       "maxPartitions": 8,
       "maxResubmits": 2
     },

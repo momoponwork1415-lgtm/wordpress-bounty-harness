@@ -109,6 +109,14 @@ const enumeratorSchema = z.strictObject({
   /** The tool files mounted read-only at /workspace/tools; the enumerator runs them itself. */
   tools: z
     .array(z.enum(WORDPRESS_ENUMERATION_TOOL_IDS))
+    .refine(
+      (ids) =>
+        !(
+          ids.includes("enumerate-sinks-v1") &&
+          ids.includes("enumerate-sinks-v2")
+        ),
+      "Enumeration sink versions have a conflicting tool filename",
+    )
     .default([...WORDPRESS_CURRENT_ENUMERATION_TOOL_IDS]),
   /**
    * `agent`: the enumerator lists the rows. `script-only` is the measurement
@@ -118,7 +126,7 @@ const enumeratorSchema = z.strictObject({
   rowSource: z.enum(["agent", "script-only"]).default("agent"),
 });
 const partitionSchema = z.strictObject({
-  maxEntriesPerPartition: z.number().int().min(1).max(400).default(60),
+  maxEntriesPerPartition: z.number().int().min(1).max(300).default(300),
   maxPartitions: z.number().int().min(1).max(16).default(8),
   maxResubmits: z.number().int().min(0).max(5).default(2),
 });

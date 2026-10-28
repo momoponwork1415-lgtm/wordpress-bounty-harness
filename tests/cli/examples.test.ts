@@ -243,6 +243,21 @@ describe("partitioned example (ADR 0042 stage 1, shape only)", () => {
       ),
     ) as Record<string, unknown>;
 
+  it("rejects a tool pack whose sink versions would claim the same mounted filename", async () => {
+    const source = await partitioned();
+    const result = wordpressCampaignConfigSchema.safeParse({
+      ...source,
+      discovery: {
+        mode: "partitioned",
+        enumerator: { tools: ["enumerate-sinks-v1", "enumerate-sinks-v2"] },
+      },
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((issue) => issue.path.join("."))).toEqual([
+      "discovery.enumerator.tools",
+    ]);
+  });
+
   it("parses the example with its roles, limits and the partition objective", async () => {
     const config = wordpressCampaignConfigSchema.parse(await partitioned());
     expect(config).toMatchObject({
@@ -258,13 +273,13 @@ describe("partitioned example (ADR 0042 stage 1, shape only)", () => {
           wallMinutes: 20,
           tools: [
             "enumerate-hooks-v1",
-            "enumerate-sinks-v1",
+            "enumerate-sinks-v2",
             "core-fixed-list-v1",
           ],
           rowSource: "agent",
         },
         partition: {
-          maxEntriesPerPartition: 60,
+          maxEntriesPerPartition: 300,
           maxPartitions: 8,
           maxResubmits: 2,
         },
@@ -282,9 +297,18 @@ describe("partitioned example (ADR 0042 stage 1, shape only)", () => {
     });
     expect(bare.promptId).toBe("objective-partition-v1");
     expect(bare.discovery).toMatchObject({
-      enumerator: { runtime: "claude", wallMinutes: 20, rowSource: "agent" },
+      enumerator: {
+        runtime: "claude",
+        wallMinutes: 20,
+        rowSource: "agent",
+        tools: [
+          "enumerate-hooks-v1",
+          "enumerate-sinks-v2",
+          "core-fixed-list-v1",
+        ],
+      },
       partition: {
-        maxEntriesPerPartition: 60,
+        maxEntriesPerPartition: 300,
         maxPartitions: 8,
         maxResubmits: 2,
       },

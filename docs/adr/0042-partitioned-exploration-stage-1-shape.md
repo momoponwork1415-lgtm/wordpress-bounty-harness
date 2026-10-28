@@ -41,8 +41,8 @@ amends: 0029（単一協調 Trial の主経路）と 0039（探索の mode）に
 "discovery": {
   "mode": "partitioned",
   "enumerator": { "runtime": "claude", "model": "…", "effort": "high", "wallMinutes": 20,
-                  "tools": ["enumerate-hooks-v1", "enumerate-sinks-v1"], "rowSource": "agent" },
-  "partition":  { "maxEntriesPerPartition": 60, "maxPartitions": 8, "maxResubmits": 2 },
+                  "tools": ["enumerate-hooks-v1", "enumerate-sinks-v2", "core-fixed-list-v1"], "rowSource": "agent" },
+  "partition":  { "maxEntriesPerPartition": 300, "maxPartitions": 8, "maxResubmits": 2 },
   "tracer":     { "runtime": "claude", "model": "…", "effort": "high", "wallMinutes": 45, "maxParallel": 2 }
 }
 ```
@@ -97,3 +97,16 @@ amends: 0029（単一協調 Trial の主経路）と 0039（探索の mode）に
 所有者決定（2026-10-28）。機械は 64 GB で、Ubuntu への割り当てを 56 GB に上げられる。追跡役は区画ごとに 1 体なので、区画の上限 8 と同じ 8 まで並べられるように `tracer.maxParallel` の schema の上限を 4 から 8 にする。既定値 2 は変えない。memory の検査（1 対象あたり、対象をまたいで）はそのまま効くので、予算 `memoryBudgetMiB` を上げなければ並列は増えない。本番の最初の構成は、追跡役 8 並列（4,608 MiB × 8 = 36,864 MiB）と Codex の v14-wide 1 本とする。
 
 消し方: `max(8)` を `max(4)` に戻す。
+
+
+## 追記 4（2026-10-28）: output を関数ごとに畳み、区画の既定値を実測に合わせる
+
+所有者決定（[#647 の受入条件](https://github.com/momoponwork1415-lgtm/wordpress-bounty-harness/issues/647#issuecomment-6463370661)）。`enumerate-sinks-v2` は同じ file の同じ関数（匿名関数・arrow function を含む）またはトップレベルの `output` を 1 行に畳み、最初の一致と追加件数 `(+N)` を残す。他の kind は v1 と同じ行を出す。v1 の file と digest は過去の照合用に残し、既定の道具だけ v2 にする。
+
+[公式 stable 12 対象の静的計測](../reviews/2026-10-28-enumeration-v2-measurement.md)では hooks + sinks が 60〜3,573 行になり、1 区画 300 行、8 区画の既定値（計 2,400 行）なら全行を保持して 11/12 対象が収まる。the-events-calendar の 3,573 行だけが超える。これは行数上の容量の確認で、AI の区画案の受入率ではない。区画の追加行も含めて上限を超えれば従来どおり差し戻し、尽きれば `incomplete(schema / enumeration-rejected)` とする。inventory の 4,000 行上限は変えない。
+
+公開設定の 1 区画の上限も 300 行にする。区画数の既定 8（設定上限 16）、差し戻し 2 回、列挙 20 分、追跡 45 分、並列 2、メモリ 10,752 MiB は変えない。最悪時間は `20 × 3 + ceil(8 / 2) × 45 = 240` 分、追跡役は `4,608 × 2 = 9,216` MiB で、時間とメモリの既存検査を緩めない。
+
+役の Markdown は変更しない。役が名指しする旧 filename `enumerate-sinks-v1.sh` は、v2 を選んだ pack の中だけ、v2 と同じ bytes の互換名として mount する。記録する選択 ID と digest は v2 であり、保存した v1 と、v1 を明示した pack の bytes は変えない。v1/v2 の同時指定は filename の衝突として拒否する。
+
+消し方: v2 の file と登録、互換 mount を消し、既定の道具を v1、1 区画の既定値を 60（設定上限 400）へ戻す。
