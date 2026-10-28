@@ -304,6 +304,17 @@ export const reviewExportV1Schema = z.strictObject({
         recordedAt: z.iso.datetime({ offset: true }),
       })
       .nullable(),
+    /** Recorded outside Harness, with no candidate, draft or approval inferred. */
+    externalSubmissions: z
+      .array(
+        z.strictObject({
+          destination: id,
+          submittedOn: z.iso.date(),
+          recordedBy: id,
+          recordedAt: z.iso.datetime({ offset: true }),
+        }),
+      )
+      .default([]),
     latestDraft: z
       .strictObject({
         digest,
@@ -931,6 +942,21 @@ export async function exportReviewBundle(options: {
               basis: reverification.basis?.kind ?? null,
               recordedAt: reverification.occurredAt,
             },
+      externalSubmissions: ofFinding("submission-recorded-externally", [
+        findingId,
+      ]).flatMap((event) =>
+        event.type === "submission-recorded-externally" &&
+        event.snapshotDigest === finding.snapshotDigest
+          ? [
+              {
+                destination: event.destination,
+                submittedOn: event.submittedOn,
+                recordedBy: event.recordedBy,
+                recordedAt: event.occurredAt,
+              },
+            ]
+          : [],
+      ),
       latestDraft:
         draft?.type !== "draft-saved" || draftRecord === null
           ? null

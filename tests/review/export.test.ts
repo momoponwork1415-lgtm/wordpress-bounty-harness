@@ -449,6 +449,7 @@ describe("review export", () => {
       },
     });
     expect(bundle.review).toEqual({
+      externalSubmissions: [],
       decisions: [
         {
           decision: "defer",
@@ -554,6 +555,7 @@ describe("review export", () => {
     expect(bundle.observations).toBeNull();
     expect(bundle.labStateDiff).toEqual({ status: "unavailable" });
     expect(bundle.review).toEqual({
+      externalSubmissions: [],
       decisions: [],
       scopeAssessments: [],
       decision: null,

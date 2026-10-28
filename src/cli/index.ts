@@ -484,7 +484,7 @@ function choice<const Choices extends readonly string[]>(
 }
 
 function stages(counts: FunnelCounts): string {
-  return `最終JSON到達 ${counts.reached} → 受理 ${counts.accepted} / 保留 ${counts.held} / parked ${counts.parked} → raw ${counts.raw} → verifier通過 ${counts.verified} → confirmed ${counts.confirmed} / reproduced ${counts.reproduced} / contradicted ${counts.contradicted} / incomplete ${counts.incomplete} → reviewed ${counts.reviewed} → in-scope ${counts.inScope} → submitted ${counts.submitted} → outcome ${counts.outcome}`;
+  return `最終JSON到達 ${counts.reached} → 受理 ${counts.accepted} / 保留 ${counts.held} / parked ${counts.parked} → raw ${counts.raw} → verifier通過 ${counts.verified} → confirmed ${counts.confirmed} / reproduced ${counts.reproduced} / contradicted ${counts.contradicted} / incomplete ${counts.incomplete} → reviewed ${counts.reviewed} → in-scope ${counts.inScope} → submitted ${counts.submitted}${counts.submittedExternally > 0 ? ` (external ${counts.submittedExternally})` : ""} → outcome ${counts.outcome}`;
 }
 
 export function formatStopRow(row: StopRow): string {
@@ -1877,12 +1877,49 @@ const COMMANDS: readonly Command[] = [
   }),
   command({
     name: "review submitted",
-    required: ["candidate", "draft", "to"],
+    required: ["to"],
     usage: [
       "review submitted --candidate <id> --draft <digest> --to <destination>",
+      "review submitted --external --campaign <id> --finding <id> --to <destination> --on <date> --by <who>",
     ],
-    options: { candidate: STR, draft: STR, to: STR },
+    options: {
+      candidate: STR,
+      draft: STR,
+      to: STR,
+      external: BOOL,
+      campaign: STR,
+      finding: STR,
+      on: STR,
+      by: STR,
+    },
+    validate: (values) => {
+      if (values.external) {
+        for (const name of ["campaign", "finding", "on", "by"] as const)
+          required(values[name], name);
+        z.iso.date().parse(values.on);
+        if (values.candidate !== undefined || values.draft !== undefined)
+          throw new UsageError(
+            "--external cannot be combined with --candidate or --draft",
+          );
+      } else {
+        exactDraft(values);
+        for (const name of ["campaign", "finding", "on", "by"] as const)
+          if (values[name] !== undefined)
+            throw new UsageError(`--${name} requires --external`);
+      }
+    },
     handler: async ({ values, state, environment, io }) => {
+      if (values.external) {
+        await environment.profile.review(state).recordExternalSubmission({
+          campaignId: required(values.campaign, "campaign"),
+          findingId: required(values.finding, "finding"),
+          destination: required(values.to, "to"),
+          submittedOn: required(values.on, "on"),
+          recordedBy: required(values.by, "by"),
+        });
+        io.stdout("external submission recorded; Harness sends nothing");
+        return 0;
+      }
       await environment.profile
         .review(state)
         .recordSubmission(exactDraft(values));
