@@ -312,24 +312,36 @@ export class ClaudeOneShotRuntime implements OneShotExecutor {
                           reason: "evidence",
                           detail: "transcript-capture-failed",
                         }
-                      : grant.cleanup.status !== "completed"
+                      : result.researchFailure !== undefined ||
+                          result.research === undefined
                         ? {
-                            reason: "provider",
-                            detail: "broker-cleanup-failed",
+                            reason: "evidence",
+                            detail: "research-capture-failed",
                           }
-                        : run.output === "report"
-                          ? attachment === undefined
-                            ? { reason: "schema", detail: "report-unreadable" }
-                            : undefined
-                          : result.outputFailure !== undefined ||
-                              result.outputFiles === undefined
-                            ? {
-                                reason: "evidence",
-                                detail: "output-capture-failed",
-                              }
-                            : undefined));
+                        : grant.cleanup.status !== "completed"
+                          ? {
+                              reason: "provider",
+                              detail: "broker-cleanup-failed",
+                            }
+                          : run.output === "report"
+                            ? attachment === undefined
+                              ? {
+                                  reason: "schema",
+                                  detail: "report-unreadable",
+                                }
+                              : undefined
+                            : result.outputFailure !== undefined ||
+                                result.outputFiles === undefined
+                              ? {
+                                  reason: "evidence",
+                                  detail: "output-capture-failed",
+                                }
+                              : undefined));
     return {
       ...(attachment === undefined ? {} : { attachment }),
+      ...(result.research === undefined
+        ? {}
+        : { researchArchive: result.research.archive }),
       ...(run.output === "files" && result.outputFiles !== undefined
         ? { outputFiles: result.outputFiles }
         : {}),

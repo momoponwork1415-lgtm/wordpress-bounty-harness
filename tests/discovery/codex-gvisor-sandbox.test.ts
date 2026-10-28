@@ -164,6 +164,10 @@ describe("gVisor Codex sandbox", () => {
             if (args.includes("--network=internal-run")) {
               expect(timeout).toBe(1234);
               expect(args).toContain("--memory=4096m");
+              expect(args).toContain("--runtime=runsc");
+              expect(
+                args.find((arg) => arg.includes("dst=/workspace/main")),
+              ).toMatch(/,readonly$/);
               const mounted = (path: string, readonly: boolean) => {
                 const mount = args.find((arg) => arg.includes(`dst=${path}`))!;
                 expect(mount.endsWith(",readonly")).toBe(readonly);
@@ -185,6 +189,8 @@ describe("gVisor Codex sandbox", () => {
                 0o500,
               );
               const output = mounted("/workspace/output", false);
+              const research = mounted("/workspace/research", false);
+              await writeFile(join(research, "note.md"), "isolated note");
               await writeFile(join(output, "inventory.json"), "[]");
               await writeFile(join(output, "ignored.txt"), "ignored");
               if (link)
@@ -231,13 +237,26 @@ describe("gVisor Codex sandbox", () => {
             mode: "ro",
             expectedTree,
           },
+          researchMount: { path: "/workspace/research", mode: "rw" },
         });
         if (link) expect(result.outputFailure).toBe("capture-failed");
         else
           expect(result.outputFiles).toEqual([
             { name: "inventory.json", content: "[]" },
           ]);
-        expect(mounts).toHaveLength(3);
+        expect(
+          JSON.parse(result.research?.archive.toString() ?? "null"),
+        ).toMatchObject({
+          kind: "research-directory-archive",
+          entries: [
+            {
+              path: "note.md",
+              type: "file",
+              contentBase64: "aXNvbGF0ZWQgbm90ZQ==",
+            },
+          ],
+        });
+        expect(mounts).toHaveLength(4);
         for (const directory of mounts)
           await expect(stat(directory)).rejects.toThrow();
       } finally {

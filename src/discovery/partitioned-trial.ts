@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { dirname, join } from "node:path";
+
 import { z } from "zod";
 
 import {
@@ -5,6 +8,13 @@ import {
   canonicalJson,
 } from "../infrastructure/canonical-json.js";
 import { bytesDigest } from "../infrastructure/content-digest.js";
+import {
+  DISCOVERY_OWNER_DIRECTORY,
+  forgetDiscoveryOwners,
+  readDiscoveryOwners,
+  recordDiscoveryOwner,
+} from "../infrastructure/lab-owner-record.js";
+import type { Ledger } from "../ledger/index.js";
 import type { PlannedDiscoveryRun, PlannedTrial } from "./campaign.js";
 import { countsAsTrial } from "./counts-as-trial.js";
 import {
@@ -216,6 +226,10 @@ type RoleOutcome = {
   readonly receipt?: NativeRunReceipt;
   readonly receiptDigest?: string;
   readonly readPathsDigest?: string;
+  /** Complete JSON output from a file-producing role, sealed before its finish. */
+  readonly outputDigest?: string;
+  /** Private archive of the role's Trial-local notes. */
+  readonly researchArtifactDigest?: string;
   /** The message of a Harness-side throw after the run, in Private Evidence. */
   readonly errorDigest?: string;
   readonly result?: OneShotResult;
@@ -224,6 +238,89 @@ type RoleOutcome = {
 
 /** The finish artifact that carries a post-run throw's message. */
 const ROLE_RUN_ERROR_ARTIFACT = "role-run-error";
+/** The sandbox collects at most 8 MiB of notes; the JSON archive is bounded too. */
+const MAX_RESEARCH_ARCHIVE_BYTES = 12 * 1024 * 1024;
+
+/** Run owners are separate from Docker resource owners, which broad cleanup removes. */
+const ONE_SHOT_OWNER_DIRECTORY = join(
+  dirname(DISCOVERY_OWNER_DIRECTORY),
+  "one-shot-owners",
+);
+
+function oneShotOwnerName(
+  campaignId: string,
+  snapshotDigest: string,
+  runId: string,
+): string {
+  return `one-shot-${createHash("sha256")
+    .update(`${campaignId}\0${snapshotDigest}\0${runId}`)
+    .digest("hex")}`;
+}
+
+/** Seal only one-shot starts with positive proof that their owner process died. */
+export async function sealDeadOneShotRuns(input: {
+  readonly ledger: Ledger;
+  readonly campaignId: string;
+  readonly snapshotDigest: string;
+  readonly clock: () => Date;
+  readonly ownerDirectory?: string;
+}): Promise<void> {
+  const directory = input.ownerDirectory ?? ONE_SHOT_OWNER_DIRECTORY;
+  const { dead } = await readDiscoveryOwners(directory);
+  if (dead.size === 0) return;
+  const finished = new Set(
+    input.ledger
+      .readAll({ campaignId: input.campaignId, type: "discovery-run-finished" })
+      .flatMap(({ event }) =>
+        event.type === "discovery-run-finished" &&
+        event.snapshotDigest === input.snapshotDigest
+          ? [event.runId]
+          : [],
+      ),
+  );
+  for (const { event } of input.ledger.readAll({
+    campaignId: input.campaignId,
+    type: "discovery-run-started",
+  })) {
+    if (
+      event.type !== "discovery-run-started" ||
+      event.snapshotDigest !== input.snapshotDigest ||
+      (event.runKind !== "enumerate" && event.runKind !== "trace")
+    )
+      continue;
+    const resource = oneShotOwnerName(
+      input.campaignId,
+      input.snapshotDigest,
+      event.runId,
+    );
+    if (!dead.has(resource)) continue;
+    if (finished.has(event.runId)) {
+      await forgetDiscoveryOwners([resource], directory);
+      continue;
+    }
+    const sealed = await input.ledger.append({
+      schemaVersion: 1,
+      campaignId: input.campaignId,
+      snapshotDigest: input.snapshotDigest,
+      occurredAt: input.clock().toISOString(),
+      identity: `discovery-finish-${event.runId}`,
+      type: "discovery-run-finished",
+      runId: event.runId,
+      outcome: "failed",
+      reason: "interrupted",
+      reasonDetail: "owner-dead",
+      costUsd: "unavailable",
+      // No one-shot receipt survived to establish a lower bound on active wall.
+      wallTimeMs: 0,
+    });
+    if (sealed.status === "conflict")
+      throw new Error("Interrupted one-shot finish identity conflict");
+    finished.add(event.runId);
+    await forgetDiscoveryOwners([resource], directory);
+  }
+}
+
+class ResearchArchiveSizeError extends Error {}
 
 type Draft<T> = { -readonly [K in keyof T]: T[K] };
 
@@ -250,45 +347,58 @@ async function runRole(
     run.profile.digest !== input.modelProfileDigest
   )
     throw new Error("Planned role run differs from the CampaignInput");
-  const startedAt = clock().toISOString();
-  const started = await context.ledger.append({
-    ...base,
-    occurredAt: startedAt,
-    identity: `discovery-start-${run.runId}`,
-    type: "discovery-run-started",
-    runId: run.runId,
-    trialId: trial.trialId,
-    trialOrdinal: trial.trialOrdinal,
-    runKind: role.runKind,
-    labAttached: false,
-    history: input.history,
-    configuration: {
-      ...configuration,
-      promptDigest: configuration.promptDigest ?? input.promptDigest,
-      trustBoundaryVersion: input.trustBoundary.version,
-      sourcePack: {
-        dependency:
-          run.dependencySource === undefined
-            ? ("none" as const)
-            : ("mounted" as const),
-      },
-      ...(configuration.role === undefined
-        ? {}
-        : {
-            role: {
-              ...configuration.role,
-              ...(role.role.partitionId === undefined
-                ? {}
-                : { partitionId: role.role.partitionId }),
-              ...(role.role.resubmit === undefined
-                ? {}
-                : { resubmit: role.role.resubmit }),
-            },
-          }),
-    },
+  const owner = await recordDiscoveryOwner({
+    resource: oneShotOwnerName(
+      context.campaignId,
+      input.snapshotDigest,
+      run.runId,
+    ),
+    directory: context.oneShotOwnerDirectory ?? ONE_SHOT_OWNER_DIRECTORY,
   });
-  if (started.status === "conflict")
-    throw new Error("Discovery run identity conflict");
+  const startedAt = clock().toISOString();
+  try {
+    const started = await context.ledger.append({
+      ...base,
+      occurredAt: startedAt,
+      identity: `discovery-start-${run.runId}`,
+      type: "discovery-run-started",
+      runId: run.runId,
+      trialId: trial.trialId,
+      trialOrdinal: trial.trialOrdinal,
+      runKind: role.runKind,
+      labAttached: false,
+      history: input.history,
+      configuration: {
+        ...configuration,
+        promptDigest: configuration.promptDigest ?? input.promptDigest,
+        trustBoundaryVersion: input.trustBoundary.version,
+        sourcePack: {
+          dependency:
+            run.dependencySource === undefined
+              ? ("none" as const)
+              : ("mounted" as const),
+        },
+        ...(configuration.role === undefined
+          ? {}
+          : {
+              role: {
+                ...configuration.role,
+                ...(role.role.partitionId === undefined
+                  ? {}
+                  : { partitionId: role.role.partitionId }),
+                ...(role.role.resubmit === undefined
+                  ? {}
+                  : { resubmit: role.role.resubmit }),
+              },
+            }),
+      },
+    });
+    if (started.status === "conflict")
+      throw new Error("Discovery run identity conflict");
+  } catch (error: unknown) {
+    await owner.release().catch(() => undefined);
+    throw error;
+  }
   const synthetic = (
     reason: "wall" | "operator" | "evidence",
     detail?: string,
@@ -349,6 +459,36 @@ async function runRole(
     cancellation.dispose();
   }
   if (result !== undefined) {
+    // Returned files outlive receipt parsing/sealing: either failure must not
+    // discard bytes the transport already handed back (#637).
+    let captureFailure:
+      | { readonly stage: "output" | "research"; readonly error: unknown }
+      | undefined;
+    if (run.output === "files" && result.outputFiles?.length) {
+      try {
+        draft.outputDigest = await context.evidence.putFiles(
+          Object.fromEntries(
+            result.outputFiles.map((file) => [file.name, file.content]),
+          ),
+        );
+      } catch (error: unknown) {
+        captureFailure = { stage: "output", error };
+      }
+    }
+    if (result.researchArchive !== undefined) {
+      try {
+        if (
+          result.researchArchive.byteLength === 0 ||
+          result.researchArchive.byteLength > MAX_RESEARCH_ARCHIVE_BYTES
+        )
+          throw new ResearchArchiveSizeError();
+        draft.researchArtifactDigest = await context.evidence.putFiles({
+          "research.json": result.researchArchive,
+        });
+      } catch (error: unknown) {
+        captureFailure ??= { stage: "research", error };
+      }
+    }
     // The Harness's own bookkeeping after the run: a throw here is recorded
     // as missing evidence, with its message in Private Evidence only.
     let stage = "receipt";
@@ -371,6 +511,10 @@ async function runRole(
       );
       if (readPathsDigest !== undefined)
         draft.readPathsDigest = readPathsDigest;
+      if (captureFailure !== undefined) {
+        stage = captureFailure.stage;
+        throw captureFailure.error;
+      }
       if (
         receipt.runId !== run.runId ||
         receipt.targetSnapshotDigest !== input.snapshotDigest ||
@@ -396,7 +540,13 @@ async function runRole(
       }
     } catch (error: unknown) {
       draft.outcome = "failed";
-      draft.failure = { reason: "evidence", reasonDetail: "post-run-threw" };
+      draft.failure = {
+        reason: "evidence",
+        reasonDetail:
+          error instanceof ResearchArchiveSizeError
+            ? "research-archive-size"
+            : "post-run-threw",
+      };
       // The store may be what failed: the finish is appended either way, with
       // whatever evidence could be written. The transport's receipt keeps its
       // own digest; a synthetic one stands in only when no receipt exists.
@@ -445,6 +595,17 @@ async function runRole(
     ...event,
     artifacts: [
       ...(event.artifacts ?? []),
+      ...(outcome.outputDigest === undefined
+        ? []
+        : [{ kind: "enumeration-output", digest: outcome.outputDigest }]),
+      ...(outcome.researchArtifactDigest === undefined
+        ? []
+        : [
+            {
+              kind: "research-archive",
+              digest: outcome.researchArtifactDigest,
+            },
+          ]),
       ...(outcome.errorDigest === undefined
         ? []
         : [{ kind: ROLE_RUN_ERROR_ARTIFACT, digest: outcome.errorDigest }]),
@@ -452,6 +613,7 @@ async function runRole(
   });
   if (finished.status === "conflict")
     throw new Error("Discovery finish identity conflict");
+  await owner.release().catch(() => undefined);
   return outcome;
 }
 
@@ -711,19 +873,6 @@ async function enumerate(
       ...(validation?.status === "rejected" ? validation.rejections : []),
     ];
     // The rows themselves stay in Private Evidence (invariant 8).
-    const present = Object.fromEntries(
-      files
-        .filter((file) =>
-          Object.values(ENUMERATION_OUTPUT_FILES).some(
-            (name) => name === file.name,
-          ),
-        )
-        .map((file) => [file.name, file.content]),
-    );
-    const outputDigest =
-      Object.keys(present).length === 0
-        ? undefined
-        : await context.evidence.putFiles(present);
     // Counts are observed from the inventory even when no proposal arrived.
     const inventory =
       validation?.inventory ??
@@ -798,9 +947,9 @@ async function enumerate(
       toolsDigest: plan.toolsDigest,
       rowSource: plan.rowSource,
       artifacts:
-        outputDigest === undefined
+        run.outputDigest === undefined
           ? []
-          : [{ kind: "enumeration-output", digest: outputDigest }],
+          : [{ kind: "enumeration-output", digest: run.outputDigest }],
     });
     if (recorded.status === "conflict")
       throw new Error("Enumeration record identity conflict");

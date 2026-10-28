@@ -796,7 +796,6 @@ export class GvisorCodexSandbox implements CodexSandbox {
               command.controlHost !== undefined)) ||
           command.minimumActiveMs !== undefined ||
           command.resume !== undefined ||
-          command.researchMount !== undefined ||
           command.runMarker !== undefined ||
           !command.args.includes("features.multi_agent=false") ||
           !Number.isSafeInteger(command.oneShot.wallMs) ||

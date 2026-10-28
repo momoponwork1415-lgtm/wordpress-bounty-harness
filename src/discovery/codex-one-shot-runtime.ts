@@ -45,6 +45,7 @@ import type { LabCommandRule } from "./read-paths.js";
 import {
   dependencyMountPathsAreDisjoint,
   dependencyMountPathsOf,
+  SANDBOX_RESEARCH_MOUNT_PATH,
   SANDBOX_SOURCE_MOUNT_PATH,
 } from "./sandbox-layout.js";
 
@@ -76,6 +77,9 @@ export class CodexOneShotRuntime implements OneShotExecutor {
         result === undefined ? undefined : providerLimitOf(result.stdout);
       return {
         ...(attachment === undefined ? {} : { attachment }),
+        ...(result?.research === undefined
+          ? {}
+          : { researchArchive: result.research.archive }),
         ...(run.output === "files" && result?.outputFiles !== undefined
           ? { outputFiles: result.outputFiles }
           : {}),
@@ -177,6 +181,14 @@ export class CodexOneShotRuntime implements OneShotExecutor {
                 wallMs: run.wallMs,
                 ...(run.lab === undefined ? {} : { lab: run.lab }),
               },
+              ...(run.lab === undefined
+                ? {
+                    researchMount: {
+                      path: SANDBOX_RESEARCH_MOUNT_PATH,
+                      mode: "rw" as const,
+                    },
+                  }
+                : {}),
               supportFiles: [
                 {
                   path: "/opt/codex-support/report-schema.json",
@@ -300,6 +312,11 @@ export class CodexOneShotRuntime implements OneShotExecutor {
       );
     if (diagnostic === undefined || result.rolloutFailure !== undefined)
       return finish("evidence", "diagnostic-seal-failed");
+    if (
+      run.lab === undefined &&
+      (result.researchFailure !== undefined || result.research === undefined)
+    )
+      return finish("evidence", "research-capture-failed");
     if (granted.receipt.cleanup.status !== "completed")
       return finish("provider", "broker-cleanup-failed");
     if ("reasonDetail" in decoded)

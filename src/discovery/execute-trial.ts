@@ -67,6 +67,8 @@ export type TrialContext = {
   };
   /** The one-shot transport of a partitioned Trial's roles (ADR 0042); absent on cooperative campaigns. */
   readonly oneShotExecutor?: OneShotExecutor;
+  /** Host-only one-shot owner markers; tests may use an isolated directory. */
+  readonly oneShotOwnerDirectory?: string;
   readonly attachments: ProviderAttachmentStore;
   readonly evidence: PrivateArtifactStore;
   readonly ledger: Ledger;

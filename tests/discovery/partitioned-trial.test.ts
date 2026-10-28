@@ -1,8 +1,8 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { canonicalDigest } from "../../src/infrastructure/canonical-json.js";
 import { wordPressLabCommandRule } from "../../src/profiles/wordpress/discovery/lab-commands.js";
 import { CodexOneShotRuntime } from "../../src/discovery/codex-one-shot-runtime.js";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -27,6 +27,10 @@ import {
   type PlannedTrial,
 } from "../../src/discovery/index.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
+import {
+  readDiscoveryOwners,
+  recordDiscoveryOwner,
+} from "../../src/infrastructure/lab-owner-record.js";
 import { Ledger, type LedgerEventV1 } from "../../src/ledger/index.js";
 import { recordWordPressReport } from "../../src/profiles/wordpress/discovery/candidate-admission.js";
 
@@ -124,6 +128,11 @@ async function fixture(options: {
   readonly evidenceMaxBytes?: number;
   /** Makes Private Evidence refuse any `putFiles` that names one of these files. */
   readonly brokenEvidenceFiles?: readonly string[];
+  readonly beforeRun?: (input: {
+    ledger: Ledger;
+    evidence: PrivateArtifactStore;
+    ownerDirectory: string;
+  }) => Promise<void>;
 }) {
   const profile = options.profile ?? defaultProfile;
   const root = await mkdtemp(join(tmpdir(), "wbh-partitioned-"));
@@ -138,6 +147,7 @@ async function fixture(options: {
     databasePath: join(root, "ledger.sqlite"),
     artifactStore: evidence,
   });
+  const ownerDirectory = join(root, "one-shot-owners");
   const broken = options.brokenEvidenceFiles ?? [];
   const trialEvidence =
     broken.length === 0
@@ -301,6 +311,7 @@ async function fixture(options: {
     },
     partitioned: plan,
   };
+  await options.beforeRun?.({ ledger, evidence, ownerDirectory });
   const result = await runDiscoveryCampaign({
     campaignId: "campaign-1",
     input: {
@@ -319,6 +330,7 @@ async function fixture(options: {
       execute: () => Promise.reject(new Error("cooperative executor unused")),
     },
     oneShotExecutor: executor,
+    oneShotOwnerDirectory: ownerDirectory,
     attachments,
     evidence: trialEvidence,
     ledger,
@@ -329,7 +341,7 @@ async function fixture(options: {
   const events = ledger
     .readAll({ campaignId: "campaign-1" })
     .map(({ event }) => event);
-  return { result, events, calls, trialId, ledger, evidence };
+  return { result, events, calls, trialId, ledger, evidence, ownerDirectory };
 }
 
 /** Three partitions of one row each, for the pool tests. */
@@ -357,7 +369,216 @@ const summary = (events: readonly LedgerEventV1[]) =>
   );
 
 describe("partitioned Trial executor (ADR 0042)", () => {
-  it.each([undefined, "wall", "evidence", "schema", "provider"] as const)(
+  it.each(["enumerate", "trace"] as const)(
+    "seals a dead %s owner before the replacement Trial starts",
+    async (runKind) => {
+      const oldRunId = runKind === "enumerate" ? "old-trial" : "old-trace";
+      let preservedDigest = "";
+      let seededLedger: Ledger | undefined;
+      let ownerDir = "";
+      const result = await fixture({
+        beforeRun: async ({ ledger, evidence, ownerDirectory }) => {
+          seededLedger = ledger;
+          ownerDir = ownerDirectory;
+          preservedDigest = await evidence.putFiles({
+            "private-note.json": JSON.stringify({ note: "kept outside Git" }),
+          });
+          if (runKind === "trace") {
+            await ledger.append({
+              schemaVersion: 1,
+              campaignId: "campaign-1",
+              snapshotDigest: digest,
+              occurredAt: start,
+              identity: "discovery-start-old-enumerator",
+              type: "discovery-run-started",
+              runId: "old-enumerator",
+              trialId: "old-trial",
+              trialOrdinal: 0,
+              runKind: "enumerate",
+              labAttached: false,
+              history: { mode: "none" },
+              configuration: {
+                promptVariant: "objective-partition-v1",
+                promptDigest: digest,
+                mode: "partitioned",
+                role: { kind: "enumerator", definitionDigest: digest },
+              },
+            });
+            await ledger.append({
+              schemaVersion: 1,
+              campaignId: "campaign-1",
+              snapshotDigest: digest,
+              occurredAt: start,
+              identity: "discovery-finish-old-enumerator",
+              type: "discovery-run-finished",
+              runId: "old-enumerator",
+              outcome: "completed",
+              costUsd: "unavailable",
+              wallTimeMs: 1,
+            });
+            await ledger.append({
+              schemaVersion: 1,
+              campaignId: "campaign-1",
+              snapshotDigest: digest,
+              occurredAt: start,
+              identity: "enumeration-recorded-old-trial",
+              type: "enumeration-recorded",
+              trialId: "old-trial",
+              runId: "old-enumerator",
+              accepted: true,
+              resubmits: 0,
+              inventoryDigest: digest,
+              partitionsDigest: other,
+              scriptRan: true,
+              scriptRowCount: 1,
+              agentRowCount: 0,
+              duplicateRowCount: 0,
+              partitionCount: 1,
+              definitionDigest: digest,
+              toolsDigest: other,
+              rowSource: "agent",
+            });
+          }
+          await ledger.append({
+            schemaVersion: 1,
+            campaignId: "campaign-1",
+            snapshotDigest: digest,
+            occurredAt: start,
+            identity: `discovery-start-${oldRunId}`,
+            type: "discovery-run-started",
+            runId: oldRunId,
+            trialId: "old-trial",
+            trialOrdinal: 0,
+            runKind,
+            labAttached: false,
+            history: { mode: "none" },
+            configuration: {
+              promptVariant: "objective-partition-v1",
+              promptDigest: digest,
+              mode: "partitioned",
+              role: { kind: runKind, definitionDigest: digest },
+            },
+          });
+          const resource = `one-shot-${createHash("sha256")
+            .update(`campaign-1\0${digest}\0${oldRunId}`)
+            .digest("hex")}`;
+          await recordDiscoveryOwner({ resource, directory: ownerDirectory });
+          const marker = join(ownerDirectory, `${resource}.json`);
+          const raw = JSON.parse(await readFile(marker, "utf8")) as {
+            owner: { pid: number };
+          };
+          raw.owner.pid = 999_999_999;
+          await writeFile(marker, JSON.stringify(raw));
+        },
+        script: async (run, _attempt, helpers) => {
+          const currentResource = `one-shot-${createHash("sha256")
+            .update(`campaign-1\0${digest}\0${run.runId}`)
+            .digest("hex")}`;
+          expect(
+            (await readDiscoveryOwners(ownerDir)).live.has(currentResource),
+          ).toBe(true);
+          const finish = seededLedger
+            ?.readAll({
+              campaignId: "campaign-1",
+              type: "discovery-run-finished",
+            })
+            .find(
+              ({ event }) =>
+                event.type === "discovery-run-finished" &&
+                event.runId === oldRunId,
+            )?.event;
+          expect(finish).toMatchObject({
+            outcome: "failed",
+            reason: "interrupted",
+          });
+          return run.output === "files"
+            ? helpers.files(run, {
+                "inventory.json": inventory,
+                "partitions.json": proposal,
+              })
+            : helpers.report(run, "new Trial finding");
+        },
+      });
+      expect(
+        result.events.find(
+          (event) =>
+            event.type === "discovery-run-finished" && event.runId === oldRunId,
+        ),
+      ).toMatchObject({
+        outcome: "failed",
+        reason: "interrupted",
+      });
+      const preserved = await result.evidence.readFile(
+        preservedDigest,
+        "private-note.json",
+        4096,
+      );
+      expect(preserved.status).toBe("resolved");
+      if (preserved.status === "resolved")
+        expect(preserved.bytes.toString("utf8")).toBe(
+          JSON.stringify({ note: "kept outside Git" }),
+        );
+      expect(await readdir(result.ownerDirectory)).toEqual([]);
+      expect(result.calls.length).toBeGreaterThan(0);
+    },
+  );
+  it.each(["live", "missing"] as const)(
+    "does not seal a one-shot start with a %s owner marker",
+    async (marker) => {
+      const oldRunId = "old-live-enumerator";
+      const result = await fixture({
+        beforeRun: async ({ ledger, ownerDirectory }) => {
+          await ledger.append({
+            schemaVersion: 1,
+            campaignId: "campaign-1",
+            snapshotDigest: digest,
+            occurredAt: start,
+            identity: `discovery-start-${oldRunId}`,
+            type: "discovery-run-started",
+            runId: oldRunId,
+            trialId: oldRunId,
+            trialOrdinal: 0,
+            runKind: "enumerate",
+            labAttached: false,
+            history: { mode: "none" },
+            configuration: {
+              promptVariant: "objective-partition-v1",
+              promptDigest: digest,
+              mode: "partitioned",
+              role: { kind: "enumerator", definitionDigest: digest },
+            },
+          });
+          if (marker === "live") {
+            const resource = `one-shot-${createHash("sha256")
+              .update(`campaign-1\0${digest}\0${oldRunId}`)
+              .digest("hex")}`;
+            await recordDiscoveryOwner({ resource, directory: ownerDirectory });
+          }
+        },
+        script: (run, _attempt, helpers) =>
+          run.output === "files"
+            ? helpers.files(run, {
+                "inventory.json": inventory,
+                "partitions.json": proposal,
+              })
+            : helpers.report(run, "live owner remains unsealed"),
+      });
+      expect(
+        result.events.find(
+          (event) =>
+            event.type === "discovery-run-finished" && event.runId === oldRunId,
+        ),
+      ).toBeUndefined();
+    },
+  );
+  it.each([
+    undefined,
+    "wall",
+    "evidence",
+    "schema",
+    "provider",
+    "research",
+  ] as const)(
     "runs Codex through the existing ledger flow (failure: %s)",
     async (failure) => {
       const codex = defineAgentRuntimeProfile({
@@ -469,6 +690,30 @@ describe("partitioned Trial executor (ADR 0042)", () => {
                   ]
                     .map((event) => JSON.stringify(event))
                     .join("\n"),
+                  ...(failure === "research"
+                    ? { researchFailure: "capture-failed" as const }
+                    : {
+                        research: {
+                          archive: Buffer.from(
+                            JSON.stringify({
+                              kind: "research-directory-archive",
+                              schemaVersion: 1,
+                              truncated: false,
+                              collectedBytes: 1,
+                              entries: [
+                                {
+                                  path: "note.txt",
+                                  type: "file",
+                                  contentBase64: Buffer.from(
+                                    String(commands.length),
+                                  ).toString("base64"),
+                                },
+                              ],
+                            }),
+                          ),
+                          truncated: false,
+                        },
+                      }),
                   outputFiles: tracing
                     ? []
                     : [
@@ -530,9 +775,27 @@ describe("partitioned Trial executor (ADR 0042)", () => {
         if (stored.status !== "resolved") throw new Error(stored.status);
         expect(JSON.parse(stored.bytes.toString("utf8"))).toMatchObject({
           terminal: "incomplete",
-          reason: failure,
+          reason: failure === "research" ? "evidence" : failure,
           runtimeProfileDigest: codex.digest,
         });
+        if (failure === "research") {
+          expect(finished).toMatchObject({
+            outcome: "failed",
+            reason: "evidence",
+            reasonDetail: "research-capture-failed",
+          });
+          const output = finished.artifacts.find(
+            (artifact) => artifact.kind === "enumeration-output",
+          );
+          expect(output).toBeDefined();
+          expect(
+            await result.evidence.readFile(
+              output!.digest,
+              ENUMERATION_OUTPUT_FILES.inventory,
+              4096,
+            ),
+          ).toMatchObject({ status: "resolved" });
+        }
         expect(
           result.events.some((event) => event.type === "partition-assigned"),
         ).toBe(false);
@@ -566,6 +829,35 @@ describe("partitioned Trial executor (ADR 0042)", () => {
         expect(command.args).toContain("features.multi_agent=false");
         expect(command.minimumActiveMs).toBeUndefined();
         expect(command.oneShot?.wallMs).toBe(20 * 60_000);
+        expect(command.researchMount).toEqual({
+          path: "/workspace/research",
+          mode: "rw",
+        });
+        expect(command.sourceMount.mode).toBe("ro");
+      }
+      const finished = result.events.filter(
+        (event) => event.type === "discovery-run-finished",
+      );
+      expect(finished).toHaveLength(4);
+      for (const [index, event] of finished.entries()) {
+        const archive = event.artifacts.find(
+          (artifact) => artifact.kind === "research-archive",
+        );
+        expect(archive).toBeDefined();
+        const stored = await result.evidence.readFile(
+          archive!.digest,
+          "research.json",
+          12 * 1024 * 1024,
+        );
+        if (stored.status !== "resolved") throw new Error(stored.status);
+        expect(JSON.parse(stored.bytes.toString("utf8"))).toMatchObject({
+          entries: [
+            {
+              path: "note.txt",
+              contentBase64: Buffer.from(String(index + 1)).toString("base64"),
+            },
+          ],
+        });
       }
       expect(commands[0]!.args).not.toContain("--output-schema");
       expect(commands[2]!.args).toContain("--output-schema");
@@ -742,6 +1034,224 @@ describe("partitioned Trial executor (ADR 0042)", () => {
         },
       ],
     );
+  });
+
+  it("retains every enumerator send-back's complete JSON output through its finish event", async () => {
+    const firstNotes = '{"round":"first"}';
+    const secondNotes = '{"round":"second"}';
+    const { events, evidence } = await fixture({
+      limits: { maxEntriesPerPartition: 1 },
+      script: (run, _attempt, helpers) =>
+        run.output === "files"
+          ? helpers.files(run, {
+              [ENUMERATION_OUTPUT_FILES.inventory]: inventory,
+              [ENUMERATION_OUTPUT_FILES.partitions]:
+                run.inputFiles.length === 0 ? proposal : threeProposal,
+              "research-notes.json":
+                run.inputFiles.length === 0 ? firstNotes : secondNotes,
+            })
+          : helpers.report(run, `claim of ${run.runId}`),
+    });
+    for (const [runId, partitions, notes] of [
+      ["trial-1", proposal, firstNotes],
+      ["trial-1-r1", threeProposal, secondNotes],
+    ] as const) {
+      const finish = events.find(
+        (event) =>
+          event.type === "discovery-run-finished" && event.runId === runId,
+      );
+      if (finish?.type !== "discovery-run-finished")
+        throw new Error(`Missing finish for ${runId}`);
+      const output = finish.artifacts.find(
+        (artifact) => artifact.kind === "enumeration-output",
+      );
+      expect(output).toBeDefined();
+      for (const [name, content] of [
+        [ENUMERATION_OUTPUT_FILES.inventory, JSON.stringify(inventory)],
+        [ENUMERATION_OUTPUT_FILES.partitions, JSON.stringify(partitions)],
+        ["research-notes.json", notes],
+      ] as const) {
+        const stored = await evidence.readFile(output!.digest, name, 4096);
+        if (stored.status !== "resolved") throw new Error(stored.status);
+        expect(stored.bytes.toString("utf8")).toBe(content);
+      }
+    }
+  });
+
+  it("ends an oversized research archive incomplete after preserving the enumerator's JSON output", async () => {
+    const { result, events, evidence } = await fixture({
+      script: (run, _attempt, helpers) => ({
+        ...helpers.files(run, {
+          [ENUMERATION_OUTPUT_FILES.inventory]: inventory,
+          [ENUMERATION_OUTPUT_FILES.partitions]: proposal,
+        }),
+        researchArchive: new Uint8Array(12 * 1024 * 1024 + 1),
+      }),
+    });
+    const finished = events.find(
+      (event) => event.type === "discovery-run-finished",
+    );
+    expect(finished).toMatchObject({
+      outcome: "failed",
+      reason: "evidence",
+      reasonDetail: "research-archive-size",
+    });
+    if (finished?.type !== "discovery-run-finished")
+      throw new Error("Missing enumerator finish");
+    const output = finished.artifacts.find(
+      (artifact) => artifact.kind === "enumeration-output",
+    );
+    expect(output).toBeDefined();
+    expect(
+      await evidence.readFile(
+        output!.digest,
+        ENUMERATION_OUTPUT_FILES.inventory,
+        4096,
+      ),
+    ).toMatchObject({ status: "resolved" });
+    expect(
+      finished.artifacts.some(
+        (artifact) => artifact.kind === "research-archive",
+      ),
+    ).toBe(false);
+    expect(events.map((event) => event.type)).toEqual([
+      "discovery-run-started",
+      "discovery-run-finished",
+    ]);
+    expect(result).toMatchObject({
+      stoppedBy: "incomplete",
+      failure: { reason: "evidence", reasonDetail: "research-archive-size" },
+    });
+  });
+
+  it("finishes incomplete with the JSON output reference when research storage fails", async () => {
+    const { result, events, evidence } = await fixture({
+      brokenEvidenceFiles: ["research.json"],
+      script: (run, _attempt, helpers) => ({
+        ...helpers.files(run, {
+          [ENUMERATION_OUTPUT_FILES.inventory]: inventory,
+          [ENUMERATION_OUTPUT_FILES.partitions]: proposal,
+        }),
+        researchArchive: Buffer.from("{}"),
+      }),
+    });
+    expect(events.map((event) => event.type)).toEqual([
+      "discovery-run-started",
+      "discovery-run-finished",
+    ]);
+    const finished = events[1];
+    expect(finished).toMatchObject({
+      outcome: "failed",
+      reason: "evidence",
+      reasonDetail: "post-run-threw",
+    });
+    if (finished?.type !== "discovery-run-finished")
+      throw new Error("Missing enumerator finish");
+    const output = finished.artifacts.find(
+      (artifact) => artifact.kind === "enumeration-output",
+    );
+    expect(output).toBeDefined();
+    expect(
+      await evidence.readFile(
+        output!.digest,
+        ENUMERATION_OUTPUT_FILES.inventory,
+        4096,
+      ),
+    ).toMatchObject({ status: "resolved" });
+    expect(
+      finished.artifacts.some(
+        (artifact) => artifact.kind === "research-archive",
+      ),
+    ).toBe(false);
+    expect(result).toMatchObject({
+      stoppedBy: "incomplete",
+      failure: { reason: "evidence", reasonDetail: "post-run-threw" },
+    });
+  });
+
+  it.each(["invalid", "unsealed"] as const)(
+    "preserves returned JSON and research when the receipt is %s",
+    async (failure) => {
+      const { events, evidence } = await fixture({
+        brokenEvidenceFiles: failure === "unsealed" ? ["receipt.json"] : [],
+        script: (run, _attempt, helpers) => {
+          const returned = helpers.files(run, {
+            [ENUMERATION_OUTPUT_FILES.inventory]: inventory,
+            [ENUMERATION_OUTPUT_FILES.partitions]: proposal,
+          });
+          return {
+            ...returned,
+            researchArchive: Buffer.from("research kept outside Git"),
+            ...(failure === "invalid"
+              ? { receipt: { ...returned.receipt, runId: "" } }
+              : {}),
+          };
+        },
+      });
+      const finish = events.find(
+        (event) => event.type === "discovery-run-finished",
+      );
+      expect(finish).toMatchObject({
+        outcome: "failed",
+        reason: "evidence",
+        reasonDetail: "post-run-threw",
+      });
+      if (finish?.type !== "discovery-run-finished")
+        throw new Error("Missing enumerator finish");
+      const output = finish.artifacts.find(
+        (artifact) => artifact.kind === "enumeration-output",
+      );
+      const research = finish.artifacts.find(
+        (artifact) => artifact.kind === "research-archive",
+      );
+      expect(output).toBeDefined();
+      expect(research).toBeDefined();
+      expect(
+        await evidence.readFile(
+          output!.digest,
+          ENUMERATION_OUTPUT_FILES.inventory,
+          4096,
+        ),
+      ).toMatchObject({ status: "resolved" });
+      expect(
+        await evidence.readFile(research!.digest, "research.json", 4096),
+      ).toMatchObject({ status: "resolved" });
+    },
+  );
+
+  it("preserves the research archive when JSON output storage fails", async () => {
+    const { events, evidence } = await fixture({
+      brokenEvidenceFiles: [ENUMERATION_OUTPUT_FILES.inventory],
+      script: (run, _attempt, helpers) => ({
+        ...helpers.files(run, {
+          [ENUMERATION_OUTPUT_FILES.inventory]: inventory,
+          [ENUMERATION_OUTPUT_FILES.partitions]: proposal,
+        }),
+        researchArchive: Buffer.from("research kept outside Git"),
+      }),
+    });
+    const finish = events.find(
+      (event) => event.type === "discovery-run-finished",
+    );
+    expect(finish).toMatchObject({
+      outcome: "failed",
+      reason: "evidence",
+      reasonDetail: "post-run-threw",
+    });
+    if (finish?.type !== "discovery-run-finished")
+      throw new Error("Missing enumerator finish");
+    expect(
+      finish.artifacts.some(
+        (artifact) => artifact.kind === "enumeration-output",
+      ),
+    ).toBe(false);
+    const research = finish.artifacts.find(
+      (artifact) => artifact.kind === "research-archive",
+    );
+    expect(research).toBeDefined();
+    expect(
+      await evidence.readFile(research!.digest, "research.json", 4096),
+    ).toMatchObject({ status: "resolved" });
   });
 
   it("ends the Trial incomplete once the send-backs are exhausted, with the last rejection's reasons", async () => {
@@ -1063,7 +1573,7 @@ describe("partitioned Trial executor (ADR 0042)", () => {
     }
     expect(errorOnly.result).toMatchObject({ stoppedBy: "incomplete" });
     // Neither the receipt nor the error file can be written: the finish
-    // carries the receipt's fields and no artifact; no start is left dangling.
+    // still carries the returned JSON output; no start is left dangling.
     const nothing = await fixture({
       brokenEvidenceFiles: ["receipt.json", "role-run-error.json"],
       script: (run, _attempt, helpers) =>
@@ -1082,7 +1592,7 @@ describe("partitioned Trial executor (ADR 0042)", () => {
       reason: "evidence",
       reasonDetail: "post-run-threw",
       observed: { filesRead: 3 },
-      artifacts: [],
+      artifacts: [{ kind: "enumeration-output" }],
     });
     expect(nothing.result).toMatchObject({
       stoppedBy: "incomplete",
