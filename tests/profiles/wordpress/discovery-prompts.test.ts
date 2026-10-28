@@ -107,15 +107,11 @@ describe("WordPress prompt table", () => {
     // A candidate launches only when a campaign names it (DEVELOPMENT §5, #599).
     expect(
       WORDPRESS_DISCOVERY_PROMPTS.filter((row) => row.status === "candidate"),
-    ).toMatchObject([
-      { id: "wp2shell-bounty-v15-wide", mode: "wide" },
-      { id: "wp2shell-bounty-v18-wide", mode: "wide" },
-    ]);
+    ).toMatchObject([{ id: "wp2shell-bounty-v15-wide", mode: "wide" }]);
     expect(WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS).toEqual([
       "wp2shell-bounty-v11",
       "wp2shell-bounty-v14-wide",
       "wp2shell-bounty-v15-wide",
-      "wp2shell-bounty-v18-wide",
       "objective-partition-v1",
     ]);
     expect(

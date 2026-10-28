@@ -49,6 +49,22 @@ ADR 0038 追記 15 の 20 Codex Trial（契約 v4 の v14-wide）を先に満た
 - Root の分と読んだ file 数。
 - 採用後の最初の 30 Trial で Finding が出た Trial が 0 なら戻す（DEVELOPMENT 第 5 節の段 5）。
 
+## 測った数字（切り替え後、2026-10-28 15:13 JST）
+
+v18-wide / 契約 v4 の 20 Codex Trial（`prod-20261028-4`〜`7`、5 並列、子の上限 8）と、直前の v14-wide / 契約 v4 の 21 Codex Trial（`prod-20261027-14`〜`17`、`prod-20261028-1`〜`3`）。
+
+| 項目 | v14-wide / v4 | v18-wide / v4 |
+| --- | --- | --- |
+| Trial | 21 | 20 |
+| Finding（群） | 16（9） | 4（2） |
+| Finding が 1 件以上出た Trial | 7 / 21 | 2 / 20 |
+| Finding / Trial | 0.76 | 0.20 |
+| Lead / Trial | 3.0 | 4.5 |
+| ベンダーだけが書く内容を前提にする Finding | 13 / 16 | 0 / 4 |
+| ベンダー由来でない Finding | 3 | 2〜4 |
+
+判定: 採らない。v18-wide は `archived` にし、本番は v14-wide / v4 に戻す（ADR 0039 の 2026-10-28 追記 14、#639）。
+
 ## 消し方
 
 v18-wide の行と `wp2shell-bounty-v18-wide.md` を消す。Trial が走った後なら `archived` にして残す。採る版が決まったら、採る版を `current`、もう一方を `archived` にし、`candidate` の行を残さない。

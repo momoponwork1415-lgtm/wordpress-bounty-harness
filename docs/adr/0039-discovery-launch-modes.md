@@ -237,3 +237,28 @@ Lead は v14-wide の水準に戻ったが、Finding は戻らなかった。10-
 - 比較候補の v15-wide は `candidate` のまま変えない（`sinks-v14` を使う）。`deep` の v11 も変えない。
 - 測った数字: 上の 12 Trial の内訳（Finding 12 件のうちベンダー配信の前提が 9 件、`wbh-screen` で提出不可 11 件）。v18-wide の数字は #639 に書く。比べるのは、Trial あたりの scope 内 Finding、Finding が 1 件以上出た Trial の割合、Finding のうちベンダーだけが書く内容を前提にする割合、Trial あたりの Lead、Root の分と読んだ file 数。
 - 消し方: v18-wide の行と `wp2shell-bounty-v18-wide.md` を消す（Trial が走った後なら `archived` にして残す）。採る版が決まったら、採る版を `current`、もう一方を `archived` にし、`candidate` の行を残さない（追記 8）。
+
+## 2026-10-28 追記 14: v18-wide は採らず `archived` にする（#639、数字で決める）
+
+追記 13 の計測が 2026-10-28 15:13 JST に 20 Codex Trial（`prod-20261028-4`〜`7`）に到達した。比較の分母は直前の v14-wide / 契約 v4 の 21 Codex Trial（`prod-20261027-14`〜`17`、`prod-20261028-1`〜`3`）。どちらも gpt-6-sol、maxChildren 8、Lab なし、契約 digest は同じ。
+
+| 指標 | v14-wide / v4 | v18-wide / v4 |
+| --- | --- | --- |
+| Trial | 21 | 20 |
+| Finding（群） | 16（9） | 4（2） |
+| Finding が 1 件以上出た Trial | 7 / 21 | 2 / 20 |
+| Finding / Trial | 0.76 | 0.20 |
+| Lead / Trial | 3.0 | 4.5 |
+| 子 / Trial | 6.0 | 6.8 |
+| Root の分（中央値） | 5 | 8 |
+| Root の filesRead（中央値） | 37 | 34 |
+| ベンダーだけが書く内容を前提にする Finding | 13 / 16 | 0 / 4 |
+| ベンダー由来でない Finding | 3 | 2〜4 |
+
+文 1 はベンダー由来の Finding を出さなくしたが、Finding の総数を約 4 分の 1 にし、Lead を 1.5 倍にした。契約 v5 の下で v16-wide / v17-wide が見せた「Finding の代わりに Lead」の形と同じで、契約を v4 に戻しても起きるので、原因は文の方にある。ベンダー由来でない Finding の数は両者で差が付かない。ベンダー由来の Finding は段 1b の `wbh-source-check` が出口で落とせる（`prod-20261028-3` の 4 件は 4 件とも不成立）。
+
+- `wp2shell-bounty-v18-wide` を `archived` にする。本文、fragment、digest、契約 v4 は変えない（20 Trial の照合用に残す）。`candidate` の行は残さない（追記 8）。
+- `wide` の `current` は v14-wide のまま。比較候補の v15-wide は `candidate` のまま変えない。`deep` の v11 も変えない。
+- 本番 runner の `promptId` / `promptVariant` は v14-wide に戻す（runner の操作は Codex。#639）。ベンダー由来の層は目的文ではなく段 1b で落とす。
+- 測った数字: 上の表。採否の判断は所有者委任の AI が行った（ADR 0032 の 2026-10-18 節）。
+- 消し方: v18-wide の行を `candidate`・`mode: "wide"` に戻し、campaign 設定の `promptId` で名指しする（追記 13 の手順）。

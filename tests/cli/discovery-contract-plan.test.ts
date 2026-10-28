@@ -49,7 +49,7 @@ const MAIN_PLANS: Record<string, Plan> = {
   "wp2shell-bounty-v15-wide": inline("v4"),
   "wp2shell-bounty-v16-wide": inline("v5"),
   "wp2shell-bounty-v17-wide": inline("v5"),
-  // ADR 0039 addendum 13: the v16-wide body as a v4 candidate (Issue #639).
+  // ADR 0039 addendum 13/14: the v16-wide body on v4, archived after its 20 Trials (Issue #639).
   "wp2shell-bounty-v18-wide": inline("v4"),
   // ADR 0042: the tracer objective receives v4; the Root-free rendering is
   // the solo variant of the same version, not a new contract version.
