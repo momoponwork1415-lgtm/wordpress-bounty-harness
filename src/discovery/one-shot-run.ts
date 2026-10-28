@@ -1,3 +1,5 @@
+import { readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { ExpectedSourceTree } from "../infrastructure/canonical-source-tree.js";
 import type { AgentRuntimeProfile } from "./agent-runtime-profile.js";
 import type { NativeRunReceipt } from "./native-run-receipts.js";
@@ -13,6 +15,8 @@ import { SANDBOX_TOOLS_MOUNT_PATH } from "./sandbox-layout.js";
  * answers under the report schema, the final message.
  */
 const ONE_SHOT_FILE_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+/** One agent without children, plus a separately accounted broker. */
+export const ONE_SHOT_SANDBOX_MEMORY_MIB = 4096;
 export const ONE_SHOT_MAX_FILES = 16;
 export const ONE_SHOT_MAX_TOOL_BYTES = 1024 * 1024;
 export const ONE_SHOT_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
@@ -72,7 +76,7 @@ export interface OneShotResult {
   readonly attachment?: ProviderAttachmentRef;
   /** `output: "files"`: what the run left under `/workspace/output`, by name. */
   readonly outputFiles?: readonly OneShotFile[];
-  /** Whether a Bash tool call of the run named a mounted tool file. */
+  /** Whether an observed shell tool call named a mounted tool file. */
   readonly scriptRan: boolean;
 }
 
@@ -105,7 +109,7 @@ export function admittedOneShotFiles(
 type ToolUse = { readonly name?: unknown; readonly input?: unknown };
 
 /**
- * Observed, not claimed: whether any `Bash` tool call in the given events
+ * Observed, not claimed: whether any Claude Bash or Codex command call in the events
  * (runner stdout or a transcript) named a file under the tools mount. The
  * agent's prose is never read for this.
  */
@@ -114,6 +118,16 @@ export function scriptRanIn(
 ): boolean {
   const prefix = `${SANDBOX_TOOLS_MOUNT_PATH}/`;
   for (const event of events) {
+    if (event.type === "item.completed") {
+      const item = event.item as
+        { type?: unknown; command?: unknown } | undefined;
+      if (
+        item?.type === "command_execution" &&
+        typeof item.command === "string" &&
+        item.command.includes(prefix)
+      )
+        return true;
+    }
     if (event.type !== "assistant") continue;
     const message = event.message;
     const content =
@@ -134,4 +148,47 @@ export function scriptRanIn(
     }
   }
   return false;
+}
+
+/**
+ * The JSON files a one-shot run left directly under its output directory,
+ * bounded; a link or an oversize file fails the capture, a subdirectory or a
+ * file of another extension is left behind unread.
+ */
+export async function collectOutputFiles(
+  directory: string,
+): Promise<OneShotFile[]> {
+  const files: OneShotFile[] = [];
+  const entries = await readdir(directory, { withFileTypes: true });
+  for (const entry of entries.sort((left, right) =>
+    left.name.localeCompare(right.name),
+  )) {
+    if (entry.isSymbolicLink()) throw new Error("One-shot output link");
+    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+    const path = join(directory, entry.name);
+    if ((await stat(path)).size > ONE_SHOT_MAX_OUTPUT_BYTES)
+      throw new Error("One-shot output evidence limit exceeded");
+    files.push({ name: entry.name, content: await readFile(path, "utf8") });
+    if (files.length > ONE_SHOT_MAX_FILES)
+      throw new Error("One-shot output count limit exceeded");
+  }
+  return files;
+}
+
+/** Writes a one-shot run's files into fresh directories; tool files are executable. */
+export async function stageOneShotFiles(
+  input: string,
+  tools: string,
+  files: Pick<OneShotRun, "inputFiles" | "toolFiles">,
+): Promise<void> {
+  for (const file of files.inputFiles)
+    await writeFile(join(input, file.name), file.content, {
+      flag: "wx",
+      mode: 0o400,
+    });
+  for (const file of files.toolFiles)
+    await writeFile(join(tools, file.name), file.content, {
+      flag: "wx",
+      mode: 0o500,
+    });
 }

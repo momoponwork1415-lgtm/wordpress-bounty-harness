@@ -243,6 +243,26 @@ describe("partitioned example (ADR 0042 stage 1, shape only)", () => {
       ),
     ) as Record<string, unknown>;
 
+  it("admits Codex roles with the existing Codex model and effort schema", async () => {
+    const source = await partitioned();
+    const role = { runtime: "codex", model: "gpt-6-sol", effort: "ultra" };
+    const config = wordpressCampaignConfigSchema.parse({
+      ...source,
+      discovery: { mode: "partitioned", enumerator: role, tracer: role },
+    });
+    expect(config.discovery.enumerator).toMatchObject(role);
+    expect(config.discovery.tracer).toMatchObject(role);
+    expect(
+      wordpressCampaignConfigSchema.safeParse({
+        ...source,
+        discovery: {
+          mode: "partitioned",
+          enumerator: { ...role, model: "claude-opus-5-5" },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
   it("rejects a tool pack whose sink versions would claim the same mounted filename", async () => {
     const source = await partitioned();
     const result = wordpressCampaignConfigSchema.safeParse({
@@ -338,9 +358,23 @@ describe("partitioned example (ADR 0042 stage 1, shape only)", () => {
     ).toBe(false);
   });
 
-  it("bounds one target to the sandbox ceiling and the parallel tracers to the memory budget", async () => {
+  it.each(["claude", "codex"])("bounds %s roles", async (runtime) => {
     const source = await partitioned();
-    const discovery = source.discovery as Record<string, unknown>;
+    const original = source.discovery as Record<string, unknown>;
+    const discovery = {
+      ...original,
+      enumerator: {
+        ...(original.enumerator as object),
+        runtime,
+        model: runtime === "codex" ? "gpt-6-sol" : "claude-opus-5-5",
+      },
+      tracer: {
+        ...(original.tracer as object),
+        runtime,
+        model: runtime === "codex" ? "gpt-6-sol" : "claude-opus-5-5",
+      },
+    };
+    source.discovery = discovery;
     const paths = (candidate: unknown) =>
       wordpressCampaignConfigSchema
         .safeParse(candidate)
@@ -351,7 +385,7 @@ describe("partitioned example (ADR 0042 stage 1, shape only)", () => {
         ...source,
         discovery: {
           ...discovery,
-          tracer: { wallMinutes: 25, maxParallel: 1 },
+          tracer: { runtime, wallMinutes: 25, maxParallel: 1 },
         },
       }),
     ).toEqual(["discovery.tracer.wallMinutes"]);
@@ -362,7 +396,7 @@ describe("partitioned example (ADR 0042 stage 1, shape only)", () => {
         ...source,
         discovery: {
           ...discovery,
-          tracer: { wallMinutes: 20, maxParallel: 3 },
+          tracer: { runtime, wallMinutes: 20, maxParallel: 3 },
         },
       }),
     ).toEqual([
@@ -394,7 +428,7 @@ describe("partitioned example (ADR 0042 stage 1, shape only)", () => {
         ...source,
         discovery: {
           ...discovery,
-          tracer: { wallMinutes: 20, maxParallel: 3 },
+          tracer: { runtime, wallMinutes: 20, maxParallel: 3 },
         },
         resources: {
           ...(source.resources as object),
@@ -405,9 +439,9 @@ describe("partitioned example (ADR 0042 stage 1, shape only)", () => {
     expect(
       paths({
         ...source,
-        discovery: { ...discovery, enumerator: { runtime: "codex" } },
+        discovery: { ...discovery, enumerator: { runtime: "unknown" } },
       }),
-    ).toEqual(["discovery.enumerator.runtime"]);
+    ).toEqual(["discovery.enumerator"]);
   });
 
   it("is read by a session now that the role runtime exists (ADR 0042, PR 2)", async () => {

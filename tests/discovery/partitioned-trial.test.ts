@@ -1,3 +1,7 @@
+import { randomBytes } from "node:crypto";
+import { canonicalDigest } from "../../src/infrastructure/canonical-json.js";
+import { wordPressLabCommandRule } from "../../src/profiles/wordpress/discovery/lab-commands.js";
+import { CodexOneShotRuntime } from "../../src/discovery/codex-one-shot-runtime.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +10,11 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   createNativeRunReceipt,
+  defineAgentRuntimeProfile,
+  providerCredentialEgressReceiptSchema,
+  type AgentRuntimeProfile,
+  type CodexSandboxCommand,
+  type ProviderCredentialEgressBroker,
   defineClaudeRuntimeProfile,
   ENUMERATION_OUTPUT_FILES,
   PARTITION_INPUT_FILES,
@@ -23,7 +32,7 @@ import { recordWordPressReport } from "../../src/profiles/wordpress/discovery/ca
 
 const digest = `sha256:${"a".repeat(64)}`;
 const other = `sha256:${"b".repeat(64)}`;
-const profile = defineClaudeRuntimeProfile(
+const defaultProfile = defineClaudeRuntimeProfile(
   {
     id: "opus",
     requestedModelId: "claude-opus-5-5",
@@ -99,7 +108,9 @@ type Scripted = (
 ) => Promise<OneShotResult> | OneShotResult;
 
 async function fixture(options: {
-  readonly script: Scripted;
+  readonly script?: Scripted;
+  readonly profile?: AgentRuntimeProfile;
+  readonly runtime?: (store: ProviderAttachmentStore) => OneShotExecutor;
   readonly limits?: Partial<PartitionedTrialPlan["limits"]>;
   readonly maxParallel?: number;
   readonly targetWallMs?: number;
@@ -114,6 +125,7 @@ async function fixture(options: {
   /** Makes Private Evidence refuse any `putFiles` that names one of these files. */
   readonly brokenEvidenceFiles?: readonly string[];
 }) {
+  const profile = options.profile ?? defaultProfile;
   const root = await mkdtemp(join(tmpdir(), "wbh-partitioned-"));
   directories.push(root);
   const attachments = new ProviderAttachmentStore(join(root, "reports"));
@@ -216,6 +228,7 @@ async function fixture(options: {
       };
     },
   };
+  const runtime = options.runtime?.(attachments);
   const calls: OneShotRun[] = [];
   const attempts = new Map<string, number>();
   const executor: OneShotExecutor = {
@@ -224,7 +237,9 @@ async function fixture(options: {
       now += options.runMs ?? 0;
       const attempt = attempts.get(run.runId) ?? 0;
       attempts.set(run.runId, attempt + 1);
-      return options.script(run, attempt, helpers);
+      return runtime === undefined
+        ? options.script!(run, attempt, helpers)
+        : runtime.execute(run);
     },
   };
   const mounts = {
@@ -342,6 +357,236 @@ const summary = (events: readonly LedgerEventV1[]) =>
   );
 
 describe("partitioned Trial executor (ADR 0042)", () => {
+  it.each([undefined, "wall", "evidence", "schema", "provider"] as const)(
+    "runs Codex through the existing ledger flow (failure: %s)",
+    async (failure) => {
+      const codex = defineAgentRuntimeProfile({
+        id: "codex",
+        transportKind: "codex-native/v1",
+        sandboxImageDigest: digest,
+        requestedModelId: "gpt-6-sol",
+        requestedEffort: "high",
+        codexCliVersion: "0.161.0",
+        bundledCatalogDigest: digest,
+        authenticationMethod: "host-private-bearer",
+        cyberAccessProgram: "unavailable",
+        serviceTier: "unavailable",
+        subagent: { modelId: "gpt-6-sol", effort: "high" },
+      });
+      const commands: CodexSandboxCommand[] = [];
+      const broker: ProviderCredentialEgressBroker = {
+        async withGrant(request, operation) {
+          expect(request).toMatchObject({
+            protocol: "responses",
+            maxRequests: 2000,
+            maxRequestBytes: 8 * 1024 * 1024,
+            maxResponseBytes: 8 * 1024 * 1024,
+          });
+          const body = {
+            grantId: "grant-1",
+            brokerImage: `broker@${digest}`,
+            upstreamOrigin: "https://api.openai.com/v1",
+            ...request,
+            startedAt: start,
+            completedAt: start,
+            setup: { status: "ready" },
+            cleanup: { status: "completed" },
+            isolation: {
+              backend: "gvisor",
+              runtime: "runsc",
+              fallbackUsed: false,
+              agentNetworkInternal: true,
+            },
+          };
+          const value = await operation({
+            baseUrl: "http://172.30.0.2:8080",
+            authorization: `Bearer ${randomBytes(32).toString("hex")}`,
+            dockerNetworkName: "provider-egress-1",
+            model: request.model,
+            protocol: request.protocol,
+            expiresAt: request.expiresAt,
+          });
+          return {
+            operation: { status: "completed", value },
+            receipt: providerCredentialEgressReceiptSchema.parse({
+              ...body,
+              digest: canonicalDigest(body),
+            }),
+          };
+        },
+      };
+      const result = await fixture({
+        profile: codex,
+        maxParallel: 1,
+        runtime: (attachments) =>
+          new CodexOneShotRuntime(
+            {
+              async execute(command) {
+                commands.push(command);
+                const tracing = command.oneShot!.inputFiles.some(
+                  (file) => file.name === "partition.json",
+                );
+                const report = {
+                  findings: [JSON.stringify(claim("one per partition"))],
+                  leads: [],
+                  examined: "partition",
+                  unexamined: "none",
+                };
+                return {
+                  status: "exited",
+                  exitCode: 0,
+                  startedAt: start,
+                  completedAt: start,
+                  image: `codex@${digest}`,
+                  cliVersion: "0.161.0",
+                  bundledCatalogDigest: digest,
+                  isolation: {
+                    backend: "gvisor",
+                    runtime: "runsc",
+                    fallbackUsed: false,
+                  },
+                  stdout: [
+                    { type: "thread.started", thread_id: "thread-1" },
+                    { type: "turn.started" },
+                    {
+                      type: "item.completed",
+                      item: {
+                        type: "command_execution",
+                        command: "sh /workspace/tools/tool.sh",
+                      },
+                    },
+                    {
+                      type: "item.completed",
+                      item: {
+                        type: "agent_message",
+                        text: tracing ? JSON.stringify(report) : "done",
+                      },
+                    },
+                    {
+                      type: "turn.completed",
+                      usage: { input_tokens: 10, output_tokens: 4 },
+                    },
+                  ]
+                    .map((event) => JSON.stringify(event))
+                    .join("\n"),
+                  outputFiles: tracing
+                    ? []
+                    : [
+                        {
+                          name: "inventory.json",
+                          content: JSON.stringify(inventory),
+                        },
+                        {
+                          name: "partitions.json",
+                          content: JSON.stringify(
+                            commands.length === 1
+                              ? { partitions: [proposal.partitions[0]] }
+                              : proposal,
+                          ),
+                        },
+                      ],
+                  ...(failure === "wall"
+                    ? {
+                        status: "failed" as const,
+                        exitCode: -1,
+                        failureKind: "timed-out" as const,
+                      }
+                    : {}),
+                  ...(failure === "evidence"
+                    ? { outputFailure: "capture-failed" as const }
+                    : {}),
+                  ...(failure === "schema" ? { stdout: "malformed" } : {}),
+                  ...(failure === "provider"
+                    ? {
+                        status: "failed" as const,
+                        exitCode: -1,
+                        stdout: JSON.stringify({
+                          type: "turn.failed",
+                          error: { message: "rate limit exceeded" },
+                        }),
+                      }
+                    : {}),
+                };
+              },
+            },
+            broker,
+            attachments,
+            `codex@${digest}`,
+            wordPressLabCommandRule,
+          ),
+      });
+      if (failure !== undefined) {
+        expect(result.result.findingsRecorded).toBe(0);
+        expect(commands).toHaveLength(1);
+        const finished = result.events.find(
+          (event) => event.type === "discovery-run-finished",
+        )!;
+        const stored = await result.evidence.readFile(
+          finished.artifacts.find((ref) => ref.kind === "native-run-receipt")!
+            .digest,
+          "receipt.json",
+          64 * 1024,
+        );
+        if (stored.status !== "resolved") throw new Error(stored.status);
+        expect(JSON.parse(stored.bytes.toString("utf8"))).toMatchObject({
+          terminal: "incomplete",
+          reason: failure,
+          runtimeProfileDigest: codex.digest,
+        });
+        expect(
+          result.events.some((event) => event.type === "partition-assigned"),
+        ).toBe(false);
+        return;
+      }
+      expect(result.result).toMatchObject({
+        runCount: 1,
+        stoppedBy: "max-runs",
+        findingsRecorded: 2,
+      });
+      expect(summary(result.events)).toEqual([
+        "start enumerate trial-1",
+        "finish completed trial-1",
+        "start enumerate trial-1-r1",
+        "finish completed trial-1-r1",
+        "enumeration accepted trial-1-r1",
+        "assigned p1 trial-1-p-p1",
+        "start trace trial-1-p-p1",
+        "candidate-normalized",
+        "finding p1 trial-1-p-p1",
+        "finish completed trial-1-p-p1",
+        "assigned p2 trial-1-p-p2",
+        "start trace trial-1-p-p2",
+        "candidate-normalized",
+        "finding p2 trial-1-p-p2",
+        "finish completed trial-1-p-p2",
+        "discovery-concluded",
+      ]);
+      expect(commands).toHaveLength(4);
+      for (const command of commands) {
+        expect(command.args).toContain("features.multi_agent=false");
+        expect(command.minimumActiveMs).toBeUndefined();
+        expect(command.oneShot?.wallMs).toBe(20 * 60_000);
+      }
+      expect(commands[0]!.args).not.toContain("--output-schema");
+      expect(commands[2]!.args).toContain("--output-schema");
+      for (const event of result.events.filter(
+        (event) => event.type === "discovery-run-finished",
+      )) {
+        const receipt = await result.evidence.readFile(
+          event.artifacts.find((ref) => ref.kind === "native-run-receipt")!
+            .digest,
+          "receipt.json",
+          64 * 1024,
+        );
+        if (receipt.status !== "resolved") throw new Error(receipt.status);
+        expect(JSON.parse(receipt.bytes.toString("utf8"))).toMatchObject({
+          runtimeProfileDigest: codex.digest,
+          codexCliVersion: "0.161.0",
+        });
+      }
+    },
+  );
+
   it("runs the enumerator, assigns each accepted partition to a tracer and admits their claims with the partition", async () => {
     const { result, events, calls, trialId } = await fixture({
       maxParallel: 1,

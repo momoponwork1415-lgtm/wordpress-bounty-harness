@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { isAbsolute, posix } from "node:path";
 
+import type { OneShotFile, OneShotRun } from "./one-shot-run.js";
+
 import type { ExpectedSourceTree } from "../infrastructure/canonical-source-tree.js";
 import {
   canonicalDigest,
@@ -177,7 +179,7 @@ export function finalReportTimeline(
 }
 
 /** Candidate extraction is independent of transcript event admission. */
-function extractRootCandidateReport(stdout: string) {
+export function extractRootCandidateReport(stdout: string) {
   const messages: string[] = [];
   for (const line of stdout.split("\n")) {
     try {
@@ -278,6 +280,7 @@ export type CodexSandboxResumeSeed = {
   }[];
 };
 export interface CodexSandboxCommand {
+  readonly oneShot?: Pick<OneShotRun, "inputFiles" | "toolFiles" | "wallMs">;
   readonly executable: "codex";
   readonly args: readonly string[];
   readonly stdin: string;
@@ -333,6 +336,8 @@ export interface CodexSandboxCommand {
   readonly controlHost?: { readonly name: string; readonly ipv4: string };
 }
 export interface CodexSandboxResult {
+  readonly outputFiles?: readonly OneShotFile[];
+  readonly outputFailure?: "capture-failed";
   readonly status: "exited" | "failed";
   readonly exitCode: number;
   readonly stdout: string;
@@ -673,7 +678,9 @@ function isRootRollout(raw: string, threadId: string): boolean {
 }
 
 /** Keep provider refusal details typed without copying private error text to the ledger. */
-function providerPolicyDetail(result: CodexSandboxResult): string | undefined {
+export function providerPolicyDetail(
+  result: CodexSandboxResult,
+): string | undefined {
   if (result.status === "exited" && result.exitCode === 0) return undefined;
   const threadId = rootThreadId(result.stdout);
   const rollout = result.rollouts?.find(
@@ -1046,7 +1053,7 @@ function observedFromRollout(
   );
 }
 
-function usageFromTranscript(
+export function usageFromTranscript(
   stdout: string,
 ): NativeRunReceipt["usage"] | undefined {
   let usage: z.infer<typeof usageSchema> | undefined;
@@ -1116,15 +1123,17 @@ function usageFromRollout(raw: string): NativeRunReceipt["usage"] | undefined {
         reasoningOutputTokens: usage.reasoning_output_tokens ?? "unavailable",
       };
 }
-function decodeTranscript(
+export function decodeTranscript(
   stdout: string,
-  outputKind: "verification" | undefined,
+  outputKind: "verification" | "files" | undefined,
   dependencyMounts: readonly string[],
   labCommands: LabCommandRule,
 ):
   | {
       report:
-        z.infer<typeof reportSchema> | z.infer<typeof verificationReportSchema>;
+        | z.infer<typeof reportSchema>
+        | z.infer<typeof verificationReportSchema>
+        | undefined;
       usage: {
         inputTokens: number | "unavailable";
         cachedInputTokens: number | "unavailable";
@@ -1231,17 +1240,18 @@ function decodeTranscript(
   }
   if (threadId === undefined) return { reasonDetail: "missing-thread-start" };
   if (!completed) return { reasonDetail: "missing-turn-completion" };
-  if (finalMessage === undefined)
+  if (finalMessage === undefined && outputKind !== "files")
     return { reasonDetail: "missing-final-message" };
-  try {
-    const found = (
-      outputKind === "verification" ? verificationReportSchema : reportSchema
-    ).safeParse(JSON.parse(finalMessage) as unknown);
-    if (!found.success) return { reasonDetail: "final-message-not-report" };
-    report = found.data;
-  } catch {
-    return { reasonDetail: "final-message-not-report" };
-  }
+  if (outputKind !== "files")
+    try {
+      const found = (
+        outputKind === "verification" ? verificationReportSchema : reportSchema
+      ).safeParse(JSON.parse(finalMessage!) as unknown);
+      if (!found.success) return { reasonDetail: "final-message-not-report" };
+      report = found.data;
+    } catch {
+      return { reasonDetail: "final-message-not-report" };
+    }
   return {
     report,
     usage: {
@@ -1272,7 +1282,9 @@ const CODEX_AUTHENTICATION_METHODS: readonly string[] = [
 ];
 
 /** Classifies the CLI's failure events; the broker's own grant cap is not a provider limit. */
-function providerLimitOf(stdout: string): "rate-limit" | "quota" | undefined {
+export function providerLimitOf(
+  stdout: string,
+): "rate-limit" | "quota" | undefined {
   let limit: "rate-limit" | "quota" | undefined;
   for (const line of stdout.split("\n")) {
     let value: unknown;
@@ -1301,7 +1313,7 @@ function providerLimitOf(stdout: string): "rate-limit" | "quota" | undefined {
 }
 
 /** A broker body-size rejection is a Harness bound, not a provider failure. */
-function brokerRequestBytesExceeded(stdout: string): boolean {
+export function brokerRequestBytesExceeded(stdout: string): boolean {
   for (const line of stdout.split("\n")) {
     let value: unknown;
     try {
@@ -1499,9 +1511,9 @@ function admittedLabEndpoint(run: DiscoveryTransportRun): URL | undefined {
     : undefined;
 }
 
-function sandboxAdmissionFailure(
+export function sandboxAdmissionFailure(
   result: CodexSandboxResult,
-  run: DiscoveryTransportRun,
+  run: Pick<DiscoveryTransportRun, "profile">,
   sandboxImage: string,
 ): "sandbox" | "policy" | undefined {
   if (!isGvisorIsolation(result.isolation)) return "sandbox";
@@ -1514,9 +1526,9 @@ function sandboxAdmissionFailure(
   return undefined;
 }
 
-function assertBrokerAddress(
+export function assertBrokerAddress(
   grant: ProviderCredentialEgressGrant,
-  run: DiscoveryTransportRun,
+  run: Pick<DiscoveryTransportRun, "profile" | "lab">,
 ): boolean {
   if (run.lab !== undefined && grant.dockerNetworkName !== run.lab.networkName)
     throw new Error("Provider grant is not on the Lab network");
@@ -1532,11 +1544,12 @@ function assertBrokerAddress(
   return login;
 }
 
-function codexArgs(
-  run: DiscoveryTransportRun,
+export function codexArgs(
+  run: Pick<DiscoveryTransportRun, "profile" | "maxChildren">,
   grant: ProviderCredentialEgressGrant,
   cooperative: boolean,
   login: boolean,
+  outputSchema = true,
 ): string[] {
   return [
     "exec",
@@ -1586,8 +1599,9 @@ function codexArgs(
       : ["-c", `service_tier="${run.profile.serviceTier}"`]),
     "-c",
     'history.persistence="none"',
-    "--output-schema",
-    "/opt/codex-support/report-schema.json",
+    ...(outputSchema
+      ? ["--output-schema", "/opt/codex-support/report-schema.json"]
+      : []),
     "--json",
     "-",
   ];
@@ -1754,6 +1768,13 @@ function sandboxCommand(
         }),
   };
 }
+
+/** Shared with a one-shot role: the same provider grant as cooperative discovery. */
+export const CODEX_DISCOVERY_BROKER_LIMITS = {
+  maxRequests: 2000,
+  maxRequestBytes: 8 * 1024 * 1024,
+  maxResponseBytes: 8 * 1024 * 1024,
+} as const;
 
 export class CodexNativeAgentRuntime {
   constructor(
@@ -1950,9 +1971,13 @@ export class CodexNativeAgentRuntime {
           runtimeProfileDigest: run.profile.digest,
           model: run.profile.requestedModelId,
           protocol: "responses",
-          maxRequests: cooperative ? 2000 : 100,
-          maxRequestBytes: cooperative ? 8 * 1024 * 1024 : 1024 * 1024,
-          maxResponseBytes: 8 * 1024 * 1024,
+          ...(cooperative
+            ? CODEX_DISCOVERY_BROKER_LIMITS
+            : {
+                maxRequests: 100,
+                maxRequestBytes: 1024 * 1024,
+                maxResponseBytes: 8 * 1024 * 1024,
+              }),
           expiresAt: run.expiresAt,
           ...(run.lab === undefined
             ? {}

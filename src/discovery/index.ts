@@ -63,8 +63,10 @@ export {
   claudeProviderFailure,
 } from "./claude-native-agent-runtime.js";
 export { ClaudeOneShotRuntime } from "./claude-one-shot-runtime.js";
+export { CodexOneShotRuntime } from "./codex-one-shot-runtime.js";
 export {
   scriptRanIn,
+  ONE_SHOT_SANDBOX_MEMORY_MIB,
   type OneShotExecutor,
   type OneShotFile,
   type OneShotResult,

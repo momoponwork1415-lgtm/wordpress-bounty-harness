@@ -45,9 +45,10 @@ import {
 import type { ProviderCredentialEgressGrant } from "./provider-credential-egress-broker.js";
 import {
   admittedOneShotFiles,
-  ONE_SHOT_MAX_FILES,
+  collectOutputFiles,
+  stageOneShotFiles,
+  ONE_SHOT_SANDBOX_MEMORY_MIB,
   ONE_SHOT_MAX_INPUT_BYTES,
-  ONE_SHOT_MAX_OUTPUT_BYTES,
   ONE_SHOT_MAX_TOOL_BYTES,
   ONE_SHOT_MAX_WALL_MS,
   type OneShotFile,
@@ -71,7 +72,7 @@ export const CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB =
  * its sandbox is sized for one agent; the campaign memory budget admits
  * `budget / (this + broker)` tracers at once. Both roles run at this size.
  */
-export const CLAUDE_ONE_SHOT_SANDBOX_MEMORY_MIB = 4096;
+export const CLAUDE_ONE_SHOT_SANDBOX_MEMORY_MIB = ONE_SHOT_SANDBOX_MEMORY_MIB;
 /** Two CPUs per Claude container, as before candidate 9; the Codex sandbox keeps one. */
 const CLAUDE_SANDBOX_CPUS = 2;
 const CLAUDE_CONFIG_MOUNT = "/tmp/claude";
@@ -283,47 +284,6 @@ export class ClaudeSandboxNotAdmittedError extends Error {
     super("Claude sandbox command is not admitted");
     this.name = "ClaudeSandboxNotAdmittedError";
   }
-}
-
-/**
- * The JSON files a one-shot run left directly under its output directory,
- * bounded; a link or an oversize file fails the capture, a subdirectory or a
- * file of another extension is left behind unread.
- */
-async function collectOutputFiles(directory: string): Promise<OneShotFile[]> {
-  const files: OneShotFile[] = [];
-  const entries = await readdir(directory, { withFileTypes: true });
-  for (const entry of entries.sort((left, right) =>
-    left.name.localeCompare(right.name),
-  )) {
-    if (entry.isSymbolicLink()) throw new Error("Claude output link");
-    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-    const path = join(directory, entry.name);
-    if ((await stat(path)).size > ONE_SHOT_MAX_OUTPUT_BYTES)
-      throw new Error("Claude output evidence limit exceeded");
-    files.push({ name: entry.name, content: await readFile(path, "utf8") });
-    if (files.length > ONE_SHOT_MAX_FILES)
-      throw new Error("Claude output count limit exceeded");
-  }
-  return files;
-}
-
-/** Writes a one-shot run's files into fresh directories; tool files are executable. */
-async function stageOneShotFiles(
-  input: string,
-  tools: string,
-  files: NonNullable<ClaudeSandboxCommand["oneShot"]>,
-): Promise<void> {
-  for (const file of files.inputFiles)
-    await writeFile(join(input, file.name), file.content, {
-      flag: "wx",
-      mode: 0o400,
-    });
-  for (const file of files.toolFiles)
-    await writeFile(join(tools, file.name), file.content, {
-      flag: "wx",
-      mode: 0o500,
-    });
 }
 
 /** A one-shot command's own shape (ADR 0042); the cooperative shape is the other branch. */

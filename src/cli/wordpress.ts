@@ -9,6 +9,8 @@ import {
   assignDiscoveryRuntime,
   DEFAULT_MAX_CHILDREN,
   defineClaudeRuntimeProfile,
+  defineAgentRuntimeProfile,
+  agentRuntimeProfileDefinitionSchema,
   DISCOVERY_LEFTOVER_PATTERNS,
   executeTrialResume,
   PARTITION_INPUT_FILES,
@@ -756,20 +758,48 @@ const sha256 = (text: string) =>
   `sha256:${createHash("sha256").update(text).digest("hex")}`;
 
 /**
- * The runtime profile one role runs on: the host's Claude profile, with the
+ * The runtime profile one role runs on: the selected host profile, with the
  * role's model and effort when the config names them. Both roles of a Trial
  * must agree, because one CampaignInput binds one profile digest.
  */
 function wordPressRoleProfile(
   base: AgentRuntimeProfile,
   role: {
+    readonly runtime: "claude" | "codex";
     readonly model?: string | undefined;
     readonly effort?: string | undefined;
   },
 ): AgentRuntimeProfile {
-  if (base.transportKind !== "claude-code/v1")
-    throw new Error("A partitioned Trial runs on the Claude runtime only");
+  if (
+    base.transportKind !==
+    (role.runtime === "claude" ? "claude-code/v1" : "codex-native/v1")
+  )
+    throw new Error(
+      `A partitioned role needs the ${role.runtime} runtime profile`,
+    );
   if (role.model === undefined && role.effort === undefined) return base;
+  if (base.transportKind === "codex-native/v1") {
+    const {
+      kind: _kind,
+      schemaVersion: _version,
+      digest: _digest,
+      ...definition
+    } = base;
+    const requestedModelId =
+      agentRuntimeProfileDefinitionSchema.shape.requestedModelId.parse(
+        role.model ?? base.requestedModelId,
+      );
+    const requestedEffort =
+      agentRuntimeProfileDefinitionSchema.shape.requestedEffort.parse(
+        role.effort ?? base.requestedEffort,
+      );
+    return defineAgentRuntimeProfile({
+      ...definition,
+      requestedModelId,
+      requestedEffort,
+      subagent: { modelId: requestedModelId, effort: requestedEffort },
+    });
+  }
   const requestedModelId = (role.model ??
     base.requestedModelId) as typeof base.requestedModelId;
   const requestedEffort = (role.effort ??
@@ -817,17 +847,22 @@ export async function planWordPressPartitionedDiscovery(
     );
   if (wordPressDiscoveryModeOf(objective.id) !== "partitioned")
     throw new Error("The partitioned mode runs a partitioned objective only");
-  const claude = boundaries.claude;
-  if (claude?.oneShot === undefined)
-    throw new Error(
-      "The partitioned mode needs the host's Claude runtime with one-shot runs",
-    );
+  const boundaryFor = (runtime: "claude" | "codex") => {
+    const boundary = runtime === "claude" ? boundaries.claude : boundaries;
+    if (boundary?.oneShot === undefined)
+      throw new Error(
+        `The partitioned mode needs the host's ${runtime} runtime with one-shot runs`,
+      );
+    return { ...boundary, oneShot: boundary.oneShot };
+  };
+  const enumerator = boundaryFor(discovery.enumerator.runtime);
+  const tracer = boundaryFor(discovery.tracer.runtime);
   const enumeratorProfile = wordPressRoleProfile(
-    claude.runtimeProfile,
+    enumerator.runtimeProfile,
     discovery.enumerator,
   );
   const tracerProfile = wordPressRoleProfile(
-    claude.runtimeProfile,
+    tracer.runtimeProfile,
     discovery.tracer,
   );
   if (enumeratorProfile.digest !== tracerProfile.digest)
@@ -1020,8 +1055,8 @@ export async function planWordPressPartitionedDiscovery(
         },
       },
     ],
-    executor: claude.executor,
-    oneShotExecutor: claude.oneShot,
+    executor: enumerator.executor,
+    oneShotExecutor: enumerator.oneShot,
     attachments: boundaries.attachments,
     recordReport: recordWordPressReport,
   };
