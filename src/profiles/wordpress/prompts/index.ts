@@ -342,7 +342,10 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     // v14-wide plus one sentence: the root agent copies the Harness `## Lab`
     // section to every agent it starts (Issue #599). Both judge sentences now
     // name the human's recorded observation in a review Lab (#555, ADR 0040).
-    // Compared with v14-wide in production before either is current.
+    // Measured 2026-10-28 over 20 Codex Trials against 21 v14-wide/v4 Trials:
+    // 0.20 vs 0.76 Findings per Trial, 4.5 vs 3.0 Leads per Trial, vendor-feed
+    // Findings 0/4 vs 13/16 (ADR 0039 addendum 14, Issue #639). Not adopted;
+    // archived so the 20 Trials keep matching their digest.
     fragments: [
       { section: "objective", file: "task-v15" },
       { section: "objective", file: "first-principles-v11" },
@@ -408,8 +411,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:1ffb15f4f3f7ad6de70e330e10fd24c31513e41d250c8e0d6885b760a0a5c1f3",
     outputContract: "v4",
-    status: "candidate",
-    mode: "wide",
+    status: "archived",
     // The v16-wide body, byte for byte (same fragments, same digest), on the
     // v4 contract (Issue #639, ADR 0039 addendum 13). v16-wide only ever ran
     // under v5, which cut Findings on its own (ADR 0038 addendum 15), so the
