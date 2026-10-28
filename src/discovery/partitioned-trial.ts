@@ -218,6 +218,8 @@ type RoleOutcome = {
   readonly readPathsDigest?: string;
   /** Complete JSON output from a file-producing role, sealed before its finish. */
   readonly outputDigest?: string;
+  /** Private archive of the role's Trial-local notes. */
+  readonly researchArtifactDigest?: string;
   /** The message of a Harness-side throw after the run, in Private Evidence. */
   readonly errorDigest?: string;
   readonly result?: OneShotResult;
@@ -226,6 +228,10 @@ type RoleOutcome = {
 
 /** The finish artifact that carries a post-run throw's message. */
 const ROLE_RUN_ERROR_ARTIFACT = "role-run-error";
+/** The sandbox collects at most 8 MiB of notes; the JSON archive is bounded too. */
+const MAX_RESEARCH_ARCHIVE_BYTES = 12 * 1024 * 1024;
+
+class ResearchArchiveSizeError extends Error {}
 
 type Draft<T> = { -readonly [K in keyof T]: T[K] };
 
@@ -381,6 +387,17 @@ async function runRole(
           ),
         );
       }
+      if (result.researchArchive !== undefined) {
+        stage = "research";
+        if (
+          result.researchArchive.byteLength === 0 ||
+          result.researchArchive.byteLength > MAX_RESEARCH_ARCHIVE_BYTES
+        )
+          throw new ResearchArchiveSizeError();
+        draft.researchArtifactDigest = await context.evidence.putFiles({
+          "research.json": result.researchArchive,
+        });
+      }
       if (
         receipt.runId !== run.runId ||
         receipt.targetSnapshotDigest !== input.snapshotDigest ||
@@ -406,7 +423,13 @@ async function runRole(
       }
     } catch (error: unknown) {
       draft.outcome = "failed";
-      draft.failure = { reason: "evidence", reasonDetail: "post-run-threw" };
+      draft.failure = {
+        reason: "evidence",
+        reasonDetail:
+          error instanceof ResearchArchiveSizeError
+            ? "research-archive-size"
+            : "post-run-threw",
+      };
       // The store may be what failed: the finish is appended either way, with
       // whatever evidence could be written. The transport's receipt keeps its
       // own digest; a synthetic one stands in only when no receipt exists.
@@ -458,6 +481,14 @@ async function runRole(
       ...(outcome.outputDigest === undefined
         ? []
         : [{ kind: "enumeration-output", digest: outcome.outputDigest }]),
+      ...(outcome.researchArtifactDigest === undefined
+        ? []
+        : [
+            {
+              kind: "research-archive",
+              digest: outcome.researchArtifactDigest,
+            },
+          ]),
       ...(outcome.errorDigest === undefined
         ? []
         : [{ kind: ROLE_RUN_ERROR_ARTIFACT, digest: outcome.errorDigest }]),

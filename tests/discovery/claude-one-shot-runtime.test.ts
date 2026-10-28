@@ -157,7 +157,10 @@ function broker(
 async function runtime(
   out: string,
   overrides: Partial<ClaudeSandboxResult> = {},
-  options: { readonly noOutputFiles?: boolean } = {},
+  options: {
+    readonly noOutputFiles?: boolean;
+    readonly noResearch?: boolean;
+  } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "claude-one-shot-"));
   directories.push(root);
@@ -175,7 +178,9 @@ async function runtime(
         image,
         cliVersion: "2.1.296",
         transcripts: [{ path: "-workspace-main/s1.jsonl", content: out }],
-        research: { archive: Buffer.from("{}"), truncated: false },
+        ...(options.noResearch
+          ? {}
+          : { research: { archive: Buffer.from("{}"), truncated: false } }),
         ...(options.noOutputFiles ? {} : { outputFiles: [] }),
         isolation: { backend: "gvisor", runtime: "runsc", fallbackUsed: false },
         ...overrides,
@@ -250,6 +255,7 @@ describe("Claude one-shot runtime (ADR 0042)", () => {
       { name: "inventory.json", content: '{"rows":[]}' },
     ]);
     expect(result.attachment).toBeUndefined();
+    expect(result.researchArchive?.toString()).toBe("{}");
     expect(commands).toHaveLength(1);
     const command = commands[0]!;
     expect(command.input).toEqual({
@@ -314,6 +320,19 @@ describe("Claude one-shot runtime (ADR 0042)", () => {
       reason: "evidence",
       reasonDetail: "output-capture-failed",
     });
+    const lostResearch = await runtime(
+      stdout(assistant("Read", { file_path: "x" })),
+      { researchFailure: "capture-failed" },
+      { noResearch: true },
+    );
+    const lostResearchResult = await lostResearch.runtime.execute(run("files"));
+    expect(lostResearchResult.receipt).toMatchObject({
+      terminal: "incomplete",
+      reason: "evidence",
+      reasonDetail: "research-capture-failed",
+    });
+    expect(lostResearchResult.researchArchive).toBeUndefined();
+    expect(lostResearchResult.outputFiles).toEqual([]);
     const timedOut = await runtime(
       stdout(assistant("Read", { file_path: "x" })),
       {

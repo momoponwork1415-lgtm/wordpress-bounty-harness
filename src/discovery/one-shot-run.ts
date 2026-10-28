@@ -88,6 +88,8 @@ export interface OneShotResult {
   readonly receipt: NativeRunReceipt;
   /** `output: "report"`: the sealed report when the final message held one. */
   readonly attachment?: ProviderAttachmentRef;
+  /** The role's Trial-local notes, captured in the sandbox for Private Evidence. */
+  readonly researchArchive?: Uint8Array;
   /** `output: "files"`: what the run left under `/workspace/output`, by name. */
   readonly outputFiles?: readonly OneShotFile[];
   /** Whether an observed shell tool call named a mounted tool file. */
