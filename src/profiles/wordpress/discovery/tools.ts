@@ -31,6 +31,13 @@ export const WORDPRESS_ENUMERATION_TOOLS = [
     file: "enumerate-sinks-v1.sh",
     digest:
       "sha256:957be12aa7a8e250d40edfa6b637b7c65cd111abf8f6af42d28c90117d7605ea",
+    status: "archived",
+  },
+  {
+    id: "enumerate-sinks-v2",
+    file: "enumerate-sinks-v2.sh",
+    digest:
+      "sha256:2c28a56be45a909380f692d839c6850ee679a2741e57e0432928e3cebef203fd",
     status: "current",
   },
   {

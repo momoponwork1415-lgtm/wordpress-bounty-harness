@@ -846,6 +846,18 @@ export async function planWordPressPartitionedDiscovery(
   const toolFiles: OneShotToolFile[] = (
     await Promise.all(toolIds.map(loadWordPressEnumerationTool))
   ).map((tool) => ({ name: tool.file, content: tool.bytes }));
+  // The frozen enumerator-v1 body names this path; the selected v2 digest
+  // owns both mounted names. An explicitly selected historical v1 stays v1.
+  const sinksV2 = toolFiles.find(
+    (tool) => tool.name === "enumerate-sinks-v2.sh",
+  );
+  if (sinksV2 !== undefined) {
+    if (toolFiles.some((tool) => tool.name === "enumerate-sinks-v1.sh"))
+      throw new Error(
+        "Enumeration sink versions have a conflicting tool filename",
+      );
+    toolFiles.push({ name: "enumerate-sinks-v1.sh", content: sinksV2.content });
+  }
   const toolsDigest = wordPressEnumerationToolsDigest(toolIds);
   const limits = discovery.partition;
   const runtime = {
