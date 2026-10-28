@@ -37,6 +37,8 @@ import {
   canonicalJson,
 } from "../infrastructure/canonical-json.js";
 import { recordWordPressReport } from "../profiles/wordpress/discovery/candidate-admission.js";
+import { deriveWordPressLegacyGroupKeyCache } from "../profiles/wordpress/discovery/finding-group-cache.js";
+import { wordPressLeadGroupKeyDigests } from "../profiles/wordpress/discovery/lead.js";
 import {
   admitWordPressFinding,
   readWordPressFinding,
@@ -1870,6 +1872,9 @@ export function createWordPressCliProfile(
   options: WordPressCliProfileOptions,
 ): CliProfile {
   return {
+    deriveLegacyFindingGroupKeyCache: (state) =>
+      deriveWordPressLegacyGroupKeyCache(state.ledger, state.store),
+    leadGroupKeyDigests: wordPressLeadGroupKeyDigests,
     review: (state) =>
       new Review({
         ledger: state.ledger,

@@ -1,5 +1,5 @@
 /**
- * #424: Findings of one campaign and Snapshot whose profile keys overlap form
+ * #424/#653: Findings of one Snapshot whose profile keys overlap form
  * one group, the connected component of "shares at least one key". The group
  * labels and orders review and verification; judging and submission stay per
  * Finding, because one place can hold two different weaknesses. The rule is
@@ -16,7 +16,7 @@ type FindingRef = {
 
 /** One Finding's place in its group, derived from the ledger when read. */
 export type FindingGroup = {
-  /** The findingId of the group's first-recorded Finding. */
+  /** A digest of the first-recorded Finding's campaignId and findingId. */
   readonly id: string;
   readonly size: number;
   readonly representative: boolean;
@@ -56,6 +56,12 @@ export function overlapComponents(
 const refOf = ({ campaignId, findingId }: FindingRef) =>
   `${campaignId}\u0000${findingId}`;
 
+/** Public read-time reference; a findingId can recur in another campaign. */
+const publicGroupId = (ref: {
+  readonly campaignId: string;
+  readonly findingId: string;
+}) => canonicalDigest([ref.campaignId, ref.findingId]);
+
 /** Findings outside the review and verification queues join no group. */
 function groupedFindings(ledger: Ledger, campaignId?: string) {
   const scope = campaignId === undefined ? {} : { campaignId };
@@ -75,7 +81,7 @@ function groupedFindings(ledger: Ledger, campaignId?: string) {
 
 /**
  * The group a newly admitted Finding records: its component among the
- * Findings recorded before it in the same campaign and Snapshot. A later
+ * Findings recorded before it in the same Snapshot. A later
  * Finding can join two groups; the ledger view then reads them as one.
  */
 export function admitFindingGroup(
@@ -91,14 +97,18 @@ export function admitFindingGroup(
   const keys = [
     ...new Set(finding.keys.map((key) => canonicalDigest(key))),
   ].sort();
-  const recorded = groupedFindings(ledger, finding.campaignId).filter(
+  const recorded = groupedFindings(ledger).filter(
     (event) => event.snapshotDigest === finding.snapshotDigest,
   );
   // Recording the same Finding again sees the same earlier Findings, so the event is identical.
   const own = recorded.findIndex(
-    (event) => event.findingId === finding.findingId,
+    (event) =>
+      event.campaignId === finding.campaignId &&
+      event.findingId === finding.findingId,
   );
   const earlier = own === -1 ? recorded : recorded.slice(0, own);
+  // A legacy cache projects old events for reading only; it cannot change a
+  // new event's admission identity when a cache is added or removed later.
   const root = overlapComponents(
     [...earlier.map((event) => event.group?.keys ?? []), keys].map(
       (itemKeys) => ({ scope: "", keys: itemKeys }),
@@ -112,11 +122,13 @@ export function readFindingGroups(
   ledger: Ledger,
   input: { readonly campaignId?: string } = {},
 ) {
-  const findings = groupedFindings(ledger, input.campaignId);
+  // A campaign view still needs the earlier Findings in other campaigns to
+  // derive the same group id and size for a shared Snapshot.
+  const findings = groupedFindings(ledger);
   const roots = overlapComponents(
     findings.map((event) => ({
-      scope: `${event.campaignId}\u0000${event.snapshotDigest}`,
-      keys: event.group?.keys ?? [],
+      scope: event.snapshotDigest,
+      keys: ledger.findingGroupKeyDigests(event),
     })),
   );
   const sizes = new Map<number, number>();
@@ -125,19 +137,50 @@ export function readFindingGroups(
   const indexOf = (ref: FindingRef) =>
     ref.findingId === undefined ? undefined : placed.get(refOf(ref));
   return {
+    /** The groups sharing a digest-only profile key with a Lead on this Snapshot. */
+    matchingKeyDigests(
+      snapshotDigest: string,
+      keys: readonly string[],
+    ): string[] {
+      const sought = new Set(keys);
+      const matched = new Set<number>();
+      for (const [index, event] of findings.entries()) {
+        if (event.snapshotDigest !== snapshotDigest) continue;
+        if (ledger.findingGroupKeyDigests(event).some((key) => sought.has(key)))
+          matched.add(roots[index]!);
+      }
+      return [...matched]
+        .sort((left, right) => left - right)
+        .map((root) => publicGroupId(findings[root]!));
+    },
     /** A Finding outside every group (parked, a fixed-version control, unknown) is its own group. */
     of(campaignId: string, findingId: string): FindingGroup {
+      if (input.campaignId !== undefined && campaignId !== input.campaignId)
+        return {
+          id: publicGroupId({ campaignId, findingId }),
+          size: 1,
+          representative: true,
+        };
       const index = indexOf({ campaignId, findingId });
       if (index === undefined)
-        return { id: findingId, size: 1, representative: true };
+        return {
+          id: publicGroupId({ campaignId, findingId }),
+          size: 1,
+          representative: true,
+        };
       const root = roots[index]!;
-      const { findingId: id } = findings[root]!;
+      const id = publicGroupId(findings[root]!);
       return { id, size: sizes.get(root)!, representative: root === index };
     },
     /** Representatives first in recorded order, then each group's other Findings, group by group. */
     order<T>(items: readonly T[], ref: (item: T) => FindingRef): T[] {
       const rank = (item: T) => {
-        const index = indexOf(ref(item));
+        const itemRef = ref(item);
+        const index =
+          input.campaignId !== undefined &&
+          itemRef.campaignId !== input.campaignId
+            ? undefined
+            : indexOf(itemRef);
         return index === undefined || roots[index] === index
           ? -1
           : roots[index]!;

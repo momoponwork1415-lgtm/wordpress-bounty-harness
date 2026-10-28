@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { canonicalDigest } from "../../src/infrastructure/canonical-json.js";
 import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-source-tree.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../src/ledger/index.js";
@@ -1109,7 +1110,11 @@ describe("review queue and decisions", () => {
         },
         category: "other",
         decision: null,
-        group: { id: "finding-4", size: 1, representative: true },
+        group: {
+          id: canonicalDigest(["campaign-1", "finding-4"]),
+          size: 1,
+          representative: true,
+        },
       },
     ]);
   });
@@ -1185,7 +1190,11 @@ describe("review queue and decisions", () => {
       evidenceDigest: refutation,
       refutationDigest: null,
       decision: null,
-      group: { id: "finding-3", size: 1, representative: true },
+      group: {
+        id: canonicalDigest(["campaign-1", "finding-3"]),
+        size: 1,
+        representative: true,
+      },
     });
   });
 

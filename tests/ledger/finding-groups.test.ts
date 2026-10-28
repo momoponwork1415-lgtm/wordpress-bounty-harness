@@ -1,10 +1,17 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
+import { openState } from "../../src/cli/state.js";
+import {
+  canonicalDigest,
+  canonicalJson,
+} from "../../src/infrastructure/canonical-json.js";
+import { deriveWordPressLegacyGroupKeyCache } from "../../src/profiles/wordpress/discovery/finding-group-cache.js";
+import { serializeFindingGroupKeyCache } from "../../src/ledger/finding-group-key-cache.js";
 import {
   admitFindingGroup,
   overlapComponents,
@@ -37,6 +44,206 @@ describe("overlapComponents", () => {
 });
 
 describe("finding groups in the ledger", () => {
+  it("does not use a read-time legacy cache to change an admission event on retry", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wbh-ledger-groups-"));
+    directories.push(root);
+    const stateDirectory = join(root, "state");
+    const { ledger, store: artifacts } = await openState(stateDirectory);
+    const artifactDigest = await artifacts.putFiles({
+      "finding.json": canonicalJson({
+        sourceTrace: [{ file: "includes/a.php", function: "handle", line: 2 }],
+      }),
+    });
+    const base = {
+      schemaVersion: 1 as const,
+      snapshotDigest: `sha256:${"a".repeat(64)}`,
+      occurredAt: "2026-10-28T00:00:00Z",
+    };
+    await ledger.append({
+      ...base,
+      campaignId: "old-campaign",
+      identity: "old-finding",
+      type: "finding-recorded",
+      findingId: "old-finding",
+      runId: "old-run",
+      category: "sqli",
+      artifacts: [{ kind: "finding", digest: artifactDigest }],
+    });
+    const cache = await deriveWordPressLegacyGroupKeyCache(ledger, artifacts);
+    const cachePath = join(root, "group-cache.json");
+    await writeFile(cachePath, serializeFindingGroupKeyCache(cache));
+    const cached = await openState(
+      stateDirectory,
+      {},
+      { findingGroupKeyCachePath: cachePath },
+    );
+    const input = {
+      campaignId: "new-campaign",
+      snapshotDigest: base.snapshotDigest,
+      findingId: "new-finding",
+      keys: [canonicalJson(["includes/a.php", "handle"])],
+    };
+    const withCache = admitFindingGroup(cached.ledger, input);
+    const withoutCache = admitFindingGroup(ledger, input);
+    expect(withCache).toEqual(withoutCache);
+    const candidate = {
+      ...base,
+      campaignId: input.campaignId,
+      identity: "new-finding-event",
+      type: "finding-recorded" as const,
+      findingId: input.findingId,
+      runId: "new-run",
+      category: "sqli",
+    };
+    expect(
+      await cached.ledger.append({ ...candidate, group: withCache }),
+    ).toEqual({
+      status: "appended",
+    });
+    expect(await ledger.append({ ...candidate, group: withoutCache })).toEqual({
+      status: "existing",
+    });
+  });
+
+  it("keeps public group IDs distinct when campaigns reuse a Finding ID for different keys", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wbh-ledger-groups-"));
+    directories.push(root);
+    const { ledger } = await openState(join(root, "state"));
+    const snapshotDigest = `sha256:${"a".repeat(64)}`;
+    for (const [campaignId, key] of [
+      ["campaign-1", "key-one"],
+      ["campaign-2", "key-two"],
+    ] as const) {
+      await ledger.append({
+        schemaVersion: 1,
+        campaignId,
+        snapshotDigest,
+        occurredAt: "2026-10-28T00:00:00Z",
+        identity: `${campaignId}-same-finding`,
+        type: "finding-recorded",
+        findingId: "same-finding",
+        runId: `run-${campaignId}`,
+        category: "sqli",
+        group: admitFindingGroup(ledger, {
+          campaignId,
+          snapshotDigest,
+          findingId: "same-finding",
+          keys: [key],
+        }),
+      });
+    }
+    const groups = readFindingGroups(ledger);
+    const first = groups.of("campaign-1", "same-finding");
+    const second = groups.of("campaign-2", "same-finding");
+    expect(first.id).not.toBe(second.id);
+    expect(first.size).toBe(1);
+    expect(second.size).toBe(1);
+    expect(
+      groups.matchingKeyDigests(snapshotDigest, [
+        canonicalDigest("key-one"),
+        canonicalDigest("key-two"),
+      ]),
+    ).toEqual([first.id, second.id]);
+  });
+
+  it("derives an old Finding's keys from Private Evidence without changing its event", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wbh-ledger-groups-"));
+    directories.push(root);
+    const stateDirectory = join(root, "state");
+    const { ledger, store: artifacts } = await openState(stateDirectory);
+    const artifactDigest = await artifacts.putFiles({
+      "finding.json": canonicalJson({
+        sourceTrace: [{ file: "includes/a.php", function: "handle", line: 2 }],
+      }),
+    });
+    const base = {
+      schemaVersion: 1 as const,
+      campaignId: "old-campaign",
+      snapshotDigest: `sha256:${"a".repeat(64)}`,
+      occurredAt: "2026-10-28T00:00:00Z",
+    };
+    await ledger.append({
+      ...base,
+      identity: "old-finding",
+      type: "finding-recorded",
+      findingId: "old-finding",
+      runId: "old-run",
+      category: "sqli",
+      artifacts: [{ kind: "finding", digest: artifactDigest }],
+    });
+    const before = ledger.funnel("old-campaign");
+    expect(before.unkeyedFindings).toBe(1);
+    const cache = await deriveWordPressLegacyGroupKeyCache(ledger, artifacts);
+    const cachePath = join(root, "group-cache.json");
+    await writeFile(cachePath, serializeFindingGroupKeyCache(cache));
+    const projected = await openState(
+      stateDirectory,
+      {},
+      {
+        readOnly: true,
+        findingGroupKeyCachePath: cachePath,
+      },
+    );
+    expect(projected.ledger.funnel("old-campaign").unkeyedFindings).toBe(0);
+    expect(
+      projected.ledger.readAll({
+        campaignId: "old-campaign",
+        type: "finding-recorded",
+      })[0]?.event,
+    ).not.toHaveProperty("group");
+    expect(cache.get(artifactDigest)).toHaveLength(1);
+  });
+
+  it("shows one Snapshot group across campaigns and keeps a different Snapshot separate", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wbh-ledger-groups-"));
+    directories.push(root);
+    const ledger = new Ledger({
+      databasePath: join(root, "ledger.sqlite"),
+      artifactStore: new PrivateArtifactStore({
+        rootDirectory: join(root, "evidence"),
+        maxEntries: 10,
+        maxBytes: 100_000,
+      }),
+    });
+    const snapshotA = `sha256:${"a".repeat(64)}`;
+    const snapshotB = `sha256:${"b".repeat(64)}`;
+    for (const [campaignId, findingId, snapshotDigest] of [
+      ["campaign-1", "first", snapshotA],
+      ["campaign-2", "second", snapshotA],
+      ["campaign-3", "third", snapshotB],
+    ] as const) {
+      const group = admitFindingGroup(ledger, {
+        campaignId,
+        findingId,
+        snapshotDigest,
+        keys: ["same/plugin.php:handle"],
+      });
+      await ledger.append({
+        schemaVersion: 1,
+        campaignId,
+        snapshotDigest,
+        occurredAt: "2026-10-28T00:00:00Z",
+        identity: findingId,
+        type: "finding-recorded",
+        findingId,
+        runId: `run-${campaignId}`,
+        category: "sqli",
+        group,
+      });
+    }
+    const scoped = readFindingGroups(ledger, { campaignId: "campaign-2" });
+    expect(scoped.of("campaign-2", "second")).toEqual({
+      id: canonicalDigest(["campaign-1", "first"]),
+      size: 2,
+      representative: false,
+    });
+    expect(readFindingGroups(ledger).of("campaign-3", "third")).toEqual({
+      id: canonicalDigest(["campaign-3", "third"]),
+      size: 1,
+      representative: true,
+    });
+  });
+
   it("reads two groups that a later Finding joins as one, while each event keeps its admission id", async () => {
     const root = await mkdtemp(join(tmpdir(), "wbh-ledger-groups-"));
     directories.push(root);
@@ -81,9 +288,21 @@ describe("finding groups in the ledger", () => {
     expect(
       ["first", "second", "bridge"].map((id) => groups.of("campaign-1", id)),
     ).toEqual([
-      { id: "first", size: 3, representative: true },
-      { id: "first", size: 3, representative: false },
-      { id: "first", size: 3, representative: false },
+      {
+        id: canonicalDigest(["campaign-1", "first"]),
+        size: 3,
+        representative: true,
+      },
+      {
+        id: canonicalDigest(["campaign-1", "first"]),
+        size: 3,
+        representative: false,
+      },
+      {
+        id: canonicalDigest(["campaign-1", "first"]),
+        size: 3,
+        representative: false,
+      },
     ]);
   });
 });

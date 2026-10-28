@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 
 import { verifyNextFinding } from "../../../src/cli/pipeline.js";
+import { canonicalDigest } from "../../../src/infrastructure/canonical-json.js";
 import { PrivateArtifactStore } from "../../../src/infrastructure/private-artifact-store.js";
 import { Ledger, type LedgerEventV1 } from "../../../src/ledger/index.js";
 import { exportReviewBundle, Review } from "../../../src/review/index.js";
@@ -88,7 +89,7 @@ async function record(
 }
 
 const group = (id: string, size: number, representative: boolean) => ({
-  id,
+  id: canonicalDigest([campaignId, id]),
   size,
   representative,
 });

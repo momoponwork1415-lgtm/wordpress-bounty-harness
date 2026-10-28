@@ -51,6 +51,11 @@ async function main(argv: readonly string[]): Promise<number> {
       stateDirectory:
         process.env.WBH_STATE_DIRECTORY ??
         join(homedir(), ".local", "state", "wordpress-bounty-harness"),
+      ...(process.env.WBH_FINDING_GROUP_KEY_CACHE === undefined
+        ? {}
+        : {
+            findingGroupKeyCachePath: process.env.WBH_FINDING_GROUP_KEY_CACHE,
+          }),
       profile,
     },
     io,

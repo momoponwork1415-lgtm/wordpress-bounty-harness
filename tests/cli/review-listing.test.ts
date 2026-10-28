@@ -186,7 +186,7 @@ describe("review listing on recorded history", () => {
     expect(await listing(state)).toMatchInlineSnapshot(`
       "runtime-confirmed  campaign-1  finding sha256:33ecad54d6ee10dee4097cfd5843ed7c5fc26db0891b9854fed4219e3ad28aa8  account-takeover
         verification recorded-verification-account-takeover  snapshot sha256:5555555555555555555555555555555555555555555555555555555555555555
-        group sha256:33ecad54d6ee10dee4097cfd5843ed7c5fc26db0891b9854fed4219e3ad28aa8  1 finding(s)  representative
+        group sha256:ef76dbae8a9401436425a69443a93a37aeb8916b481067b534d5c0651159520a  1 finding(s)  representative
         observer: synthetic-recorded-judge
         observed: attackerRole=subscriber defaultSettings=true observedVia=session reachedRole=administrator
         evidence: sha256:f27e4c78979a5c9d120ddd1fea6ce29139eacffe8a7e9eb2d5a894521877ddb3
@@ -195,7 +195,7 @@ describe("review listing on recorded history", () => {
         duplicate: possible-match  CVE-2026-0001  checked 2026-10-08T00:00:00.000Z
       incomplete  campaign-1  finding sha256:2e904700837603d50955d6486a636ab65fdbb3caaecc4a983ddfcc9e258cac66  sqli
         verification observed-attempt-2  snapshot sha256:5555555555555555555555555555555555555555555555555555555555555555
-        group sha256:2e904700837603d50955d6486a636ab65fdbb3caaecc4a983ddfcc9e258cac66  1 finding(s)  representative
+        group sha256:ce43e4d7011b2598c583a221aea80b413926b64021a1291742e2200c2465c2a4  1 finding(s)  representative
         reason: awaiting-human-observation
         next: Observe in a new review Lab
         manual observation: match (evidence available; receipt sha256:5a7eb7a693330bd14fe33aa39c246b4e514dfaf6fe19dbccd278c8d65d1ab1bf, evidence sha256:9457c96104255926dc753c6b5e0a77161c7022d72af922317703d0ce5c9bbc19)
@@ -203,12 +203,12 @@ describe("review listing on recorded history", () => {
         duplicate: no-match  checked 2026-10-08T00:00:00.000Z
       not-verified  campaign-2  finding sha256:33ecad54d6ee10dee4097cfd5843ed7c5fc26db0891b9854fed4219e3ad28aa8  account-takeover
         verification none  snapshot sha256:5555555555555555555555555555555555555555555555555555555555555555
-        group sha256:33ecad54d6ee10dee4097cfd5843ed7c5fc26db0891b9854fed4219e3ad28aa8  1 finding(s)  representative
+        group sha256:46099f583a3b982b63191430a8f39dec3062841eca3d7ec8c04ebd9f36980d70  1 finding(s)  representative
         decision: reject
         duplicate: none
       not-verified  campaign-2  finding sha256:2e904700837603d50955d6486a636ab65fdbb3caaecc4a983ddfcc9e258cac66  sqli
         verification none  snapshot sha256:5555555555555555555555555555555555555555555555555555555555555555
-        group sha256:2e904700837603d50955d6486a636ab65fdbb3caaecc4a983ddfcc9e258cac66  1 finding(s)  representative
+        group sha256:29ad99a11f1564afffae39fc59d2660e1efa061d7ec4e3a42b1fea811bb2f78b  1 finding(s)  representative
         decision: defer
         duplicate: none
       incomplete by reason: awaiting-human-observation 1
@@ -222,7 +222,7 @@ describe("review listing on recorded history", () => {
       .toMatchInlineSnapshot(`
       "runtime-confirmed  campaign-1  finding sha256:33ecad54d6ee10dee4097cfd5843ed7c5fc26db0891b9854fed4219e3ad28aa8  account-takeover
         verification recorded-verification-account-takeover  snapshot sha256:5555555555555555555555555555555555555555555555555555555555555555
-        group sha256:33ecad54d6ee10dee4097cfd5843ed7c5fc26db0891b9854fed4219e3ad28aa8  1 finding(s)  representative
+        group sha256:ef76dbae8a9401436425a69443a93a37aeb8916b481067b534d5c0651159520a  1 finding(s)  representative
         observer: synthetic-recorded-judge
         observed: attackerRole=subscriber defaultSettings=true observedVia=session reachedRole=administrator
         evidence: sha256:f27e4c78979a5c9d120ddd1fea6ce29139eacffe8a7e9eb2d5a894521877ddb3
@@ -231,7 +231,7 @@ describe("review listing on recorded history", () => {
         duplicate: possible-match  CVE-2026-0001  checked 2026-10-08T00:00:00.000Z
       incomplete  campaign-1  finding sha256:2e904700837603d50955d6486a636ab65fdbb3caaecc4a983ddfcc9e258cac66  sqli
         verification observed-attempt-2  snapshot sha256:5555555555555555555555555555555555555555555555555555555555555555
-        group sha256:2e904700837603d50955d6486a636ab65fdbb3caaecc4a983ddfcc9e258cac66  1 finding(s)  representative
+        group sha256:ce43e4d7011b2598c583a221aea80b413926b64021a1291742e2200c2465c2a4  1 finding(s)  representative
         reason: awaiting-human-observation
         next: Observe in a new review Lab
         manual observation: match (evidence available; receipt sha256:5a7eb7a693330bd14fe33aa39c246b4e514dfaf6fe19dbccd278c8d65d1ab1bf, evidence sha256:9457c96104255926dc753c6b5e0a77161c7022d72af922317703d0ce5c9bbc19)
@@ -246,12 +246,12 @@ describe("review listing on recorded history", () => {
       .toMatchInlineSnapshot(`
       "not-verified  campaign-2  finding sha256:33ecad54d6ee10dee4097cfd5843ed7c5fc26db0891b9854fed4219e3ad28aa8  account-takeover
         verification none  snapshot sha256:5555555555555555555555555555555555555555555555555555555555555555
-        group sha256:33ecad54d6ee10dee4097cfd5843ed7c5fc26db0891b9854fed4219e3ad28aa8  1 finding(s)  representative
+        group sha256:46099f583a3b982b63191430a8f39dec3062841eca3d7ec8c04ebd9f36980d70  1 finding(s)  representative
         decision: reject
         duplicate: none
       not-verified  campaign-2  finding sha256:2e904700837603d50955d6486a636ab65fdbb3caaecc4a983ddfcc9e258cac66  sqli
         verification none  snapshot sha256:5555555555555555555555555555555555555555555555555555555555555555
-        group sha256:2e904700837603d50955d6486a636ab65fdbb3caaecc4a983ddfcc9e258cac66  1 finding(s)  representative
+        group sha256:29ad99a11f1564afffae39fc59d2660e1efa061d7ec4e3a42b1fea811bb2f78b  1 finding(s)  representative
         decision: defer
         duplicate: none
       incomplete by reason: none
@@ -276,7 +276,7 @@ describe("review listing on recorded history", () => {
       .toMatchInlineSnapshot(`
       "runtime-confirmed  campaign-1  finding sha256:33ecad54d6ee10dee4097cfd5843ed7c5fc26db0891b9854fed4219e3ad28aa8  account-takeover
         verification recorded-verification-account-takeover  snapshot sha256:5555555555555555555555555555555555555555555555555555555555555555
-        group sha256:33ecad54d6ee10dee4097cfd5843ed7c5fc26db0891b9854fed4219e3ad28aa8  1 finding(s)  representative
+        group sha256:ef76dbae8a9401436425a69443a93a37aeb8916b481067b534d5c0651159520a  1 finding(s)  representative
         observer: synthetic-recorded-judge
         observed: attackerRole=subscriber defaultSettings=true observedVia=session reachedRole=administrator
         evidence: sha256:f27e4c78979a5c9d120ddd1fea6ce29139eacffe8a7e9eb2d5a894521877ddb3
@@ -285,7 +285,7 @@ describe("review listing on recorded history", () => {
         duplicate: none
       incomplete  campaign-1  finding sha256:2e904700837603d50955d6486a636ab65fdbb3caaecc4a983ddfcc9e258cac66  sqli
         verification observed-attempt-2  snapshot sha256:5555555555555555555555555555555555555555555555555555555555555555
-        group sha256:2e904700837603d50955d6486a636ab65fdbb3caaecc4a983ddfcc9e258cac66  1 finding(s)  representative
+        group sha256:ce43e4d7011b2598c583a221aea80b413926b64021a1291742e2200c2465c2a4  1 finding(s)  representative
         reason: awaiting-human-observation
         next: Observe in a new review Lab
         manual observation: match (evidence unavailable; receipt sha256:5a7eb7a693330bd14fe33aa39c246b4e514dfaf6fe19dbccd278c8d65d1ab1bf, evidence sha256:9457c96104255926dc753c6b5e0a77161c7022d72af922317703d0ce5c9bbc19)
