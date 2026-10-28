@@ -30,6 +30,8 @@ const PINNED_USAGE = [
   "  review dedupe --campaign <id> --finding <id>",
   "  review scope --campaign <id> --finding <id>",
   "  review reverify --campaign <id> --finding <id> --config <path> [--version <target-version>] [--handoff <dir> [--port <n>] [--db-port <n>]]",
+  "  verify auto --config <path> --campaign <id> --finding <id>",
+  "  verify auto --config <path> --next [--campaign <id>]",
   "  verify next --config <path> --handoff <dir> [--campaign <id> [--finding <id>]] [--port <n>] [--db-port <n>]",
   "  review draft --campaign <id> --finding <id> --programme <id> --file <path> [--prepared-by human|ai]",
   "  review authorize --candidate <id> --draft <digest> --to <destination> --by <name>",

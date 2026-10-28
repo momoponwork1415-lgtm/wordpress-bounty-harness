@@ -2153,6 +2153,26 @@ export function createWordPressCliProfile(
           });
       }
     },
+    async verifyAuto(state, input) {
+      const session = await openWordPressCampaignSession(options, state, {
+        configPath: input.configPath,
+        auto: true,
+      });
+      return verifyNextFinding({
+        ...(input.campaignId === undefined
+          ? {}
+          : { campaignId: input.campaignId }),
+        ...(input.findingId === undefined
+          ? {}
+          : { only: { findingId: input.findingId } }),
+        representativesOnly: input.next,
+        ledger: state.ledger,
+        newId: state.newId,
+        loadSnapshot: session.boundaries.loadSnapshot,
+        setupFor: session.setupFor,
+        verification: session.verification,
+      });
+    },
     restoreParked: (state, input) =>
       restoreParkedWordPressFinding({
         ledger: state.ledger,

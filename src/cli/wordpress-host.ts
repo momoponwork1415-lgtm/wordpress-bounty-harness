@@ -57,6 +57,7 @@ import {
   type WordPressSelectionPolicy,
 } from "../profiles/wordpress/selection/index.js";
 import { HandoffVerifier } from "../profiles/wordpress/verification/handoff-verifier.js";
+import { OneShotWordPressVerifier } from "../profiles/wordpress/verification/one-shot-verifier.js";
 import { createWordPressHttpEvidenceReader } from "../profiles/wordpress/verification/http-evidence.js";
 import { createWordPressStateDiffReader } from "../profiles/wordpress/verification/lab-state-diff.js";
 import { createWordPressVerifierRecordReader } from "../profiles/wordpress/verification/verifier-record.js";
@@ -472,6 +473,14 @@ export async function createWordPressHostProfile(options: {
           runWallTimeMinutes: config.runWallTimeMinutes,
           clock: state.clock,
         });
+    const oneShot = new CodexOneShotRuntime(
+      sandbox,
+      runtime.broker,
+      attachments,
+      host.images.codex,
+      wordPressLabCommandRule,
+      state.clock,
+    );
 
     // Selection needs the programme transcription; commands that never select do not.
     let selection: ReturnType<typeof createWordPressSelection> | undefined;
@@ -562,14 +571,7 @@ export async function createWordPressHostProfile(options: {
       runtimeProfile,
       probeRuntime: () => sandbox.probe(),
       executor: runtime,
-      oneShot: new CodexOneShotRuntime(
-        sandbox,
-        runtime.broker,
-        attachments,
-        host.images.codex,
-        wordPressLabCommandRule,
-        state.clock,
-      ),
+      oneShot,
       ...(claude === undefined ? {} : { claude }),
       attachments,
       // The Harness owns the records; the transport hands the Lab to a skill (#352).
@@ -622,6 +624,74 @@ export async function createWordPressHostProfile(options: {
             ...(restartObservation === undefined ? {} : { restartObservation }),
           }),
       }),
+      autoVerifier: {
+        attempt: ({
+          campaignId,
+          finding,
+          lab: handle,
+          record,
+          referenceRoute,
+          restartObservation,
+        }) =>
+          new WordPressVerifier({
+            transport: new OneShotWordPressVerifier({
+              oneShot,
+              profile: runtimeProfile,
+              handle,
+              lab,
+              sourceFor: async (digest) => {
+                const loaded = await snapshotStore.load(digest);
+                if (loaded.status !== "loaded")
+                  throw new SourceAcquisitionError("source-mismatch", {
+                    reason: "snapshot-artifact-unavailable",
+                    digest,
+                  });
+                const resolved = await sources.resolve(loaded.snapshot);
+                const pack = mountedWordPressSourcePack(resolved, {
+                  requireRuntimeSources: true,
+                });
+                return {
+                  directory: pack.target.directory,
+                  tree: pack.target.tree,
+                  dependency: pack.core!,
+                  dependencySources: pack.dependencies,
+                };
+              },
+              reviewExport: async () =>
+                canonicalJson(
+                  await exportReviewBundle({
+                    ledger: state.ledger,
+                    store: state.store,
+                    campaignId,
+                    findingId: finding.findingId,
+                    stateDiff: createWordPressStateDiffReader({
+                      store: state.store,
+                    }),
+                    httpEvidence: createWordPressHttpEvidenceReader({
+                      store: state.store,
+                    }),
+                    verifierRecord: createWordPressVerifierRecordReader({
+                      store: state.store,
+                    }),
+                    clock: state.clock,
+                  }),
+                ),
+              store: state.store,
+              clock: state.clock,
+            }),
+            store: state.store,
+            ledger: state.ledger,
+            lab,
+            clock: state.clock,
+          }).attempt({
+            campaignId,
+            finding,
+            lab: handle,
+            record,
+            ...(referenceRoute === undefined ? {} : { referenceRoute }),
+            ...(restartObservation === undefined ? {} : { restartObservation }),
+          }),
+      },
     };
   };
 

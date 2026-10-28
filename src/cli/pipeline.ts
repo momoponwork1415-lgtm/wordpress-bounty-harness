@@ -778,6 +778,8 @@ export async function verifyNextFinding<
    * rules could not, so parking, a `reject` and the retry budget do not apply.
    */
   readonly only?: { readonly findingId: string };
+  /** Automatic one-shot `--next` takes one representative; manual queue remains complete. */
+  readonly representativesOnly?: boolean;
   readonly ledger: Ledger;
   readonly newId: () => string;
   readonly loadSnapshot: (digest: string) => Promise<Snapshot>;
@@ -789,7 +791,8 @@ export async function verifyNextFinding<
   const scope =
     options.campaignId === undefined ? {} : { campaignId: options.campaignId };
   // #424: each overlap group's first Finding comes before the rest of its group; none is dropped.
-  const findings = readFindingGroups(options.ledger, scope).order(
+  const groups = readFindingGroups(options.ledger, scope);
+  const findings = groups.order(
     options.ledger.readAll({ ...scope, type: "finding-recorded" }),
     ({ event }) => event,
   );
@@ -814,6 +817,11 @@ export async function verifyNextFinding<
     if (
       event.type !== "finding-recorded" ||
       event.derivationKind === "fixed-version-control"
+    )
+      continue;
+    if (
+      options.representativesOnly &&
+      !groups.of(event.campaignId, event.findingId).representative
     )
       continue;
     if (

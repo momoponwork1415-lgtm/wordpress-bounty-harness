@@ -443,6 +443,8 @@ export interface WordPressCampaignBoundaries {
   readonly handoffVerifier?: (
     handoff: VerifierHandoff,
   ) => Verifier<WordPressFinding, WordPressLabHandle>;
+  /** `verify auto`: one-shot Codex in a fresh Lab, with the same recording pipeline. */
+  readonly autoVerifier?: Verifier<WordPressFinding, WordPressLabHandle>;
 }
 
 /**
@@ -586,11 +588,13 @@ function verificationFor(
   state: CliState,
   boundaries: WordPressCampaignBoundaries,
   handoff: VerifierHandoff | undefined,
+  auto: boolean,
 ): WordPressVerification {
   if (handoff !== undefined && boundaries.handoffVerifier === undefined)
     throw new Error("This profile has no handoff Verifier");
-  const verifier =
-    handoff === undefined
+  const verifier = auto
+    ? boundaries.autoVerifier
+    : handoff === undefined
       ? boundaries.verifier
       : boundaries.handoffVerifier!(handoff);
   if (verifier === undefined) throw new Error(LEGACY_VERIFIER_RETIRED);
@@ -609,7 +613,7 @@ function verificationFor(
     readFinding: readWordPressFinding,
     // The skill id is the prompt version of a handoff run; the ledger tells the two apart.
     promptVersion:
-      handoff === undefined
+      handoff === undefined && !auto
         ? WORDPRESS_VERIFIER_PROMPT_ID
         : WBH_VERIFY_SKILL_ID,
     // Whole-site before / after diff around the Verifier run; review material, not proof (#186).
@@ -649,6 +653,7 @@ export async function openWordPressCampaignSession(
     readonly selectionPolicyPath?: string;
     /** Verifies through the handoff transport instead of the Codex Verifier. */
     readonly handoff?: VerifierHandoff;
+    readonly auto?: true;
   },
 ): Promise<WordPressCampaignSession> {
   const parsed = await readWordPressCampaignConfig(input.configPath);
@@ -669,6 +674,7 @@ export async function openWordPressCampaignSession(
         state,
         boundaries,
         input.handoff,
+        input.auto === true,
       ));
     },
   };

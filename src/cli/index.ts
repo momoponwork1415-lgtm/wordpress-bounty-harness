@@ -263,6 +263,16 @@ export interface CliProfile {
       };
     },
   ): Promise<VerifyNextSummary | null>;
+  /** Runs one named Finding or the first group representative in a one-shot Lab. */
+  verifyAuto?(
+    state: CliState,
+    input: {
+      readonly configPath: string;
+      readonly campaignId?: string;
+      readonly findingId?: string;
+      readonly next: boolean;
+    },
+  ): Promise<VerifyNextSummary | null>;
   /** The target's newest public version, observed once; absent without a host. */
   latestVersion?(
     state: CliState,
@@ -1678,6 +1688,39 @@ const COMMANDS: readonly Command[] = [
       const summary = await environment.profile.reverify(state, input);
       io.stdout(
         `reverified finding ${values.finding} as ${summary.findingId} on ${summary.targetId} ${summary.version}  snapshot ${summary.snapshotDigest}  verification ${summary.verificationId}: ${summary.status}`,
+      );
+      return 0;
+    },
+  }),
+  command({
+    name: "verify auto",
+    required: ["config"],
+    usage: [
+      "verify auto --config <path> --campaign <id> --finding <id>",
+      "verify auto --config <path> --next [--campaign <id>]",
+    ],
+    options: { campaign: STR, config: STR, finding: STR, next: BOOL },
+    validate: (values) => {
+      if ((values.next === true) === (values.finding !== undefined))
+        throw new UsageError("pass exactly one of --finding or --next");
+      if (values.finding !== undefined && values.campaign === undefined)
+        throw new UsageError("--finding needs --campaign");
+    },
+    handler: async ({ values, state, environment, io }) => {
+      if (environment.profile.verifyAuto === undefined)
+        throw new Error("verify auto needs a one-shot verification profile");
+      const summary = await environment.profile.verifyAuto(state, {
+        configPath: resolve(required(values.config, "config")),
+        ...(values.campaign === undefined
+          ? {}
+          : { campaignId: values.campaign }),
+        ...(values.finding === undefined ? {} : { findingId: values.finding }),
+        next: values.next === true,
+      });
+      io.stdout(
+        summary === null
+          ? "no verification pending"
+          : `verified finding ${summary.findingId} as ${summary.verificationId}: ${summary.status}`,
       );
       return 0;
     },

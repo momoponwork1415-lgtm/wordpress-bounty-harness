@@ -37,6 +37,7 @@ import {
 } from "../../src/discovery/index.js";
 import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-source-tree.js";
 import { canonicalDigest } from "../../src/infrastructure/canonical-json.js";
+import { recordVerifierRun } from "../../src/verification/index.js";
 import {
   openWordPressOrgPluginDependencySource,
   type TargetIntakePacket,
@@ -848,6 +849,25 @@ async function harness(
         existsSync(join(root, "state", "sweep-holds", String(process.pid))),
       );
       return boundaries.verifier!;
+    },
+    autoVerifier: {
+      async attempt(input) {
+        const body = {
+          runId: `auto-${input.finding.findingId}`,
+          targetSnapshotDigest: input.finding.snapshotDigest,
+          terminal: "completed" as const,
+        };
+        await recordVerifierRun({
+          ledger: state.ledger,
+          store: state.store,
+          clock: state.clock,
+          campaignId: input.campaignId,
+          findingId: input.finding.findingId,
+          promptDigest: sha("a"),
+          receipt: { ...body, digest: canonicalDigest(body) },
+        });
+        return boundaries.verifier!.attempt(input);
+      },
     },
     verifier: {
       // A fresh-container Verifier; it hands back a recipe, never a verdict.
@@ -3008,6 +3028,51 @@ describe("harness CLI vertical slice", () => {
       promptVersion: "wbh-verify/v11",
       attempt: 2,
     });
+  });
+
+  it("verify auto runs one named Finding through the verification CLI (#651)", async () => {
+    const { run, configPath, ledger } = await harness({ entryPoints: true });
+    const campaign = "campaign-verify-auto";
+    expect(
+      (
+        await run(
+          "campaign",
+          "run",
+          "synthetic-plugin",
+          "--campaign",
+          campaign,
+          "--config",
+          configPath,
+        )
+      ).code,
+    ).toBe(0);
+    const finding = ledger().read({
+      campaignId: campaign,
+      type: "finding-recorded",
+    })[0];
+    expect(finding?.event.type).toBe("finding-recorded");
+    if (finding?.event.type !== "finding-recorded")
+      throw new Error("synthetic Finding missing");
+    const findingId = finding.event.findingId;
+
+    const result = await run(
+      "verify",
+      "auto",
+      "--config",
+      configPath,
+      "--campaign",
+      campaign,
+      "--finding",
+      findingId,
+    );
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain(`verified finding ${findingId}`);
+    expect(
+      ledger().read({ campaignId: campaign, type: "verifier-run-finished" }),
+    ).toHaveLength(1);
+    expect(
+      ledger().read({ campaignId: campaign, type: "verification-finished" }),
+    ).toHaveLength(1);
   });
 
   it("keeps a Finding rejected before verification out of verify next unless it is named (#436)", async () => {
