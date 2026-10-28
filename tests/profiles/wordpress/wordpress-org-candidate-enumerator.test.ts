@@ -9,13 +9,45 @@ function listing(slugs: readonly string[], date = now): Response {
   return new Response(
     JSON.stringify({
       info: { page: 1, pages: 1, results: slugs.length },
-      plugins: slugs.map((slug) => ({ slug })),
+      plugins: slugs.map((slug) => ({ slug, active_installs: 10_000 })),
     }),
     { status: 200, headers: { Date: new Date(date).toUTCString() } },
   );
 }
 
 describe("WordPress.org public candidate enumeration", () => {
+  it("reads beyond twenty popular pages until the install floor and exhausts each tag", async () => {
+    const result = await enumerateWordPressOrgCandidates({
+      tags: ["forms"],
+      minimumActiveInstallations: 10_000,
+      perPage: 1,
+      clock,
+      fetch: async (input) => {
+        const url = new URL(String(input));
+        const page = Number(url.searchParams.get("request[page]"));
+        const tag = url.searchParams.get("request[tag]") ?? "popular";
+        return new Response(
+          JSON.stringify({
+            info: { page, pages: 99, results: 99 },
+            plugins: [
+              {
+                slug: `${tag}-${page}`,
+                active_installs:
+                  page <= (tag === "popular" ? 21 : 2) ? 10_000 : 9_000,
+              },
+            ],
+          }),
+        );
+      },
+    });
+    expect(result.status).toBe("available");
+    expect(result.candidates).toHaveLength(23);
+    expect(result.candidates.some(({ slug }) => slug === "popular-21")).toBe(
+      true,
+    );
+    expect(result.listings).toHaveLength(25);
+  });
+
   it("queries popular and tag listings, deduplicates, and retains source and observation time", async () => {
     const requests: URL[] = [];
     const fetcher: typeof fetch = async (input) => {
@@ -27,10 +59,9 @@ describe("WordPress.org public candidate enumeration", () => {
     };
     const result = await enumerateWordPressOrgCandidates({
       tags: ["File Upload"],
-      popularPages: 1,
-      pagesPerTag: 1,
+
       perPage: 5,
-      maxCandidates: 10,
+
       clock,
       fetch: fetcher,
     });
@@ -62,39 +93,6 @@ describe("WordPress.org public candidate enumeration", () => {
     expect(requests[0]?.searchParams.get("request[browse]")).toBe("popular");
     expect(requests[1]?.searchParams.get("request[tag]")).toBe("file-upload");
     expect(requests[1]?.searchParams.get("request[per_page]")).toBe("5");
-  });
-
-  it("reads ten popular pages and one page per tag without the cap cutting them", async () => {
-    const fetcher: typeof fetch = async (input) => {
-      const url = new URL(String(input));
-      const page = url.searchParams.get("request[page]");
-      const tag = url.searchParams.get("request[tag]") ?? "popular";
-      const plugins = Array.from({ length: 50 }, (_, index) => ({
-        slug: `${tag}-${page}-${index}`,
-      }));
-      return new Response(
-        JSON.stringify({
-          info: { page: Number(page), pages: 20, results: 1000 },
-          plugins,
-        }),
-        { status: 200, headers: { Date: new Date(now).toUTCString() } },
-      );
-    };
-    const tags = ["forms", "backup"];
-    const result = await enumerateWordPressOrgCandidates({
-      tags,
-      popularPages: 10,
-      pagesPerTag: 1,
-      perPage: 50,
-      maxCandidates: 1000,
-      clock,
-      fetch: fetcher,
-    });
-    expect(result.listings).toHaveLength(12);
-    expect(result.candidates).toHaveLength(600);
-    expect(
-      result.candidates.filter((item) => item.sourceKind === "popular"),
-    ).toHaveLength(500);
   });
 
   it("never nominates a candidate from a stale listing", async () => {
@@ -147,25 +145,7 @@ describe("WordPress.org public candidate enumeration", () => {
     });
   });
 
-  it("draws from both listing types when the candidate cap is small", async () => {
-    const result = await enumerateWordPressOrgCandidates({
-      tags: ["login"],
-      maxCandidates: 2,
-      clock,
-      fetch: async (input) =>
-        String(input).includes("request%5Btag%5D")
-          ? listing(["tag-first", "tag-second"])
-          : listing(["popular-first", "popular-second"]),
-    });
-    expect(
-      result.candidates.map((item) => [item.slug, item.sourceKind]),
-    ).toEqual([
-      ["popular-first", "popular"],
-      ["tag-first", "tag"],
-    ]);
-  });
-
-  it("keeps valid candidates from a current source when another source fails", async () => {
+  it("reports an incomplete population when any listing fails", async () => {
     const result = await enumerateWordPressOrgCandidates({
       tags: ["login"],
       clock,
@@ -174,14 +154,34 @@ describe("WordPress.org public candidate enumeration", () => {
           ? listing(["login-plugin"])
           : new Response("rate limited", { status: 429 }),
     });
-    expect(result.status).toBe("available");
-    expect(result.candidates.map((item) => item.slug)).toEqual([
-      "login-plugin",
-    ]);
+    expect(result.status).toBe("unavailable");
+    expect(result.candidates).toEqual([]);
     expect(result.listings.map((item) => item.status)).toEqual([
       "unavailable",
       "available",
     ]);
+  });
+
+  it("does not silently truncate a population still above the upstream browse limit", async () => {
+    const result = await enumerateWordPressOrgCandidates({
+      clock,
+      perPage: 1,
+      fetch: async (input) => {
+        const page = Number(
+          new URL(String(input)).searchParams.get("request[page]"),
+        );
+        return new Response(
+          JSON.stringify({
+            info: { page, pages: 99 },
+            plugins: [{ slug: `item-${page}`, active_installs: 10_000 }],
+          }),
+        );
+      },
+    });
+    expect(result).toMatchObject({ status: "unavailable", candidates: [] });
+    expect(result.listings.at(-1)).toMatchObject({
+      reason: "pagination-limit",
+    });
   });
 
   it("rejects malformed listings and bounds request counts", async () => {
@@ -195,8 +195,8 @@ describe("WordPress.org public candidate enumeration", () => {
       listings: [{ status: "unavailable", reason: "invalid-response" }],
     });
     await expect(
-      enumerateWordPressOrgCandidates({ popularPages: 21 }),
-    ).rejects.toThrow("popularPages");
+      enumerateWordPressOrgCandidates({ minimumActiveInstallations: -1 }),
+    ).rejects.toThrow("minimumActiveInstallations");
     await expect(
       enumerateWordPressOrgCandidates({
         tags: Array.from({ length: 9 }, (_, i) => `tag-${i}`),

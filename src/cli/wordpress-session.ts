@@ -467,7 +467,6 @@ export type WordPressCliProfileOptions = {
   ) => Promise<Pick<WordPressCampaignBoundaries, "selection" | "freeze">>;
   readonly scopePolicy: WordpressScopePolicy;
   /** Git-outside legacy history JSON, read on every selection (D2). */
-  readonly legacyHistoryFile?: string;
   /** Overrides the scope facts read from recorded judge evidence and the selection record. */
   readonly scopeFacts?: ScopeFactsProvider<WordpressScopeInput>;
   /** Local Wordfence history mirror; absent, duplicate lookup is unavailable. */

@@ -1,19 +1,17 @@
 {
   "kind": "wordpress-selection-policy",
   "schemaVersion": 1,
-  "id": "wordpress-selection-2026-10-26",
+  "id": "wordpress-selection-2026-10-28",
   "promptVariant": "wp2shell-bounty-v11",
   "pluginDependencySlugs": {
     "unlimited-elements-for-elementor": ["elementor"]
   },
   "revisitPolicy": {
-    "kind": "version-increased",
-    "minimumDaysSinceTrial": 90
+    "kind": "version-increased"
   },
   "wordpressVersion": "7.1.3",
   "candidateSource": {
     "kind": "wordpress-org",
-    "popularPages": 10,
     "tags": [
       "forms",
       "contact-form",
@@ -24,21 +22,10 @@
       "backup",
       "booking"
     ],
-    "pagesPerTag": 1,
     "perPage": 50,
-    "maxCandidates": 1000,
     "maxAgeDays": 1
   },
-  "minimumActiveInstallations": 100000,
-  "maximumActiveInstallations": 1000000,
-  "cascade": [
-    { "minimumActiveInstallations": 50000 },
-    {
-      "minimumActiveInstallations": 1000000,
-      "maximumActiveInstallations": null,
-      "minimumPayingClassCount": 2
-    }
-  ],
+  "minimumActiveInstallations": 10000,
   "maximumObservationAgeDays": 2,
   "maximumUpdateAgeDays": 365,
   "maximumTargets": 5,
@@ -51,24 +38,5 @@
     "WooCommerce",
     "Yoast"
   ],
-  "excludedSlugs": [],
-  "scoreWeights": {
-    "installations": 0.5,
-    "recency": 0,
-    "history": 0,
-    "historyPayingClass": 1,
-    "recordRecency": 1
-  },
-  "historyWindowDays": 365,
-  "historyCountCap": 10,
-  "historyPayingClassCap": 3,
-  "maximumHistoryAgeDays": 2,
-  "historyPayingClasses": [
-    "stored-xss",
-    "sql-injection",
-    "privilege-escalation",
-    "authentication-bypass",
-    "arbitrary-file-upload",
-    "remote-code-execution"
-  ]
+  "excludedSlugs": []
 }

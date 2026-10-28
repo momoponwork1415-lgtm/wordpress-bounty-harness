@@ -86,47 +86,12 @@ export interface CliSelectionReport {
   readonly batchId: string | null;
   /** available, stale or unavailable public listings; manual for named slugs. */
   readonly sourceStatus?: string;
-  /** Whether the earlier generations' history took part in exclusion. */
-  readonly legacyHistory?:
-    | { readonly status: "unavailable" }
-    | {
-        readonly status: "available";
-        readonly digest: string;
-        readonly started: number;
-        readonly ambiguous: number;
-        readonly reconsider: number;
-      };
-  /** The public advisory mirror behind the history score: timestamp and digest, no record content (ADR 0037). */
-  readonly advisoryHistory?:
-    | { readonly status: "not-used" }
-    | {
-        readonly status: "used";
-        readonly asOf: string;
-        readonly digest: string;
-        readonly recordCount: number;
-        readonly lastRefreshFailed: boolean;
-        readonly windowDays: number;
-        readonly countCap: number;
-        readonly maximumAgeDays: number;
-      };
-  /** The policy's fallback band that produced this selection; absent for the primary band (ADR 0037 addendum). */
-  readonly cascadeStep?: number;
-  /** Eligible counts of the bands tried, step 0 being the primary band. */
-  readonly cascade?: readonly {
-    readonly step: number;
-    readonly eligible: number;
-  }[];
   readonly selected: readonly {
     readonly targetId: string;
     readonly version: string;
-    readonly score: number;
-    readonly scoreBreakdown: Readonly<Record<string, number | undefined>>;
-    readonly advisoryHistory?: {
-      readonly count: number;
-      readonly payingClassCount: number;
-      readonly latestPublished?: string | undefined;
-    };
-    readonly cascadeStep?: number;
+    readonly activeInstallations: number;
+    readonly versionPublishedAt?: string | undefined;
+    readonly reason: "initial" | "version-increased";
     readonly observedAt: string;
     readonly sourceUrl?: string;
   }[];
@@ -1126,44 +1091,9 @@ const COMMANDS: readonly Command[] = [
         configPath: resolve(required(values.config, "config")),
         ...(minimum === undefined ? {} : { minimum }),
       });
-      const legacy = report.legacyHistory;
-      if (legacy !== undefined)
-        io.stdout(
-          legacy.status === "unavailable"
-            ? "legacy history unavailable"
-            : `legacy history ${legacy.digest}  started ${legacy.started}  ambiguous ${legacy.ambiguous}  reconsider ${legacy.reconsider}`,
-        );
-      const advisory = report.advisoryHistory;
-      if (advisory !== undefined)
-        io.stdout(
-          advisory.status === "not-used"
-            ? "advisory history not used"
-            : `advisory history ${advisory.digest}  as of ${advisory.asOf}${advisory.lastRefreshFailed ? " (last refresh failed)" : ""}  records ${advisory.recordCount}  window ${advisory.windowDays} d  cap ${advisory.countCap}`,
-        );
-      if (report.cascade !== undefined && report.cascade.length > 1)
-        io.stdout(
-          `cascade ${report.cascade
-            .map(
-              ({ step, eligible }) =>
-                `step ${step} eligible ${eligible}${step === (report.cascadeStep ?? 0) ? " (selected)" : ""}`,
-            )
-            .join("; ")}`,
-        );
       for (const target of report.selected)
         io.stdout(
-          `${target.targetId} ${target.version} score ${target.score.toFixed(2)}  breakdown ${Object.entries(
-            target.scoreBreakdown,
-          )
-            .map(([part, points]) => `${part}=${(points ?? 0).toFixed(2)}`)
-            .join(" ")}${
-            target.advisoryHistory === undefined
-              ? ""
-              : `  history records ${target.advisoryHistory.count} paying ${target.advisoryHistory.payingClassCount} latest ${target.advisoryHistory.latestPublished ?? "none"}`
-          }${
-            target.cascadeStep === undefined
-              ? ""
-              : `  cascade step ${target.cascadeStep}`
-          }  observed ${target.observedAt}  source ${target.sourceUrl ?? "unavailable"}  excluded none`,
+          `${target.targetId} ${target.version} installs ${target.activeInstallations}  updated ${target.versionPublishedAt ?? "unavailable"}  ${target.reason}  observed ${target.observedAt}  source ${target.sourceUrl ?? "unavailable"}  excluded none`,
         );
       for (const target of report.excluded)
         io.stdout(

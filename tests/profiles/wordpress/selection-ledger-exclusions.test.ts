@@ -6,10 +6,7 @@ import {
   type LedgerReadAllQuery,
   type LedgerRecord,
 } from "../../../src/ledger/index.js";
-import {
-  inspectWordPressLedgerExclusions,
-  wordPressRevisitPolicySchema,
-} from "../../../src/profiles/wordpress/selection/ledger-exclusions.js";
+import { inspectWordPressLedgerExclusions } from "../../../src/profiles/wordpress/selection/ledger-exclusions.js";
 
 const digest = (letter: string): string => `sha256:${letter.repeat(64)}`;
 const occurredAt = "2026-10-11T12:00:00Z";
@@ -102,37 +99,6 @@ function trial(
   ];
 }
 
-function finding(
-  findingId: string,
-  campaignId = "campaign-1",
-  snapshotDigest = digest("a"),
-) {
-  return ledgerEventV1Schema.parse({
-    ...base(campaignId, snapshotDigest, `finding-${campaignId}-${findingId}`),
-    type: "finding-recorded",
-    findingId,
-    runId: "run-1",
-    category: "stored-xss",
-  });
-}
-
-function submitted(
-  findingId: string,
-  campaignId = "campaign-1",
-  snapshotDigest = digest("a"),
-) {
-  return ledgerEventV1Schema.parse({
-    ...base(
-      campaignId,
-      snapshotDigest,
-      `submission-${campaignId}-${findingId}`,
-    ),
-    type: "submission-recorded",
-    findingId,
-    candidateId: "candidate-1",
-  });
-}
-
 function reader(
   events: readonly ReturnType<typeof selected>[],
 ): Pick<Ledger, "readAll"> {
@@ -155,22 +121,52 @@ function reader(
 function inspect(
   ledger: Pick<Ledger, "readAll">,
   candidates: readonly { readonly slug: string; readonly version: string }[],
-  kind:
-    | "never"
-    | "version-increased"
-    | "prompt-version-changed"
-    | "version-or-prompt-changed" = "never",
-  currentPromptVariant = "wp2shell-bounty-v2",
 ) {
   return inspectWordPressLedgerExclusions({
     ledger,
     candidates,
-    revisitPolicy: { kind },
-    currentPromptVariant,
   });
 }
 
 describe("WordPress ledger exclusions", () => {
+  it.each(["enumerate", "trace", "child"] as const)(
+    "counts a partitioned enumerate Trial, without counting %s separately",
+    (runKind) => {
+      const events = trial("partitioned", "1.0.0").map((event) =>
+        event.type === "discovery-run-started" ? { ...event, runKind } : event,
+      );
+      expect(
+        inspect(reader(events), [{ slug: "partitioned", version: "1.0.0" }])[0]
+          ?.reasons,
+      ).toEqual(runKind === "enumerate" ? ["previously-selected"] : []);
+      const bootstrap = events.map((event) =>
+        event.type === "discovery-run-finished"
+          ? {
+              ...event,
+              observed: {
+                filesRead: 0,
+                toolCalls: 0,
+                uniqueFilesRead: 0,
+                labRequests: 0,
+                dbQueries: 0,
+              },
+              childThreadsObserved: 0,
+              brokerMetrics: {
+                forwardedRequests: 1,
+                requestLimitExceeded: 0,
+                unauthorizedRequests: 0,
+              },
+            }
+          : event,
+      );
+      expect(
+        inspect(reader(bootstrap), [
+          { slug: "partitioned", version: "1.0.0" },
+        ])[0]?.reasons,
+      ).toEqual([]);
+    },
+  );
+
   it("keeps untouched candidates and excludes the same slug in later selections", () => {
     const ledger = reader(trial("seen", "1.2.0"));
     expect(
@@ -179,206 +175,34 @@ describe("WordPress ledger exclusions", () => {
         { slug: "new", version: "1.0.0" },
       ]),
     ).toEqual([
-      { slug: "seen", version: "1.2.0", reasons: ["previously-selected"] },
-      { slug: "new", version: "1.0.0", reasons: [] },
+      {
+        slug: "seen",
+        version: "1.2.0",
+        reasons: ["previously-selected"],
+        reason: "version-increased",
+      },
+      { slug: "new", version: "1.0.0", reasons: [], reason: "initial" },
     ]);
   });
 
-  it("revisits only a genuinely higher plugin version when that policy is chosen", () => {
+  it("revisits only a higher plugin version", () => {
     const ledger = reader([
       ...trial("seen", "1.9.0", "campaign-1", digest("a")),
       ...trial("seen", "1.10.0", "campaign-2", digest("b")),
     ]);
-    expect(
-      inspect(
-        ledger,
-        [{ slug: "seen", version: "1.11.0" }],
-        "version-increased",
-      ),
-    ).toEqual([{ slug: "seen", version: "1.11.0", reasons: [] }]);
-    expect(
-      inspect(
-        ledger,
-        [{ slug: "seen", version: "1.10.0" }],
-        "version-increased",
-      )[0]?.reasons,
-    ).toEqual(["previously-selected"]);
-    expect(
-      inspect(
-        ledger,
-        [{ slug: "seen", version: "1.9.1" }],
-        "version-increased",
-      )[0]?.reasons,
-    ).toEqual(["previously-selected"]);
-  });
-
-  it("re-admits a higher version only after minimumDaysSinceTrial have passed since the latest Trial (ADR 0037 addendum)", () => {
-    // Trials started 2026-10-11T12:00Z (`occurredAt`).
-    const ledger = reader([
-      ...trial("seen", "1.9.0", "campaign-1", digest("a")),
-      ...trial("seen", "1.10.0", "campaign-2", digest("b")),
-    ]);
-    const at = (days: number) =>
-      new Date(Date.parse(occurredAt) + days * 86_400_000);
-    const rule = (version: string, now: Date) =>
-      inspectWordPressLedgerExclusions({
-        ledger,
-        candidates: [{ slug: "seen", version }],
-        revisitPolicy: { kind: "version-increased", minimumDaysSinceTrial: 90 },
-        currentPromptVariant: "wp2shell-bounty-v2",
-        now,
-      })[0]?.reasons;
-    // Same version: excluded however long ago.
-    expect(rule("1.10.0", at(400))).toEqual(["previously-selected"]);
-    // Higher version but only 30 days: excluded.
-    expect(rule("1.11.0", at(30))).toEqual(["previously-selected"]);
-    // Higher version and 89.9 days: still excluded; 90 days: admitted.
-    expect(rule("1.11.0", at(89.9))).toEqual(["previously-selected"]);
-    expect(rule("1.11.0", at(90))).toEqual([]);
-    expect(rule("1.11.0", at(400))).toEqual([]);
-    // Without the day gap, the version increase alone re-admits (the pre-addendum rule).
-    expect(
-      inspectWordPressLedgerExclusions({
-        ledger,
-        candidates: [{ slug: "seen", version: "1.11.0" }],
-        revisitPolicy: { kind: "version-increased" },
-        currentPromptVariant: "wp2shell-bounty-v2",
-        now: at(1),
-      })[0]?.reasons,
-    ).toEqual([]);
-    // An unpublished Finding keeps the slug out regardless.
-    expect(
-      inspectWordPressLedgerExclusions({
-        ledger: reader([
-          ...trial("seen", "1.9.0", "campaign-1", digest("a")),
-          finding("finding-1", "campaign-1", digest("a")),
-        ]),
-        candidates: [{ slug: "seen", version: "1.11.0" }],
-        revisitPolicy: { kind: "version-increased", minimumDaysSinceTrial: 90 },
-        currentPromptVariant: "wp2shell-bounty-v2",
-        now: at(400),
-      })[0]?.reasons,
-    ).toEqual(["unpublished-finding"]);
-    // Legacy-started slugs stay excluded; the rule reads only ledger Trials.
-    expect(
-      inspectWordPressLedgerExclusions({
-        ledger: reader([]),
-        candidates: [{ slug: "old", version: "9.0.0" }],
-        revisitPolicy: { kind: "version-increased", minimumDaysSinceTrial: 90 },
-        currentPromptVariant: "wp2shell-bounty-v2",
-        now: at(400),
-        legacyHistory: {
-          started: new Set(["old"]),
-          ambiguous: new Set<string>(),
-          reconsider: new Set<string>(),
-          exportedAt: "2026-10-12T00:00:00Z",
-          digest: digest("f"),
-        },
-      })[0]?.reasons,
-    ).toEqual(["legacy-started"]);
-    expect(
-      wordPressRevisitPolicySchema.safeParse({
-        kind: "never",
-        minimumDaysSinceTrial: 90,
-      }).success,
-    ).toBe(false);
-  });
-
-  it("keeps a Finding private even after a version increase", () => {
-    const ledger = reader([...trial("seen", "1.2.0"), finding("finding-1")]);
-    expect(
-      inspect(
-        ledger,
-        [{ slug: "seen", version: "1.3.0" }],
-        "version-increased",
-      )[0]?.reasons,
-    ).toEqual(["unpublished-finding"]);
-    expect(
-      inspect(ledger, [{ slug: "seen", version: "1.2.0" }])[0]?.reasons,
-    ).toEqual(["unpublished-finding", "previously-selected"]);
-  });
-
-  it("does not mistake a human submission for public disclosure", () => {
-    const ledger = reader([
-      selected("seen", "1.2.0"),
-      finding("finding-1"),
-      submitted("finding-1"),
+    expect(inspect(ledger, [{ slug: "seen", version: "1.11.0" }])).toEqual([
+      {
+        slug: "seen",
+        version: "1.11.0",
+        reasons: [],
+        reason: "version-increased",
+      },
     ]);
     expect(
-      inspect(
-        ledger,
-        [{ slug: "seen", version: "1.3.0" }],
-        "version-increased",
-      )[0]?.reasons,
-    ).toEqual(["unpublished-finding"]);
-  });
-
-  it("stops selection when a Finding has no WordPress target selection", () => {
-    const ledger = reader([finding("finding-without-selection")]);
-    expect(() =>
-      inspect(ledger, [{ slug: "unknown", version: "1.0.0" }]),
-    ).toThrow("a Finding has no matching WordPress target selection");
-  });
-
-  it("requires a known and changed prompt version for every earlier selection", () => {
-    const ledger = reader([
-      ...trial("seen", "1.2.0"),
-      ...trial(
-        "seen",
-        "1.3.0",
-        "campaign-2",
-        digest("b"),
-        "wp2shell-bounty-v3",
-      ),
-    ]);
-    expect(
-      inspect(
-        ledger,
-        [{ slug: "seen", version: "1.3.0" }],
-        "prompt-version-changed",
-        "wp2shell-bounty-v4",
-      )[0]?.reasons,
-    ).toEqual([]);
-    expect(
-      inspect(
-        ledger,
-        [{ slug: "seen", version: "1.3.0" }],
-        "prompt-version-changed",
-        "wp2shell-bounty-v2",
-      )[0]?.reasons,
+      inspect(ledger, [{ slug: "seen", version: "1.10.0" }])[0]?.reasons,
     ).toEqual(["previously-selected"]);
-  });
-
-  it("does not exclude a selection whose Trial never started", () => {
-    const reservation = ledgerEventV1Schema.parse({
-      ...base("campaign-1", digest("c"), "selection-reservation"),
-      type: "target-selected",
-      selectionId: "wporg:reserved@1.0.0",
-      promptVariant: "wp2shell-bounty-v2",
-    });
     expect(
-      inspect(reader([reservation]), [
-        { slug: "reserved", version: "1.0.0" },
-      ])[0]?.reasons,
-    ).toEqual([]);
-  });
-
-  it("uses either configured change without accepting equal or older versions", () => {
-    const ledger = reader([...trial("seen", "2.0.0")]);
-    expect(
-      inspect(
-        ledger,
-        [{ slug: "seen", version: "1.9.0" }],
-        "version-or-prompt-changed",
-        "wp2shell-bounty-v3",
-      )[0]?.reasons,
-    ).toEqual([]);
-    expect(
-      inspect(
-        ledger,
-        [{ slug: "seen", version: "2.0.0" }],
-        "version-or-prompt-changed",
-      )[0]?.reasons,
+      inspect(ledger, [{ slug: "seen", version: "1.9.1" }])[0]?.reasons,
     ).toEqual(["previously-selected"]);
   });
 
@@ -393,63 +217,6 @@ describe("WordPress ledger exclusions", () => {
     expect(
       inspect(ledger, [{ slug: "seen", version: "1.0.0" }])[0]?.reasons,
     ).toEqual(["previously-selected"]);
-  });
-
-  it("lets owner reconsider override legacy and earlier Trial exclusions", () => {
-    const legacyHistory = {
-      started: new Set(["old-started", "back"]),
-      ambiguous: new Set(["old-ambiguous", "held"]),
-      reconsider: new Set(["back", "held", "retried"]),
-      exportedAt: "2026-10-12T00:00:00Z",
-      digest: digest("f"),
-    };
-    const result = inspectWordPressLedgerExclusions({
-      ledger: reader(trial("retried", "1.0.0")),
-      candidates: [
-        "old-started",
-        "old-ambiguous",
-        "back",
-        "held",
-        "retried",
-        "new",
-      ].map((slug) => ({ slug, version: "1.0.0" })),
-      revisitPolicy: { kind: "never" },
-      currentPromptVariant: "wp2shell-bounty-v2",
-      legacyHistory,
-    });
-    expect(result.map(({ slug, reasons }) => [slug, reasons])).toEqual([
-      ["old-started", ["legacy-started"]],
-      ["old-ambiguous", ["legacy-ambiguous"]],
-      ["back", []],
-      ["held", []],
-      ["retried", []],
-      ["new", []],
-    ]);
-  });
-
-  it("counts a reconsidered slug's Trials that started after the legacy export", () => {
-    const legacyHistory = {
-      started: new Set(["retried"]),
-      ambiguous: new Set<string>(),
-      reconsider: new Set(["retried", "fresh"]),
-      // The export predates the recorded Trial (2026-10-11T12:00Z).
-      exportedAt: "2026-10-10T00:00:00Z",
-      digest: digest("f"),
-    };
-    const result = inspectWordPressLedgerExclusions({
-      ledger: reader(trial("retried", "1.0.0")),
-      candidates: ["retried", "fresh"].map((slug) => ({
-        slug,
-        version: "1.0.0",
-      })),
-      revisitPolicy: { kind: "never" },
-      currentPromptVariant: "wp2shell-bounty-v2",
-      legacyHistory,
-    });
-    expect(result.map(({ slug, reasons }) => [slug, reasons])).toEqual([
-      ["retried", ["previously-selected"]],
-      ["fresh", []],
-    ]);
   });
 
   it("excludes a version whose discovery Lab failed to provision until the version changes", () => {
@@ -467,8 +234,6 @@ describe("WordPress ledger exclusions", () => {
         { slug: "needs-elementor", version: "1.0.1" },
         { slug: "other", version: "1.0.0" },
       ],
-      revisitPolicy: { kind: "never" },
-      currentPromptVariant: "wp2shell-bounty-v2",
     });
     expect(
       result.map(({ slug, version, reasons }) => [slug, version, reasons]),
@@ -516,8 +281,6 @@ describe("WordPress ledger exclusions", () => {
         { slug: "bad-archive", version: "1.0.1" },
         { slug: "recovered", version: "1.0.0" },
       ],
-      revisitPolicy: { kind: "never" },
-      currentPromptVariant: "wp2shell-bounty-v2",
     });
     expect(
       result.map(({ slug, version, reasons }) => [slug, version, reasons]),
@@ -548,8 +311,6 @@ describe("WordPress ledger exclusions", () => {
           { slug: "held-b", version: "2.0.1" },
           { slug: "free", version: "1.0.0" },
         ],
-        revisitPolicy: { kind: "never" },
-        currentPromptVariant: "wp2shell-bounty-v2",
         ...(reservedBatches === undefined ? {} : { reservedBatches }),
       }).map(({ slug, reasons }) => [slug, reasons]);
     expect(inspect(new Set(["selection-1"]))).toEqual([
@@ -671,25 +432,5 @@ describe("WordPress ledger exclusions", () => {
     expect(
       inspect(ledger, [{ slug: "child-only", version: "1.0.0" }])[0]?.reasons,
     ).toEqual([]);
-  });
-
-  it("never revisits a started slug, even on a higher version", () => {
-    expect(
-      inspect(reader(trial("seen", "1.0.0")), [
-        { slug: "seen", version: "9.0.0" },
-      ])[0]?.reasons,
-    ).toEqual(["previously-selected"]);
-  });
-
-  it("rejects invalid revisit policy combinations at the schema boundary", () => {
-    expect(
-      wordPressRevisitPolicySchema.safeParse({ kind: "never" }).success,
-    ).toBe(true);
-    expect(
-      wordPressRevisitPolicySchema.safeParse({
-        kind: "never",
-        currentPromptVariant: "v3",
-      }).success,
-    ).toBe(false);
   });
 });
