@@ -744,6 +744,48 @@ describe("partitioned Trial executor (ADR 0042)", () => {
     );
   });
 
+  it("retains every enumerator send-back's complete JSON output through its finish event", async () => {
+    const firstNotes = '{"round":"first"}';
+    const secondNotes = '{"round":"second"}';
+    const { events, evidence } = await fixture({
+      limits: { maxEntriesPerPartition: 1 },
+      script: (run, _attempt, helpers) =>
+        run.output === "files"
+          ? helpers.files(run, {
+              [ENUMERATION_OUTPUT_FILES.inventory]: inventory,
+              [ENUMERATION_OUTPUT_FILES.partitions]:
+                run.inputFiles.length === 0 ? proposal : threeProposal,
+              "research-notes.json":
+                run.inputFiles.length === 0 ? firstNotes : secondNotes,
+            })
+          : helpers.report(run, `claim of ${run.runId}`),
+    });
+    for (const [runId, partitions, notes] of [
+      ["trial-1", proposal, firstNotes],
+      ["trial-1-r1", threeProposal, secondNotes],
+    ] as const) {
+      const finish = events.find(
+        (event) =>
+          event.type === "discovery-run-finished" && event.runId === runId,
+      );
+      if (finish?.type !== "discovery-run-finished")
+        throw new Error(`Missing finish for ${runId}`);
+      const output = finish.artifacts.find(
+        (artifact) => artifact.kind === "enumeration-output",
+      );
+      expect(output).toBeDefined();
+      for (const [name, content] of [
+        [ENUMERATION_OUTPUT_FILES.inventory, JSON.stringify(inventory)],
+        [ENUMERATION_OUTPUT_FILES.partitions, JSON.stringify(partitions)],
+        ["research-notes.json", notes],
+      ] as const) {
+        const stored = await evidence.readFile(output!.digest, name, 4096);
+        if (stored.status !== "resolved") throw new Error(stored.status);
+        expect(stored.bytes.toString("utf8")).toBe(content);
+      }
+    }
+  });
+
   it("ends the Trial incomplete once the send-backs are exhausted, with the last rejection's reasons", async () => {
     const { result, events, calls, ledger } = await fixture({
       limits: { maxResubmits: 1 },

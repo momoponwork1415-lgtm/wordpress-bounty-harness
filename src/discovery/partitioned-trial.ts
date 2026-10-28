@@ -216,6 +216,8 @@ type RoleOutcome = {
   readonly receipt?: NativeRunReceipt;
   readonly receiptDigest?: string;
   readonly readPathsDigest?: string;
+  /** Complete JSON output from a file-producing role, sealed before its finish. */
+  readonly outputDigest?: string;
   /** The message of a Harness-side throw after the run, in Private Evidence. */
   readonly errorDigest?: string;
   readonly result?: OneShotResult;
@@ -371,6 +373,14 @@ async function runRole(
       );
       if (readPathsDigest !== undefined)
         draft.readPathsDigest = readPathsDigest;
+      if (run.output === "files" && result.outputFiles?.length) {
+        stage = "output";
+        draft.outputDigest = await context.evidence.putFiles(
+          Object.fromEntries(
+            result.outputFiles.map((file) => [file.name, file.content]),
+          ),
+        );
+      }
       if (
         receipt.runId !== run.runId ||
         receipt.targetSnapshotDigest !== input.snapshotDigest ||
@@ -445,6 +455,9 @@ async function runRole(
     ...event,
     artifacts: [
       ...(event.artifacts ?? []),
+      ...(outcome.outputDigest === undefined
+        ? []
+        : [{ kind: "enumeration-output", digest: outcome.outputDigest }]),
       ...(outcome.errorDigest === undefined
         ? []
         : [{ kind: ROLE_RUN_ERROR_ARTIFACT, digest: outcome.errorDigest }]),
@@ -711,19 +724,6 @@ async function enumerate(
       ...(validation?.status === "rejected" ? validation.rejections : []),
     ];
     // The rows themselves stay in Private Evidence (invariant 8).
-    const present = Object.fromEntries(
-      files
-        .filter((file) =>
-          Object.values(ENUMERATION_OUTPUT_FILES).some(
-            (name) => name === file.name,
-          ),
-        )
-        .map((file) => [file.name, file.content]),
-    );
-    const outputDigest =
-      Object.keys(present).length === 0
-        ? undefined
-        : await context.evidence.putFiles(present);
     // Counts are observed from the inventory even when no proposal arrived.
     const inventory =
       validation?.inventory ??
@@ -798,9 +798,9 @@ async function enumerate(
       toolsDigest: plan.toolsDigest,
       rowSource: plan.rowSource,
       artifacts:
-        outputDigest === undefined
+        run.outputDigest === undefined
           ? []
-          : [{ kind: "enumeration-output", digest: outputDigest }],
+          : [{ kind: "enumeration-output", digest: run.outputDigest }],
     });
     if (recorded.status === "conflict")
       throw new Error("Enumeration record identity conflict");
