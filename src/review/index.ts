@@ -442,6 +442,15 @@ export class Review<TFacts = unknown> {
     ))
       if (inCampaign(event)) parkedEvents.set(key(event), event);
     const parked = new Set(parkedEvents.keys());
+    const externallySubmitted = new Set(
+      this.#ledger
+        .readAll({ type: "submission-recorded-externally" })
+        .flatMap(({ event }) =>
+          event.type === "submission-recorded-externally" && inCampaign(event)
+            ? [`${key(event)}\u0000${event.snapshotDigest}`]
+            : [],
+        ),
+    );
     const latestPreconditionClass = new Map<string, string>();
     for (const { event } of this.#ledger.readAll({
       type: "finding-precondition-classified",
@@ -476,6 +485,12 @@ export class Review<TFacts = unknown> {
       if (finding.type !== "finding-recorded" || !inCampaign(finding)) continue;
       if (finding.derivationKind === "fixed-version-control") continue;
       if (parked.has(key(finding))) continue;
+      if (
+        externallySubmitted.has(
+          `${key(finding)}\u0000${finding.snapshotDigest}`,
+        )
+      )
+        continue;
       const classification =
         latestPreconditionClass.get(key(finding)) ??
         finding.preconditionClass ??
@@ -1288,6 +1303,43 @@ export class Review<TFacts = unknown> {
     });
     if (appended.status === "conflict")
       throw new Error("Submission ledger conflict");
+  }
+
+  /** Records a completed submission outside Harness; it grants no authorization. */
+  async recordExternalSubmission(input: {
+    readonly campaignId: string;
+    readonly findingId: string;
+    readonly destination: string;
+    readonly submittedOn: string;
+    readonly recordedBy: string;
+  }): Promise<void> {
+    const record = {
+      campaignId: id.parse(input.campaignId),
+      findingId: id.parse(input.findingId),
+      destination: id.parse(input.destination),
+      submittedOn: z.iso.date().parse(input.submittedOn),
+      recordedBy: id.parse(input.recordedBy),
+    };
+    const finding = this.#ledger
+      .read({
+        campaignId: record.campaignId,
+        findingId: record.findingId,
+        type: "finding-recorded",
+        limit: 1,
+      })
+      .at(0)?.event;
+    if (finding?.type !== "finding-recorded")
+      throw new Error("The finding is not recorded in this campaign");
+    const appended = await this.#ledger.append({
+      schemaVersion: 1,
+      identity: `external-submission:${canonicalDigest(record)}`,
+      ...record,
+      snapshotDigest: finding.snapshotDigest,
+      occurredAt: this.#clock().toISOString(),
+      type: "submission-recorded-externally",
+    });
+    if (appended.status === "conflict")
+      throw new Error("External submission ledger conflict");
   }
 
   async recordOutcome(input: {

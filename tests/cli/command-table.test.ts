@@ -34,6 +34,7 @@ const PINNED_USAGE = [
   "  review draft --campaign <id> --finding <id> --programme <id> --file <path> [--prepared-by human|ai]",
   "  review authorize --candidate <id> --draft <digest> --to <destination> --by <name>",
   "  review submitted --candidate <id> --draft <digest> --to <destination>",
+  "  review submitted --external --campaign <id> --finding <id> --to <destination> --on <date> --by <who>",
   "  review outcome --candidate <id> --outcome triaged|resolved|duplicate|informative|not-applicable|rejected [--reward <usd>]",
   "  ledger funnel --campaign <id> | --since <ISO>",
   "  ledger stops [--campaign <id>] [--since <ISO>]",

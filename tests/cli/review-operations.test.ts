@@ -307,6 +307,77 @@ describe("review operations on recorded history", () => {
     );
   });
 
+  it("records an external submission without a draft and removes it from the review queue (#601)", async () => {
+    const { run, ledger, findings, snapshotDigest } = await recordedReviewState(
+      {
+        verified: false,
+        askMinutes: async () => {
+          throw new Error(
+            "Recording external history must not prompt for effort",
+          );
+        },
+      },
+    );
+    const findingId = findings.accountTakeover.findingId;
+    const target = ["--campaign", "campaign-1", "--finding", findingId];
+    expect((await run("review", "--campaign", "campaign-1")).stdout).toContain(
+      findingId,
+    );
+    const args = [
+      "review",
+      "submitted",
+      "--external",
+      ...target,
+      "--to",
+      "wordfence",
+      "--on",
+      "2026-10-07",
+      "--by",
+      "operator",
+    ];
+    const recorded = await run(...args);
+    expect(recorded).toEqual({
+      code: 0,
+      stdout: "external submission recorded; Harness sends nothing",
+      stderr: "",
+    });
+    expect((await run(...args)).code).toBe(0);
+    const receipts = ledger
+      .readAll({ campaignId: "campaign-1" })
+      .filter(({ event }) => event.type === "submission-recorded-externally");
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]!.event).toMatchObject({
+      type: "submission-recorded-externally",
+      findingId,
+      snapshotDigest,
+      destination: "wordfence",
+      submittedOn: "2026-10-07",
+      recordedBy: "operator",
+      artifacts: [],
+    });
+    const queue = await run("review", "--campaign", "campaign-1");
+    expect(queue.stdout).not.toContain(findingId);
+    expect(queue.stdout).toContain(findings.sqli.findingId);
+    const funnel = await run("ledger", "funnel", "--campaign", "campaign-1");
+    expect(funnel.stdout).toContain(
+      "reviewed 0 → in-scope 0 → submitted 1 (external 1) → outcome 0",
+    );
+    const exported = await run("review", "export", ...target);
+    expect(exported.code).toBe(0);
+    expect(
+      reviewExportV1Schema.parse(JSON.parse(exported.stdout)).review,
+    ).toMatchObject({
+      externalSubmissions: [
+        {
+          destination: "wordfence",
+          submittedOn: "2026-10-07",
+          recordedBy: "operator",
+        },
+      ],
+      latestDraft: null,
+    });
+  });
+
   it("records scope, a draft, its authorization, the human submission and the outcome as ledger events", async () => {
     const { run, root, ledger, findings } = await recordedReviewState({
       scopeFacts: {

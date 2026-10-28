@@ -656,6 +656,14 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     candidateId: id,
   }),
   event({
+    /** A historical submission outside Harness, not an authorization or verdict. */
+    type: z.literal("submission-recorded-externally"),
+    findingId: id,
+    destination: id,
+    submittedOn: z.iso.date(),
+    recordedBy: id,
+  }),
+  event({
     type: z.literal("submission-outcome"),
     candidateId: id,
     outcome: z.enum([
@@ -970,6 +978,7 @@ export type FunnelCounts = {
   readonly reviewed: number;
   readonly inScope: number;
   readonly submitted: number;
+  readonly submittedExternally: number;
   readonly outcome: number;
 };
 const usageFields = [
@@ -1147,6 +1156,7 @@ function emptyCounts(): Counts {
     reviewed: 0,
     inScope: 0,
     submitted: 0,
+    submittedExternally: 0,
     outcome: 0,
   };
 }
@@ -1827,6 +1837,7 @@ export class Ledger {
     const reviews = new Set<string>();
     const scopes = new Map<string, Map<string, string>>();
     const submissions = new Map<string, string>();
+    const externalSubmissions = new Map<string, string>();
     const submittedFindingsByCandidate = new Map<string, string>();
     const outcomes = new Set<string>();
     const latestOutcome = new Map<
@@ -1987,6 +1998,9 @@ export class Ledger {
             current.findingId,
           );
           break;
+        case "submission-recorded-externally":
+          externalSubmissions.set(current.findingId, current.snapshotDigest);
+          break;
         case "submission-outcome":
           outcomes.add(current.candidateId);
           latestOutcome.set(current.candidateId, current);
@@ -2087,6 +2101,12 @@ export class Ledger {
       for (const count of [totals, category, objective(finding.runId)]) {
         count.accepted++;
         count.raw++;
+        const external =
+          externalSubmissions.get(finding.findingId) === finding.snapshotDigest;
+        if (external) {
+          count.submitted++;
+          count.submittedExternally++;
+        }
         const verification = verifications.get(finding.findingId);
         if (verification === undefined) continue;
         count.verified++;
@@ -2105,7 +2125,7 @@ export class Ledger {
         count.inScope++;
         const candidateId = submissions.get(finding.findingId);
         if (candidateId === undefined) continue;
-        count.submitted++;
+        if (!external) count.submitted++;
         if (outcomes.has(candidateId)) count.outcome++;
       }
     }
@@ -2271,13 +2291,21 @@ export class Ledger {
         : comparable.filter((value) => value === "match").length /
             comparable.length;
     };
+    const submittedFindingIds = [
+      ...submittedFindingsByCandidate.values(),
+      ...[...externalSubmissions]
+        .filter(
+          ([findingId, snapshotDigest]) =>
+            !submissions.has(findingId) &&
+            findings.get(findingId)?.snapshotDigest === snapshotDigest,
+        )
+        .map(([findingId]) => findingId),
+    ];
     const humanByCategory = Object.fromEntries(
       Object.keys(byCategory).map((category) => {
         const inCategory = (findingId: string) =>
           findings.get(findingId)?.category === category;
-        const submissionCount = [
-          ...submittedFindingsByCandidate.values(),
-        ].filter(inCategory).length;
+        const submissionCount = submittedFindingIds.filter(inCategory).length;
         const minutes = events.reduce(
           (sum, event) =>
             event.type === "human-effort-recorded" &&
@@ -2338,18 +2366,17 @@ export class Ledger {
       outcomesByKind,
       rewardUsd,
       ownerMinutesPerSubmission:
-        submittedFindingsByCandidate.size === 0 ||
-        humanEffortEvents.length === 0
+        submittedFindingIds.length === 0 || humanEffortEvents.length === 0
           ? null
           : Object.values(humanMinutesByAction).reduce(
               (sum, minutes) => sum + minutes,
               0,
-            ) / submittedFindingsByCandidate.size,
+            ) / submittedFindingIds.length,
       openedFindingsPerSubmission:
-        submittedFindingsByCandidate.size === 0 ||
+        submittedFindingIds.length === 0 ||
         !humanEffortEvents.some((event) => event.action === "read")
           ? null
-          : openedFindings.size / submittedFindingsByCandidate.size,
+          : openedFindings.size / submittedFindingIds.length,
       manualReproductionAgreement: agreement([...manualReproductions.values()]),
       humanMinutesByAction,
       humanByCategory,

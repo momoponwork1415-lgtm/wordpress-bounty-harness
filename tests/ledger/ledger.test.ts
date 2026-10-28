@@ -1299,6 +1299,7 @@ describe("Ledger public interface", () => {
           reviewed: 3,
           inScope: 1,
           submitted: 1,
+          submittedExternally: 0,
           outcome: 1,
           noncachedInputTokens: 0,
           unavailableInputRuns: 1,
@@ -1321,6 +1322,7 @@ describe("Ledger public interface", () => {
           reviewed: 0,
           inScope: 0,
           submitted: 0,
+          submittedExternally: 0,
           outcome: 0,
           noncachedInputTokens: 0,
           unavailableInputRuns: 0,
@@ -1347,6 +1349,7 @@ describe("Ledger public interface", () => {
         },
       },
       submitted: 1,
+      submittedExternally: 0,
       outcome: 1,
       byCategory: {
         injection: {
@@ -1363,6 +1366,7 @@ describe("Ledger public interface", () => {
           reviewed: 1,
           inScope: 1,
           submitted: 1,
+          submittedExternally: 0,
           outcome: 1,
         },
         "access-control": {
@@ -1379,6 +1383,7 @@ describe("Ledger public interface", () => {
           reviewed: 2,
           inScope: 0,
           submitted: 0,
+          submittedExternally: 0,
           outcome: 0,
         },
       },

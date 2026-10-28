@@ -240,3 +240,5 @@ v16-wide（42 Trial、Finding 0.3/Trial）と v17-wide（36 Trial、0）はど�
 - schema の 3 つの欄、`declared-precondition` の park、`review restore`、`review export` の出力は消さない。申告の無い Finding は park しないので、新しい Finding にこの park は当たらない。偽陽性は段 1b の `wbh-source-check`（追記 14）で落とす。
 - 測り方: 本番の次の 20 Codex Trial で Finding/Trial と「Finding が 1 件以上出た Trial の割合」を見る。v4 の 10-26 の水準（3.6/Trial、16/21）に戻れば契約が原因。戻らなければ子の上限 8 を 4 に戻して同じ 20 Trial を見る。
 - 消し方: 3 行の契約を v5 に戻す。schema と park は残っているので、それだけで欄が渡る。
+
+- 2026-10-28 追記（#601）: `review submitted --external` は Harness 外で済んだ提出を Finding 参照・提出先・提出日・記録者だけの `submission-recorded-externally` として追記し、レビュー列から外して funnel の台帳外内訳と export に出すが、Harness 経由の提出の承認条件は変えず、外部送信も行わない。
