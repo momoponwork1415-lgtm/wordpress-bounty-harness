@@ -16,7 +16,7 @@ type FindingRef = {
 
 /** One Finding's place in its group, derived from the ledger when read. */
 export type FindingGroup = {
-  /** The findingId of the group's first-recorded Finding. */
+  /** A digest of the first-recorded Finding's campaignId and findingId. */
   readonly id: string;
   readonly size: number;
   readonly representative: boolean;
@@ -55,6 +55,12 @@ export function overlapComponents(
 
 const refOf = ({ campaignId, findingId }: FindingRef) =>
   `${campaignId}\u0000${findingId}`;
+
+/** Public read-time reference; a findingId can recur in another campaign. */
+const publicGroupId = (ref: {
+  readonly campaignId: string;
+  readonly findingId: string;
+}) => canonicalDigest([ref.campaignId, ref.findingId]);
 
 /** Findings outside the review and verification queues join no group. */
 function groupedFindings(ledger: Ledger, campaignId?: string) {
@@ -101,8 +107,10 @@ export function admitFindingGroup(
       event.findingId === finding.findingId,
   );
   const earlier = own === -1 ? recorded : recorded.slice(0, own);
+  // A legacy cache projects old events for reading only; it cannot change a
+  // new event's admission identity when a cache is added or removed later.
   const root = overlapComponents(
-    [...earlier.map((event) => ledger.findingGroupKeyDigests(event)), keys].map(
+    [...earlier.map((event) => event.group?.keys ?? []), keys].map(
       (itemKeys) => ({ scope: "", keys: itemKeys }),
     ),
   ).at(-1)!;
@@ -143,17 +151,25 @@ export function readFindingGroups(
       }
       return [...matched]
         .sort((left, right) => left - right)
-        .map((root) => findings[root]!.findingId);
+        .map((root) => publicGroupId(findings[root]!));
     },
     /** A Finding outside every group (parked, a fixed-version control, unknown) is its own group. */
     of(campaignId: string, findingId: string): FindingGroup {
       if (input.campaignId !== undefined && campaignId !== input.campaignId)
-        return { id: findingId, size: 1, representative: true };
+        return {
+          id: publicGroupId({ campaignId, findingId }),
+          size: 1,
+          representative: true,
+        };
       const index = indexOf({ campaignId, findingId });
       if (index === undefined)
-        return { id: findingId, size: 1, representative: true };
+        return {
+          id: publicGroupId({ campaignId, findingId }),
+          size: 1,
+          representative: true,
+        };
       const root = roots[index]!;
-      const { findingId: id } = findings[root]!;
+      const id = publicGroupId(findings[root]!);
       return { id, size: sizes.get(root)!, representative: root === index };
     },
     /** Representatives first in recorded order, then each group's other Findings, group by group. */

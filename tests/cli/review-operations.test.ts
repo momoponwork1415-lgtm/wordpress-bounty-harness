@@ -180,7 +180,9 @@ describe("review operations on recorded history", () => {
     const listed = await run("review", "leads", "--campaign", "campaign-leads");
     expect(listed.code).toBe(0);
     expect(listed.stdout).toContain("lead-matched");
-    expect(listed.stdout).toContain("groups group-one,group-two");
+    expect(listed.stdout).toContain(
+      `groups ${canonicalDigest(["earlier-campaign", "group-one"])},${canonicalDigest(["campaign-leads", "group-two"])}`,
+    );
     expect(listed.stdout).toContain("lead-unmatched");
     expect(listed.stdout).toContain("groups none");
   });
@@ -219,7 +221,9 @@ describe("review operations on recorded history", () => {
     expect(first).toBeGreaterThanOrEqual(0);
     expect(other).toBeGreaterThan(first);
     expect(later).toBeGreaterThan(other);
-    expect(listed.stdout).toContain("group cross-first  2 finding(s)");
+    expect(listed.stdout).toContain(
+      `group ${canonicalDigest(["first-campaign", "cross-first"])}  2 finding(s)`,
+    );
     const scoped = await run("review", "--campaign", "second-campaign");
     expect(scoped.stdout).toContain("finding cross-later");
     expect(scoped.stdout).toContain("finding cross-other");
