@@ -177,6 +177,9 @@ type ReservedSelectionBatch = {
   readonly selections: readonly ReservedSelection[];
 };
 
+/** A bounded read for the selection queue's report, including large inspected pools. */
+const MAX_SELECTION_REPORT_BYTES = 8 * 1024 * 1024;
+
 /** The most recent complete batch with this exact policy feeds campaign run. */
 async function reservedSelectionBatch(
   state: CliState,
@@ -220,8 +223,12 @@ async function reservedSelectionBatch(
     const file = await state.store.readFile(
       reportRef.digest,
       "selection-report.json",
-      2 * 1024 * 1024,
+      MAX_SELECTION_REPORT_BYTES,
     );
+    if (file.status === "size-limit-exceeded")
+      throw new Error(
+        `Reserved selection report exceeds ${MAX_SELECTION_REPORT_BYTES} bytes`,
+      );
     if (file.status !== "resolved")
       throw new Error("Reserved selection report is unavailable");
     const report = batchSchema.parse(JSON.parse(file.bytes.toString("utf8")));
@@ -384,7 +391,7 @@ async function discardStaleSelectionBatch(
     const file = await state.store.readFile(
       reportRef.digest,
       "selection-report.json",
-      2 * 1024 * 1024,
+      MAX_SELECTION_REPORT_BYTES,
     );
     // An unreadable report is left to the campaign's own error.
     if (file.status !== "resolved") return null;
