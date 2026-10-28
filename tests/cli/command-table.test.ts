@@ -23,6 +23,7 @@ const PINNED_USAGE = [
   "  review [--campaign <id>]",
   "  review parked --campaign <id>",
   "  review restore --campaign <id> --finding <id> --reason <text> [--by <name>]",
+  "  review group-cache --output <file>",
   "  review leads --campaign <id>",
   "  review export --campaign <id> --finding <id> [--version 2]",
   "  review observe --campaign <id> --finding <id> --receipt <digest> --result match|mismatch|unavailable --evidence <path> --by <human> [--ordinary-site yes|no --ordinary-site-reason <text>]",

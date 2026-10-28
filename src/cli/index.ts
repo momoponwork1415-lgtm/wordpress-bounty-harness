@@ -1,11 +1,13 @@
 import { z } from "zod";
 
-import { lstat, readFile } from "node:fs/promises";
+import { lstat, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 import { summarizeRecordedRuntimes } from "../discovery/index.js";
 import { canonicalJson } from "../infrastructure/canonical-json.js";
+import { serializeFindingGroupKeyCache } from "../ledger/finding-group-key-cache.js";
+import { readFindingGroups } from "../ledger/finding-groups.js";
 import {
   type CampaignFunnel,
   type ResumeRow,
@@ -129,6 +131,12 @@ export type ResumeCampaignRunSummary =
 /** A profile composition: everything target-specific the commands need. */
 export interface CliProfile {
   review(state: CliState): Review;
+  /** One-time, profile-owned derivation of pre-group Finding keys. */
+  deriveLegacyFindingGroupKeyCache?(
+    state: CliState,
+  ): Promise<ReadonlyMap<string, readonly string[]>>;
+  /** Profile-owned, digest-only keys derived from a stored Lead. */
+  leadGroupKeyDigests?(lead: unknown): readonly string[];
   /** A profile may provide a fresh, foreground Lab for human reproduction. */
   reviewLab?(
     state: CliState,
@@ -378,6 +386,8 @@ interface ReviewSignalSource {
 
 export type CliEnvironment = {
   readonly stateDirectory: string;
+  /** Optional digest-only projection for pre-group Finding events (#653). */
+  readonly findingGroupKeyCachePath?: string;
   readonly profile: CliProfile;
   readonly clock?: () => Date;
   readonly newId?: () => string;
@@ -524,6 +534,7 @@ export function formatFunnel(funnel: CampaignFunnel): string[] {
       ? `by Lab: attached runs ${funnel.byLab.attached.runs} findings ${funnel.byLab.attached.findings} confirmed ${funnel.byLab.attached.confirmed}; none runs ${funnel.byLab.none.runs} findings ${funnel.byLab.none.findings} confirmed ${funnel.byLab.none.confirmed}; ${labFailures}`
       : labFailures,
     stages(funnel),
+    `unkeyed findings ${funnel.unkeyedFindings}`,
     `noncache input ${funnel.noncachedInputTokens} token(s) (${funnel.unavailableInputRuns} run(s) unavailable)  confirmed / 1M tokens ${rate(funnel.confirmedPerMillionInputTokens)}  confirmed / agent wall hour ${rate(funnel.confirmedPerAgentWallHour)}`,
     `owner minutes / submission ${rate(funnel.ownerMinutesPerSubmission)}  opened findings / submission ${rate(funnel.openedFindingsPerSubmission)}  manual reproduction agreement ${funnel.manualReproductionAgreement === null ? "unavailable" : `${(funnel.manualReproductionAgreement * 100).toFixed(1)}%`}`,
   ];
@@ -1291,12 +1302,32 @@ const COMMANDS: readonly Command[] = [
     },
   }),
   command({
+    name: "review group-cache",
+    readOnly: true,
+    required: ["output"],
+    usage: ["review group-cache --output <file>"],
+    options: { output: STR },
+    handler: async ({ values, state, environment, print }) => {
+      const derive = environment.profile.deriveLegacyFindingGroupKeyCache;
+      if (derive === undefined)
+        throw new UsageError("This profile has no legacy Finding group keys");
+      const cache = await derive(state);
+      const output = required(values.output, "output");
+      await writeFile(output, serializeFindingGroupKeyCache(cache), {
+        flag: "wx",
+        mode: 0o600,
+      });
+      print([`wrote ${cache.size} legacy Finding key entries to ${output}`]);
+      return 0;
+    },
+  }),
+  command({
     name: "review leads",
     readOnly: true,
     required: ["campaign"],
     usage: ["review leads --campaign <id>"],
     options: { campaign: STR },
-    handler: async ({ values, state, print }) => {
+    handler: async ({ values, state, environment, print }) => {
       // Leads never join the review queue, but the human sees every one of them
       // (owner decision 2026-10-26: report widely, drop in review, never hide a route in a Lead).
       const seen = new Set<string>();
@@ -1309,12 +1340,14 @@ const COMMANDS: readonly Command[] = [
             : [],
         );
       if (leads.length === 0) print(["no leads recorded"]);
+      const groups = readFindingGroups(state.ledger);
       for (const event of leads) {
         const reference = event.artifacts.find(
           (artifact) => artifact.kind === "lead",
         );
         let position = "(position unknown)";
         let summary = "(lead.json unavailable)";
+        let keys: readonly string[] = [];
         if (reference !== undefined) {
           const stored = await state.store.readJson(
             reference.digest,
@@ -1322,16 +1355,20 @@ const COMMANDS: readonly Command[] = [
             z.object({
               summary: z.string(),
               attackerPosition: z.string().optional(),
+              sourceTrace: z.unknown().optional(),
             }),
             1024 * 1024,
           );
           if (stored.status === "resolved") {
             summary = stored.value.summary;
             position = stored.value.attackerPosition ?? position;
+            keys =
+              environment.profile.leadGroupKeyDigests?.(stored.value) ?? [];
           }
         }
+        const matching = groups.matchingKeyDigests(event.snapshotDigest, keys);
         print([
-          `lead  ${event.primitive}/${event.missingEdge}  ${position}  ${event.leadId}  ${summary}`,
+          `lead  ${event.primitive}/${event.missingEdge}  ${position}  ${event.leadId}  ${summary}  keys ${keys.length === 0 ? "unkeyed" : keys.join(",")}  groups ${matching.length === 0 ? "none" : matching.join(",")}`,
         ]);
       }
       return 0;
@@ -2281,7 +2318,12 @@ export async function runCli(
         ? values.state
         : environment.stateDirectory,
       environment,
-      { readOnly: handler.readOnly },
+      {
+        readOnly: handler.readOnly,
+        ...(environment.findingGroupKeyCachePath === undefined
+          ? {}
+          : { findingGroupKeyCachePath: environment.findingGroupKeyCachePath }),
+      },
     );
     return await invoke({
       rest,

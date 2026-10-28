@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { canonicalDigest } from "../../../infrastructure/canonical-json.js";
 import { normalizeWordPressSourcePath } from "./source-path.js";
+import { wordPressFindingGroupKeys } from "./finding.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const id = z.string().min(1).max(128);
@@ -80,6 +81,19 @@ export type WordPressLead = z.infer<typeof wordpressLeadClaimSchema> & {
     readonly digest: string;
   };
 };
+
+/** Digest-only read-time keys for Lead-to-Finding group references (#653). */
+export function wordPressLeadGroupKeyDigests(value: unknown): string[] {
+  const parsed = z
+    .object({ sourceTrace: wordpressLeadClaimSchema.shape.sourceTrace })
+    .safeParse(value);
+  if (!parsed.success) return [];
+  return [
+    ...new Set(
+      wordPressFindingGroupKeys(parsed.data).map((key) => canonicalDigest(key)),
+    ),
+  ].sort();
+}
 
 export function admitWordPressLead(
   candidate: unknown,
