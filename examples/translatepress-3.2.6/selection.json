@@ -15,10 +15,6 @@
     "Yoast"
   ],
   "excludedSlugs": [],
-  "scoreWeights": {
-    "installations": 10,
-    "recency": 5
-  },
   "pinnedVersions": {
     "translatepress-multilingual": "3.2.6"
   }

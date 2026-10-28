@@ -104,7 +104,6 @@ async function setup(steps: Step[], overrides: Partial<ContinuousDeps> = {}) {
     discardStaleSelection: async () => null,
     cleanupLeftovers: async () => 0,
     preflight: async () => undefined,
-    legacyHistoryAvailable: async () => true,
     readAuth: async () => ({ expiresAt: new Date(now + 30 * 86_400_000) }),
     programmeObservedAt: async () => new Date(now - 86_400_000),
     statfs: async () => ({ freeBytes: 100 * 1024 ** 3 }),
@@ -162,7 +161,6 @@ async function expectLatchedStop(
   const forbidden = async () => {
     throw new Error("a stopped restart must do no work");
   };
-  t.deps.legacyHistoryAvailable = forbidden;
   t.deps.preflight = forbidden;
   t.deps.cleanupLeftovers = forbidden;
   t.deps.select = forbidden;
@@ -754,7 +752,6 @@ describe("continuous runner", () => {
       "programme-stale",
       { programmeObservedAt: async () => new Date("2026-09-01T00:00:00Z") },
     ],
-    ["legacy-history-missing", { legacyHistoryAvailable: async () => false }],
   ] as const)("stops as %s before any campaign", async (reason, override) => {
     const t = await setup([], override);
     expect(await t.runner.run()).toBe(reason);
@@ -915,12 +912,12 @@ describe("runners of two campaign prefixes in one state (#604)", () => {
   it("writes a policy stop to its own marker only", async () => {
     const t = await setup([], {
       campaignPrefix: "prod-v15",
-      legacyHistoryAvailable: async () => false,
+      programmeObservedAt: async () => new Date("2020-01-01"),
     });
-    expect(await t.runner.run()).toBe("legacy-history-missing");
+    expect(await t.runner.run()).toBe("programme-stale");
     expect(
       await readFile(continuousPaths(t.root, "prod-v15").stop, "utf8"),
-    ).toBe("legacy-history-missing\n");
+    ).toBe("programme-stale\n");
     expect(existsSync(continuousPaths(t.root).stop)).toBe(false);
   });
 

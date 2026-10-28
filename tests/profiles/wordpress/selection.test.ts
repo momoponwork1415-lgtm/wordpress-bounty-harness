@@ -1,8 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   ledgerEventV1Schema,
@@ -16,7 +12,6 @@ import {
   openWordPressSelection,
   wordPressSelectionPolicySchema,
   wordPressTargetSelectionSchema,
-  type WordPressSelectionPolicy,
 } from "../../../src/profiles/wordpress/selection/index.js";
 import type { CreateWordPressSelectionOptions } from "../../../src/profiles/wordpress/selection/wordpress-selection.js";
 import type { WordPressOrgTargetSource } from "../../../src/profiles/wordpress/acquisition/index.js";
@@ -78,13 +73,11 @@ const basePolicy = {
   id: "selection-v1",
   candidateSlugs: ["popular", "exposed"],
   minimumActiveInstallations: 500,
-  maximumActiveInstallations: 1_000_000,
   maximumObservationAgeDays: 2,
   maximumUpdateAgeDays: 365,
   maximumTargets: 2,
   excludedAuthors: ["Automattic", "Facebook", "Google", "SiteGround", "Yoast"],
   excludedSlugs: [],
-  scoreWeights: { installations: 10, recency: 0 },
 };
 
 const failed = (slug: string, reason: "closed" | "not-found") => ({
@@ -247,15 +240,6 @@ describe("WordPress selection public interface", () => {
     const currentPolicy = await loadWordPressSelectionPolicy();
     const selected = await selection.rank({
       ...currentPolicy,
-      // This harness has no mirror; the shipped history weights and the
-      // cascade's paying-class floor would stop it (ADR 0037).
-      scoreWeights: {
-        ...currentPolicy.scoreWeights,
-        history: 0,
-        historyPayingClass: 0,
-        recordRecency: 0,
-      },
-      cascade: [],
       pluginDependencySlugs: { exposed: ["elementor"] },
     });
     expect(selected).toHaveLength(1);
@@ -277,161 +261,29 @@ describe("WordPress selection public interface", () => {
     ).toBe(false);
   });
 
-  it("changes order when the policy changes and records the score breakdown", async () => {
-    const recent = observation("exposed", ["form"], 1_000);
-    const selection = harness({
-      observations: {
-        popular: observation("popular", [], 100_000),
-        exposed: {
-          ...recent,
-          observation: {
-            ...recent.observation,
-            lastUpdated: "2026-10-06 12:00am GMT",
-          },
-        },
-      },
-    });
-    const first = await selection.rank(basePolicy);
-    expect(first.map((item) => item.slug)).toEqual(["popular", "exposed"]);
-    expect(first[0]?.scoreBreakdown.installations).toBeGreaterThan(
-      first[1]?.scoreBreakdown.installations ?? 0,
-    );
-
-    const second = await selection.rank({
-      ...basePolicy,
-      scoreWeights: { installations: 0, recency: 10 },
-    });
-    expect(second.map((item) => item.slug)).toEqual(["exposed", "popular"]);
-    expect(second[0]?.scoreBreakdown.recency).toBeGreaterThan(
-      second[1]?.scoreBreakdown.recency ?? 0,
-    );
-    expect(second[0]?.policy.digest).not.toBe(first[0]?.policy.digest);
-  });
-
-  it("rejects a ceiling that does not exceed the floor", async () => {
+  it("ships the install queue and rejects retired policy fields", async () => {
     const policy = await loadWordPressSelectionPolicy();
-    expect(
-      wordPressSelectionPolicySchema.safeParse({
-        ...policy,
-        maximumActiveInstallations: policy.minimumActiveInstallations,
-      }).success,
-    ).toBe(false);
-    expect(
-      wordPressSelectionPolicySchema.safeParse({
-        ...policy,
-        maximumActiveInstallations: policy.minimumActiveInstallations + 1,
-      }).success,
-    ).toBe(true);
-  });
-
-  it("ships an automatic policy with the 100000-install floor, data-derived tags and no tag weights (ADR 0032)", async () => {
-    const policy = await loadWordPressSelectionPolicy();
-    expect(policy.minimumActiveInstallations).toBe(100_000);
-    expect(policy.maximumActiveInstallations).toBe(1_000_000);
-    expect("candidateSource" in policy && policy.candidateSource.kind).toBe(
-      "wordpress-org",
-    );
-    expect(policy.excludedAuthors).toEqual(
-      expect.arrayContaining([
-        "Automattic",
-        "Facebook",
-        "Google",
-        "MailPoet",
-        "SiteGround",
-        "WooCommerce",
-        "Yoast",
-      ]),
-    );
-    for (const legacy of ["surfaceTagWeights", "highThreatTags", "runBudget"])
-      expect(policy).not.toHaveProperty(legacy);
-    expect(policy.scoreWeights).not.toHaveProperty("surface");
-    expect(policy.scoreWeights).not.toHaveProperty("highThreat");
-    if (!("candidateSource" in policy))
-      throw new Error("Expected automatic policy");
-    expect(policy.candidateSource.tags.length).toBeGreaterThanOrEqual(6);
-    expect(policy.wordpressVersion).toBe("7.1.3");
-    for (const maximumTargets of [2, 11])
-      expect(
-        wordPressSelectionPolicySchema.safeParse({
-          ...policy,
-          maximumTargets,
-        }).success,
-      ).toBe(false);
-  });
-
-  it("ships the statistics-derived weights (ADR 0037, 2026-10-19 addendum) and the owner's cascade order in the default policy", async () => {
-    const policy = await loadWordPressSelectionPolicy();
-    expect(policy.id).toBe("wordpress-selection-2026-10-26");
-    // docs/reviews/2026-10-19-selection-statistics.md §5.1: paying class decides,
-    // record recency splits ties, installs come last; WordPress.org recency is a leak.
-    expect(policy.scoreWeights).toEqual({
-      installations: 0.5,
-      recency: 0,
-      history: 0,
-      historyPayingClass: 1,
-      recordRecency: 1,
-    });
-    expect(policy.historyWindowDays).toBe(365);
-    expect(policy.historyCountCap).toBe(10);
-    expect(policy.historyPayingClassCap).toBe(3);
-    expect(policy.maximumHistoryAgeDays).toBe(2);
-    expect(policy.maximumTargets).toBe(5);
+    expect(policy.minimumActiveInstallations).toBe(10_000);
     expect(policy.maximumUpdateAgeDays).toBe(365);
-    expect(policy.revisitPolicy).toEqual({
-      kind: "version-increased",
-      minimumDaysSinceTrial: 90,
-    });
-    expect(policy.historyPayingClasses).toEqual([
-      "stored-xss",
-      "sql-injection",
-      "privilege-escalation",
-      "authentication-bypass",
-      "arbitrary-file-upload",
-      "remote-code-execution",
-    ]);
-    // The owner's order (2026-10-18), with the 30k step dropped on 2026-10-26: 50k, then ≥1M with two paying-class records.
-    expect("cascade" in policy && policy.cascade).toEqual([
-      { minimumActiveInstallations: 50_000 },
-      {
-        minimumActiveInstallations: 1_000_000,
-        maximumActiveInstallations: null,
-        minimumPayingClassCount: 2,
-      },
-    ]);
-    // The floor siblings are gone with the cascade; nothing reads them.
-    for (const file of ["selection.50000.json", "selection.30000.json"])
-      await expect(
-        loadWordPressSelectionPolicy(
-          new URL(
-            `../../../src/profiles/wordpress/policy/${file}`,
-            import.meta.url,
-          ),
-        ),
-      ).rejects.toThrow(/ENOENT/);
-    // A step whose ceiling does not exceed its floor is rejected.
+    expect(policy.revisitPolicy).toEqual({ kind: "version-increased" });
+    for (const [field, value] of Object.entries({
+      cascade: [{ minimumActiveInstallations: 50_000 }],
+      maximumActiveInstallations: 1_000_000,
+      scoreWeights: { installations: 0.5, recency: 0, historyPayingClass: 1 },
+      historyWindowDays: 365,
+      historyCountCap: 10,
+      historyPayingClassCap: 3,
+      historyPayingClasses: ["stored-xss"],
+      maximumHistoryAgeDays: 2,
+    }))
+      expect(
+        wordPressSelectionPolicySchema.safeParse({ ...policy, [field]: value })
+          .success,
+      ).toBe(false);
     expect(
       wordPressSelectionPolicySchema.safeParse({
         ...policy,
-        cascade: [{ minimumActiveInstallations: 1_000_000 }],
-      }).success,
-    ).toBe(false);
-    expect(
-      wordPressSelectionPolicySchema.safeParse({
-        ...policy,
-        cascade: [
-          {
-            minimumActiveInstallations: 1_000_000,
-            maximumActiveInstallations: null,
-          },
-        ],
-      }).success,
-    ).toBe(true);
-    // The historical manual signals are gone; a policy still carrying them is rejected.
-    expect(
-      wordPressSelectionPolicySchema.safeParse({
-        ...basePolicy,
-        historySignals: { popular: 1 },
-        historySource: { digest: digest("d"), refreshedAt: now },
+        revisitPolicy: { kind: "version-increased", minimumDaysSinceTrial: 90 },
       }).success,
     ).toBe(false);
   });
@@ -451,15 +303,14 @@ describe("WordPress selection public interface", () => {
     for (const item of plain) {
       expect(item).not.toHaveProperty("runBudget");
       expect(item).not.toHaveProperty("highThreatSurface");
-      expect(item.scoreBreakdown).not.toHaveProperty("surface");
-      expect(item.scoreBreakdown).not.toHaveProperty("highThreat");
+      expect(item).not.toHaveProperty("scoreBreakdown");
     }
     for (const legacy of [
       { surfaceTagWeights: { form: 5 } },
       { highThreatTags: ["file manager"] },
       { runBudget: { default: 10, highThreat: 30 } },
-      { scoreWeights: { ...basePolicy.scoreWeights, surface: 1 } },
-      { scoreWeights: { ...basePolicy.scoreWeights, highThreat: 1 } },
+      { scoreWeights: { surface: 1 } },
+      { scoreWeights: { highThreat: 1 } },
     ])
       expect(
         wordPressSelectionPolicySchema.safeParse({ ...basePolicy, ...legacy })
@@ -470,497 +321,27 @@ describe("WordPress selection public interface", () => {
   it("still reads a stored selection written with the legacy surface fields", async () => {
     const [current] = await harness({}).rank(basePolicy);
     if (current === undefined) throw new Error("Expected a selection");
+    const { reason: _reason, ...historical } = current;
     const old = {
-      ...current,
+      ...historical,
+      cascadeStep: 2,
+      advisoryHistory: {
+        count: 3,
+        payingClassCount: 2,
+        mirrorAsOf: now,
+        mirrorDigest: digest("f"),
+      },
       highThreatSurface: true,
       runBudget: 30,
-      scoreBreakdown: { ...current.scoreBreakdown, surface: 5, highThreat: 15 },
-    };
-    expect(wordPressTargetSelectionSchema.parse(old)).toEqual(old);
-  });
-
-  describe("advisory history from the local mirror (ADR 0037)", () => {
-    const mirrorAsOf = "2026-10-07T00:00:00.000Z";
-    const mirrorDigest = digest("f");
-    const counts: Record<
-      string,
-      { count: number; payingClassCount: number; latestPublished?: string }
-    > = {
-      popular: { count: 1, payingClassCount: 0 },
-      exposed: {
-        count: 12,
-        payingClassCount: 3,
-        latestPublished: "2026-10-07T00:00:00.000Z",
+      scoreBreakdown: {
+        installations: 10,
+        recency: 2,
+        history: 0,
+        surface: 5,
+        highThreat: 15,
       },
     };
-    /** A fake source; `opened` counts how often selection reached for the mirror. */
-    function fakeHistory(status: "open" | "stale" | "unavailable" = "open"): {
-      source: NonNullable<CreateWordPressSelectionOptions["advisoryHistory"]>;
-      opened: () => number;
-      closed: () => number;
-      windows: () => { fromMs: number; toMs: number }[];
-    } {
-      let opened = 0;
-      let closed = 0;
-      const windows: { fromMs: number; toMs: number }[] = [];
-      return {
-        opened: () => opened,
-        closed: () => closed,
-        windows: () => windows,
-        source: {
-          open() {
-            opened++;
-            if (status === "stale")
-              return {
-                status: "stale",
-                lastSuccessfulAt: "2026-10-01T00:00:00Z",
-                ageMs: 7 * 86_400_000,
-              };
-            if (status === "unavailable")
-              return { status: "unavailable", reason: "state is unreadable" };
-            return {
-              status: "open",
-              mirror: {
-                asOf: mirrorAsOf,
-                digest: mirrorDigest,
-                recordCount: 42,
-                lastRefreshFailed: false,
-                count(slug, window) {
-                  windows.push({ fromMs: window.fromMs, toMs: window.toMs });
-                  return (
-                    counts[slug] ?? {
-                      count: 0,
-                      payingClassCount: 0,
-                      title: "never read",
-                    }
-                  );
-                },
-                close: () => {
-                  closed++;
-                },
-              },
-            };
-          },
-        },
-      };
-    }
-    const withHistory = (
-      fake: ReturnType<typeof fakeHistory>,
-      options: Parameters<typeof harness>[0] = {},
-    ) =>
-      createWordPressSelection({
-        targetSource: {
-          observe: async ({ slug }: { slug: string }) =>
-            (options.observations ?? {
-              popular: observation("popular", [], 100_000),
-              exposed: observation("exposed", ["form"], 1_000),
-            })[slug] ?? failed(slug, "not-found"),
-        } as unknown as WordPressOrgTargetSource,
-        programme: {
-          inspect: async () => ({
-            status: "current",
-            snapshotRef: programmeRef,
-            snapshot: {
-              programmeIdentity: "programme:wordfence",
-              policy: {
-                programmeOpportunityBand: "high-impact-only",
-                eligibility: {
-                  assets: [
-                    { kind: "wordpress-plugin", scope: "publicly-distributed" },
-                  ],
-                },
-              },
-            },
-          }),
-        } as unknown as ProgrammeIntelligence,
-        programmeRef,
-        clock: () => new Date(options.clock ?? now),
-        advisoryHistory: fake.source,
-      });
-
-    it("weight 0 reproduces the ranking without history and never opens the mirror", async () => {
-      const fake = fakeHistory();
-      const baseline = await harness({}).rank(basePolicy);
-      const zeroWeight = await withHistory(fake).rank({
-        ...basePolicy,
-        scoreWeights: { ...basePolicy.scoreWeights, history: 0 },
-      });
-      const absent = await withHistory(fake).rank(basePolicy);
-      for (const ranked of [zeroWeight, absent]) {
-        expect(ranked.map((item) => [item.slug, item.score])).toEqual(
-          baseline.map((item) => [item.slug, item.score]),
-        );
-        expect(
-          ranked.every(
-            (item) =>
-              item.scoreBreakdown.history === 0 &&
-              item.scoreBreakdown.historyPayingClass === 0 &&
-              item.scoreBreakdown.recordRecency === 0 &&
-              item.advisoryHistory === undefined,
-          ),
-        ).toBe(true);
-      }
-      expect(fake.opened()).toBe(0);
-      // The same holds when only the newer weights are written as 0.
-      const zeroNew = await withHistory(fake).rank({
-        ...basePolicy,
-        scoreWeights: {
-          ...basePolicy.scoreWeights,
-          history: 0,
-          historyPayingClass: 0,
-          recordRecency: 0,
-        },
-      });
-      expect(zeroNew.map((item) => [item.slug, item.score])).toEqual(
-        baseline.map((item) => [item.slug, item.score]),
-      );
-      expect(fake.opened()).toBe(0);
-    });
-
-    it("scores min(count, cap) / cap for the history member, relative to the mirror's asOf and without a freshness share", async () => {
-      const fake = fakeHistory();
-      const policy = {
-        ...basePolicy,
-        historyWindowDays: 100,
-        historyCountCap: 10,
-        scoreWeights: {
-          ...basePolicy.scoreWeights,
-          installations: 0,
-          history: 5,
-        },
-      };
-      const ranked = await withHistory(fake).rank(policy);
-      const exposed = ranked.find((item) => item.slug === "exposed");
-      const popular = ranked.find((item) => item.slug === "popular");
-      // 12 records cap at 10 → full weight; the latest record's date moves `recordRecency`, not `history`.
-      expect(exposed?.scoreBreakdown.history).toBeCloseTo(5, 10);
-      // 1 record → 5 × 1/10.
-      expect(popular?.scoreBreakdown.history).toBeCloseTo(0.5, 10);
-      expect(ranked.map((item) => item.slug)).toEqual(["exposed", "popular"]);
-      // The other members stay 0 until their own weights are set.
-      expect(exposed?.scoreBreakdown.historyPayingClass).toBe(0);
-      expect(exposed?.scoreBreakdown.recordRecency).toBe(0);
-      // The window is anchored on the mirror, not on the selection clock.
-      const asOfMs = Date.parse(mirrorAsOf);
-      expect(fake.windows()).toEqual(
-        expect.arrayContaining([
-          { fromMs: asOfMs - 100 * 86_400_000, toMs: asOfMs },
-        ]),
-      );
-      expect(fake.opened()).toBe(1);
-      expect(fake.closed()).toBe(1);
-      // A history-only ranking is independent of when `select` runs.
-      const later = await withHistory(fake, {
-        clock: "2026-10-08T12:00:00.000Z",
-      }).rank(policy);
-      expect(later.map((item) => item.scoreBreakdown.history)).toEqual(
-        ranked.map((item) => item.scoreBreakdown.history),
-      );
-    });
-
-    it("scores one point per paying-class record up to historyPayingClassCap, and weight 0 leaves the decided score unchanged", async () => {
-      const fake = fakeHistory();
-      const policy = {
-        ...basePolicy,
-        scoreWeights: {
-          ...basePolicy.scoreWeights,
-          installations: 0,
-          history: 5,
-        },
-      };
-      const decided = await withHistory(fake).rank(policy);
-      const paying = await withHistory(fake).rank({
-        ...policy,
-        historyCountCap: 10,
-        scoreWeights: { ...policy.scoreWeights, historyPayingClass: 4 },
-      });
-      const exposedPaying = paying.find((item) => item.slug === "exposed");
-      // 3 paying records, default cap 3 → 4 × min(3, 3); not divided by the cap.
-      expect(exposedPaying?.scoreBreakdown.historyPayingClass).toBeCloseTo(
-        4 * 3,
-        10,
-      );
-      expect(exposedPaying?.advisoryHistory?.payingClassCount).toBe(3);
-      expect(
-        paying.find((item) => item.slug === "popular")?.scoreBreakdown
-          .historyPayingClass,
-      ).toBe(0);
-      expect(
-        decided.every((item) => item.scoreBreakdown.historyPayingClass === 0),
-      ).toBe(true);
-      expect(exposedPaying?.score).toBeCloseTo(
-        (decided.find((item) => item.slug === "exposed")?.score ?? NaN) + 4 * 3,
-        10,
-      );
-      // A lower cap clips the count; a higher one does not inflate it.
-      for (const [cap, expected] of [
-        [2, 2],
-        [5, 3],
-      ] as const) {
-        const capped = await withHistory(fake).rank({
-          ...policy,
-          historyPayingClassCap: cap,
-          scoreWeights: { ...policy.scoreWeights, historyPayingClass: 1 },
-        });
-        expect(
-          capped.find((item) => item.slug === "exposed")?.scoreBreakdown
-            .historyPayingClass,
-        ).toBe(expected);
-      }
-    });
-
-    it("scores recordRecency as 1 − days since the newest record / window, anchored on the mirror's asOf", async () => {
-      const fake = fakeHistory();
-      const policy = {
-        ...basePolicy,
-        historyWindowDays: 100,
-        scoreWeights: {
-          ...basePolicy.scoreWeights,
-          installations: 0,
-          recordRecency: 2,
-        },
-      };
-      const ranked = await withHistory(fake).rank(policy);
-      // exposed's latest record is at asOf → full weight; popular has no dated record → 0.
-      expect(
-        ranked.find((item) => item.slug === "exposed")?.scoreBreakdown
-          .recordRecency,
-      ).toBeCloseTo(2, 10);
-      expect(
-        ranked.find((item) => item.slug === "popular")?.scoreBreakdown
-          .recordRecency,
-      ).toBe(0);
-      expect(ranked.map((item) => item.slug)).toEqual(["exposed", "popular"]);
-      // The mirror was opened for this weight alone.
-      expect(fake.opened()).toBe(1);
-      // The clock does not move the value; only the mirror's asOf does.
-      const later = await withHistory(fake, {
-        clock: "2026-10-09T12:00:00.000Z",
-      }).rank(policy);
-      expect(later).toHaveLength(2);
-      expect(later.map((item) => item.scoreBreakdown.recordRecency)).toEqual(
-        ranked.map((item) => item.scoreBreakdown.recordRecency),
-      );
-    });
-
-    it("ranks the report's way: paying count decides, record recency splits ties, installs come last (§5.1)", async () => {
-      // Six candidates in the 100k–1M band with the shipped weights.
-      const day = 86_400_000;
-      const daysAgo = (days: number) =>
-        new Date(Date.parse(mirrorAsOf) - days * day).toISOString();
-      const band: Record<
-        string,
-        { installs: number; paying: number; latestDaysAgo?: number }
-      > = {
-        "three-fresh-small": {
-          installs: 100_000,
-          paying: 3,
-          latestDaysAgo: 10,
-        },
-        "three-old-large": { installs: 900_000, paying: 3, latestDaysAgo: 300 },
-        "five-fresh-small": { installs: 100_000, paying: 5, latestDaysAgo: 5 },
-        "one-fresh-large": { installs: 900_000, paying: 1, latestDaysAgo: 1 },
-        "zero-fresh-large": { installs: 900_000, paying: 0, latestDaysAgo: 1 },
-        "zero-none-huge": { installs: 999_999, paying: 0 },
-      };
-      const fake = fakeHistory();
-      const open = fake.source.open;
-      fake.source.open = (options) => {
-        const opened = open(options);
-        if (opened.status !== "open") return opened;
-        return {
-          ...opened,
-          mirror: {
-            ...opened.mirror,
-            count(slug) {
-              const row = band[slug];
-              if (row === undefined) throw new Error(`unexpected ${slug}`);
-              return {
-                count: row.paying + 1,
-                payingClassCount: row.paying,
-                ...(row.latestDaysAgo === undefined
-                  ? {}
-                  : { latestPublished: daysAgo(row.latestDaysAgo) }),
-              };
-            },
-          },
-        };
-      };
-      const shipped = await loadWordPressSelectionPolicy();
-      const ranked = await withHistory(fake, {
-        observations: Object.fromEntries(
-          Object.entries(band).map(([slug, row]) => [
-            slug,
-            observation(slug, [], row.installs),
-          ]),
-        ),
-      }).rank({
-        ...basePolicy,
-        candidateSlugs: Object.keys(band),
-        maximumTargets: 6,
-        minimumActiveInstallations: 100_000,
-        scoreWeights: shipped.scoreWeights,
-        historyWindowDays: shipped.historyWindowDays,
-        historyCountCap: shipped.historyCountCap,
-        historyPayingClassCap: shipped.historyPayingClassCap,
-        historyPayingClasses: shipped.historyPayingClasses,
-      });
-      expect(ranked.map((item) => item.slug)).toEqual([
-        // 5 paying records cap at 3; the freshest record of the capped group wins.
-        "five-fresh-small",
-        "three-fresh-small",
-        // Same cap, 300-day-old record: recency 0.18 loses to 0.97 despite 9× installs.
-        "three-old-large",
-        // One paying record beats none, whatever the installs.
-        "one-fresh-large",
-        // No paying record: recency then installs decide.
-        "zero-fresh-large",
-        "zero-none-huge",
-      ]);
-      const five = ranked[0]!;
-      expect(five.scoreBreakdown.historyPayingClass).toBe(3);
-      expect(five.scoreBreakdown.recordRecency).toBeCloseTo(1 - 5 / 365, 10);
-      expect(five.scoreBreakdown.installations).toBeCloseTo(
-        0.5 * Math.log10(100_001),
-        10,
-      );
-      expect(five.scoreBreakdown.recency).toBe(0);
-      expect(five.scoreBreakdown.history).toBe(0);
-      // Band values stay in the report's ranges: 0–3 + 0–1 + 2.5–3.0.
-      for (const item of ranked) {
-        expect(item.scoreBreakdown.installations).toBeGreaterThanOrEqual(2.5);
-        expect(item.scoreBreakdown.installations).toBeLessThanOrEqual(3.0);
-        expect(item.score).toBeCloseTo(
-          item.scoreBreakdown.historyPayingClass! +
-            item.scoreBreakdown.recordRecency! +
-            item.scoreBreakdown.installations,
-          10,
-        );
-      }
-    });
-
-    it("keeps 200,000 installs at 53.01 points under the former weight 10 (log10(1 + installs))", async () => {
-      const ranked = await harness({
-        observations: { popular: observation("popular", [], 200_000) },
-      }).rank({
-        ...basePolicy,
-        candidateSlugs: ["popular"],
-        scoreWeights: { installations: 10, recency: 0 },
-      });
-      expect(ranked[0]?.scoreBreakdown.installations).toBeCloseTo(53.01, 2);
-    });
-
-    it("records only counts, dates and the mirror's timestamp and digest on the target", async () => {
-      const fake = fakeHistory();
-      const ranked = await withHistory(fake).rank({
-        ...basePolicy,
-        scoreWeights: { ...basePolicy.scoreWeights, history: 5 },
-      });
-      expect(
-        ranked.find((item) => item.slug === "exposed")?.advisoryHistory,
-      ).toEqual({
-        count: 12,
-        payingClassCount: 3,
-        latestPublished: "2026-10-07T00:00:00.000Z",
-        mirrorAsOf,
-        mirrorDigest,
-      });
-      expect(
-        ranked.find((item) => item.slug === "popular")?.advisoryHistory,
-      ).toEqual({
-        count: 1,
-        payingClassCount: 0,
-        mirrorAsOf,
-        mirrorDigest,
-      });
-      // Anything beyond the contract (a title the fake sneaks in) never reaches the record.
-      expect(JSON.stringify(ranked)).not.toContain("never read");
-      for (const item of ranked)
-        expect(wordPressTargetSelectionSchema.safeParse(item).success).toBe(
-          true,
-        );
-    });
-
-    it("stops before observing anything when the mirror is stale, unavailable or not configured", async () => {
-      const policy = {
-        ...basePolicy,
-        maximumHistoryAgeDays: 2,
-        scoreWeights: { ...basePolicy.scoreWeights, history: 5 },
-      };
-      await expect(
-        withHistory(fakeHistory("stale")).inspectBatch(policy),
-      ).rejects.toThrow(
-        "Wordfence history mirror is stale: last success 2026-10-01T00:00:00Z is 7.0 days old, policy maximumHistoryAgeDays is 2",
-      );
-      await expect(
-        withHistory(fakeHistory("unavailable")).rank(policy),
-      ).rejects.toThrow(
-        "Wordfence history mirror is unavailable (state is unreadable)",
-      );
-      await expect(harness({}).rank(policy)).rejects.toThrow(
-        "no wordfenceHistory mirror configured",
-      );
-      // A batch inspection that stops observed no candidate.
-      const observe = vi.fn();
-      await expect(
-        createWordPressSelection({
-          targetSource: { observe } as unknown as WordPressOrgTargetSource,
-          programme: { inspect: vi.fn() } as unknown as ProgrammeIntelligence,
-          programmeRef,
-          advisoryHistory: fakeHistory("stale").source,
-        }).inspect(policy),
-      ).rejects.toThrow("stale");
-      expect(observe).not.toHaveBeenCalled();
-      // The maximum age reaches the source as milliseconds.
-      const open = vi.fn(() => ({
-        status: "unavailable" as const,
-        reason: "database and state disagree",
-      }));
-      await expect(
-        createWordPressSelection({
-          targetSource: { observe } as unknown as WordPressOrgTargetSource,
-          programme: { inspect: vi.fn() } as unknown as ProgrammeIntelligence,
-          programmeRef,
-          clock: () => new Date(now),
-          advisoryHistory: { open },
-        }).inspect({ ...policy, maximumHistoryAgeDays: 3 }),
-      ).rejects.toThrow("database and state disagree");
-      expect(open).toHaveBeenCalledWith({
-        now: new Date(now),
-        maximumAgeMs: 3 * 86_400_000,
-      });
-    });
-
-    it("reports the mirror's timestamp, digest and window through decide()", async () => {
-      const decision = await openWordPressSelection({
-        candidates: withHistory(fakeHistory()),
-        ledger: { readAll: () => [] },
-        promptVariant: "wp2shell-bounty-v8",
-      }).decide({
-        ...basePolicy,
-        scoreWeights: { ...basePolicy.scoreWeights, history: 5 },
-      });
-      expect(decision.advisoryHistory).toEqual({
-        status: "used",
-        asOf: mirrorAsOf,
-        digest: mirrorDigest,
-        recordCount: 42,
-        lastRefreshFailed: false,
-        windowDays: 365,
-        countCap: 10,
-        payingClassCap: 3,
-        maximumAgeDays: 2,
-      });
-      expect(
-        (
-          await openWordPressSelection({
-            candidates: harness({}),
-            ledger: { readAll: () => [] },
-            promptVariant: "wp2shell-bounty-v8",
-          }).decide(basePolicy)
-        ).advisoryHistory,
-      ).toEqual({ status: "not-used" });
-    });
+    expect(wordPressTargetSelectionSchema.parse(old)).toEqual(old);
   });
 
   it("keeps unavailable, stale, excluded and under-threshold observations in inspect but out of select", async () => {
@@ -994,11 +375,12 @@ describe("WordPress selection public interface", () => {
       ["recent", "eligible", []],
       ["excluded", "ineligible", ["excluded-author"]],
       ["tiny", "ineligible", ["below-installation-threshold"]],
-      ["huge", "ineligible", ["above-installation-ceiling"]],
+      ["huge", "eligible", []],
       ["missing", "ineligible", ["observation-unavailable"]],
       ["closed", "ineligible", ["distribution-closed"]],
     ]);
     expect((await selection.rank(policy)).map((item) => item.slug)).toEqual([
+      "huge",
       "recent",
     ]);
   });
@@ -1194,391 +576,36 @@ const exposedTrialWithFinding = (promptVariant = "wp2shell-bounty-v8") => [
   }),
 ];
 
-const temporaryDirectories: string[] = [];
-afterEach(async () => {
-  for (const directory of temporaryDirectories.splice(0))
-    await rm(directory, { recursive: true, force: true });
-});
-
-describe("WordPress selection over the Ledger (policy/selection.md)", () => {
-  const open = (ledger: Pick<Ledger, "readAll">, legacyHistoryFile?: string) =>
-    openWordPressSelection({
-      candidates: harness({}),
-      ledger,
-      ...(legacyHistoryFile === undefined ? {} : { legacyHistoryFile }),
-      promptVariant: "wp2shell-bounty-v8",
+describe("install queue (#533)", () => {
+  it("orders installs then updates without a mirror, admits a newer version immediately despite a Finding, and excludes the same version", async () => {
+    const policy = basePolicy;
+    const popular = observation("popular", [], 1_000_000);
+    const exposed = observation("exposed", [], 1_000_000);
+    exposed.observation.stableVersion = "1.2.4";
+    exposed.observation.lastUpdated = "2026-10-07T00:00:00Z";
+    const small = observation("small", [], 10_000);
+    const candidates = harness({ observations: { popular, exposed, small } });
+    const selection = openWordPressSelection({
+      candidates,
+      ledger: ledgerOf(exposedTrialWithFinding()),
     });
-
-  it("select() excludes a slug with a recorded Finding and keeps the others in score order", async () => {
-    const selection = open(ledgerOf(exposedTrialWithFinding()));
+    const queuePolicy = {
+      ...policy,
+      candidateSlugs: ["popular", "exposed", "small"],
+      minimumActiveInstallations: 10_000,
+      maximumTargets: 3,
+    };
+    const decision = await selection.decide(queuePolicy);
     expect(
-      (await selection.select(basePolicy)).map((item) => item.slug),
-    ).toEqual(["popular"]);
-    // The same candidates rank in full when the Ledger is empty.
-    expect(
-      (await open(ledgerOf([])).select(basePolicy)).map((item) => item.slug),
-    ).toEqual(["popular", "exposed"]);
-    // The pure ranking below the Ledger still returns the Finding's own target.
-    expect(
-      (await harness({}).rank(basePolicy)).map((item) => item.slug),
-    ).toEqual(["popular", "exposed"]);
-  });
-
-  it("decide() merges Ledger reasons into the inspection report and cuts the ranking at maximumTargets", async () => {
-    const decision = await open(ledgerOf(exposedTrialWithFinding())).decide({
-      ...basePolicy,
-      maximumTargets: 1,
-    });
-    expect(
-      decision.inspections.map((item) => [item.slug, item.reasons]),
+      decision.selected.map(({ slug, reason }) => ({ slug, reason })),
     ).toEqual([
-      ["popular", []],
-      ["exposed", ["unpublished-finding", "previously-selected"]],
+      { slug: "exposed", reason: "version-increased" },
+      { slug: "popular", reason: "initial" },
+      { slug: "small", reason: "initial" },
     ]);
-    expect(decision.ranked.map((item) => item.slug)).toEqual(["popular"]);
-    expect(decision.selected).toEqual(decision.ranked.slice(0, 1));
-    expect(decision.sourceStatus).toBe("manual");
-    expect(decision.legacyHistory).toEqual({ status: "unavailable" });
-  });
-
-  it("excludes a slug an earlier generation already started, and reports the legacy digest", async () => {
-    const root = await mkdtemp(join(tmpdir(), "wbh-selection-"));
-    temporaryDirectories.push(root);
-    const legacyHistoryFile = join(root, "legacy-history.json");
-    await writeFile(
-      legacyHistoryFile,
-      JSON.stringify({
-        schemaVersion: 1,
-        sourceDigest: digest("e"),
-        exportedAt: occurredAt,
-        sources: ["synthetic"],
-        started: ["popular"],
-        ambiguous: [],
-        reconsider: [],
-      }),
-    );
-    const decision = await open(ledgerOf([]), legacyHistoryFile).decide(
-      basePolicy,
-    );
+    exposed.observation.stableVersion = "1.2.3";
     expect(
-      decision.inspections.find((item) => item.slug === "popular")?.reasons,
-    ).toEqual(["legacy-started"]);
-    expect(decision.selected.map((item) => item.slug)).toEqual(["exposed"]);
-    expect(decision.legacyHistory).toMatchObject({
-      status: "available",
-      started: 1,
-      ambiguous: 0,
-      reconsider: 0,
-    });
-  });
-
-  it("reads the policy's own prompt variant before the campaign's when judging a revisit", async () => {
-    const ledger = ledgerOf([
-      ...exposedTrialWithFinding("wp2shell-bounty-v7").filter(
-        (event) => event.type !== "finding-recorded",
-      ),
-    ]);
-    const revisit = {
-      ...basePolicy,
-      revisitPolicy: { kind: "prompt-version-changed" as const },
-    };
-    // Explored with v7; a v8 selection is a revisit under this policy.
-    expect(
-      (await open(ledger).select(revisit)).map((item) => item.slug),
-    ).toEqual(["popular", "exposed"]);
-    // The policy pins v7 itself: the same prompt again is not a revisit.
-    expect(
-      (
-        await open(ledger).select({
-          ...revisit,
-          promptVariant: "wp2shell-bounty-v7",
-        })
-      ).map((item) => item.slug),
-    ).toEqual(["popular"]);
-  });
-});
-
-describe("install-band cascade (ADR 0037, 2026-10-19 addendum)", () => {
-  const mirrorAsOf = "2026-10-07T00:00:00.000Z";
-  /** Installs and paying-class counts per candidate; everyone else is an independent author. */
-  const pool: Record<
-    string,
-    { installs: number; paying: number; author?: string }
-  > = {
-    "band-a": { installs: 150_000, paying: 1 },
-    mid: { installs: 60_000, paying: 0 },
-    low: { installs: 35_000, paying: 0 },
-    "giant-paying": { installs: 2_000_000, paying: 3 },
-    "giant-quiet": { installs: 2_000_000, paying: 1 },
-    "giant-automattic": {
-      installs: 3_000_000,
-      paying: 5,
-      author: "Automattic",
-    },
-  };
-  const automaticPolicy = {
-    kind: "wordpress-selection-policy" as const,
-    schemaVersion: 1 as const,
-    id: "cascade-test",
-    promptVariant: "wp2shell-bounty-v8",
-    revisitPolicy: { kind: "never" as const },
-    wordpressVersion: "6.8",
-    candidateSource: {
-      kind: "wordpress-org" as const,
-      popularPages: 1,
-      tags: [],
-      pagesPerTag: 1,
-      perPage: 50,
-      maxCandidates: 50,
-      maxAgeDays: 1,
-    },
-    minimumActiveInstallations: 100_000,
-    maximumActiveInstallations: 1_000_000,
-    maximumObservationAgeDays: 2,
-    maximumUpdateAgeDays: 365,
-    maximumTargets: 3,
-    excludedAuthors: ["Automattic"],
-    excludedSlugs: [],
-    scoreWeights: { installations: 0.5, recency: 0, historyPayingClass: 1 },
-    cascade: [
-      { minimumActiveInstallations: 50_000 },
-      {
-        minimumActiveInstallations: 1_000_000,
-        maximumActiveInstallations: null,
-        minimumPayingClassCount: 2,
-      },
-    ],
-  };
-  function candidates() {
-    let opened = 0;
-    const selection = createWordPressSelection({
-      targetSource: {
-        observe: async ({ slug }: { slug: string }) => {
-          const row = pool[slug];
-          if (row === undefined) return failed(slug, "not-found");
-          const observed = observation(slug, [], row.installs);
-          return row.author === undefined
-            ? observed
-            : {
-                ...observed,
-                observation: { ...observed.observation, author: row.author },
-              };
-        },
-      } as unknown as WordPressOrgTargetSource,
-      programme: {
-        inspect: async () => ({
-          status: "current",
-          snapshotRef: programmeRef,
-          snapshot: {
-            programmeIdentity: "programme:wordfence",
-            policy: {
-              programmeOpportunityBand: "high-impact-only",
-              eligibility: {
-                assets: [
-                  { kind: "wordpress-plugin", scope: "publicly-distributed" },
-                ],
-              },
-            },
-          },
-        }),
-      } as unknown as ProgrammeIntelligence,
-      programmeRef,
-      clock: () => new Date(now),
-      enumerateCandidates: async () => ({
-        status: "available",
-        candidates: Object.keys(pool).map((slug) => ({
-          slug,
-          sourceKind: "popular" as const,
-          sourcePage: 1,
-          sourceUrl: "https://api.wordpress.org/plugins/info/1.2/",
-          observedAt: now,
-          contentDigest: digest("d"),
-        })),
-        listings: [],
-      }),
-      advisoryHistory: {
-        open: () => {
-          opened++;
-          return {
-            status: "open",
-            mirror: {
-              asOf: mirrorAsOf,
-              digest: digest("f"),
-              recordCount: 1,
-              lastRefreshFailed: false,
-              count: (slug) => ({
-                count: pool[slug]?.paying ?? 0,
-                payingClassCount: pool[slug]?.paying ?? 0,
-              }),
-              close: () => undefined,
-            },
-          };
-        },
-      },
-    });
-    return { selection, opened: () => opened };
-  }
-  /** A completed Trial of `slug@1.2.3`, which `revisitPolicy: never` keeps out. */
-  const trialOf = (slug: string, index: number) => {
-    const campaignId = `campaign-${slug}`;
-    const snapshotDigest = digest(String(index + 1));
-    return [
-      recorded(campaignId, snapshotDigest, `selected-${slug}`, {
-        type: "target-selected",
-        selectionId: `wporg:${slug}@1.2.3`,
-        promptVariant: "wp2shell-bounty-v8",
-      }),
-      recorded(campaignId, snapshotDigest, `run-${slug}`, {
-        type: "discovery-run-started",
-        runId: `run-${slug}`,
-        labId: "lab-1",
-        history: { mode: "none" },
-        configuration: {
-          promptVariant: "wp2shell-bounty-v8",
-          assignmentUnit: "target",
-        },
-      }),
-      recorded(campaignId, snapshotDigest, `finished-${slug}`, {
-        type: "discovery-run-finished",
-        runId: `run-${slug}`,
-        outcome: "completed",
-        costUsd: "unavailable",
-        wallTimeMs: 1000,
-      }),
-    ];
-  };
-  const decideWith = (
-    explored: readonly string[],
-    minimum: number,
-    policy: WordPressSelectionPolicy = automaticPolicy,
-  ) =>
-    openWordPressSelection({
-      candidates: candidates().selection,
-      ledger: ledgerOf(explored.flatMap((slug, index) => trialOf(slug, index))),
-      promptVariant: "wp2shell-bounty-v8",
-      clock: () => new Date(now),
-    }).decide(policy, { minimum });
-
-  it("stays in the primary band while it reaches the minimum, however many steps are declared", async () => {
-    const decision = await decideWith([], 1);
-    expect(decision.selected.map((item) => item.slug)).toEqual(["band-a"]);
-    expect(decision.cascadeStep).toBeUndefined();
-    expect(decision.cascade).toEqual([{ step: 0, eligible: 1 }]);
-    expect(decision.selected[0]?.cascadeStep).toBeUndefined();
-    expect(
-      decision.inspections.find((item) => item.slug === "mid")?.reasons,
-    ).toEqual(["below-installation-threshold"]);
-    expect(
-      decision.inspections.find((item) => item.slug === "giant-paying")
-        ?.reasons,
-    ).toEqual(["above-installation-ceiling"]);
-    // The pure ranking never cascades.
-    expect(
-      (await candidates().selection.rank(automaticPolicy)).map(
-        (item) => item.slug,
-      ),
-    ).toEqual(["band-a"]);
-  });
-
-  it("falls through the steps in policy order only as each band is exhausted, and records the step", async () => {
-    // Step 1 (50k): the primary band's only candidate was already explored.
-    const first = await decideWith(["band-a"], 1);
-    expect(first.cascadeStep).toBe(1);
-    expect(first.selected.map((item) => [item.slug, item.cascadeStep])).toEqual(
-      [["mid", 1]],
-    );
-    expect(first.cascade).toEqual([
-      { step: 0, eligible: 0 },
-      { step: 1, eligible: 1 },
-    ]);
-    // The report shows that step's reasons: the explored slug and the 35k candidate,
-    // which no step admits now that the 30k step is gone (owner decision 2026-10-26).
-    expect(
-      first.inspections.find((item) => item.slug === "band-a")?.reasons,
-    ).toEqual(["previously-selected"]);
-    expect(
-      first.inspections.find((item) => item.slug === "low")?.reasons,
-    ).toEqual(["below-installation-threshold"]);
-    // Step 2 (≥1M with two paying-class records): the quiet giant and the
-    // excluded author stay out; the band candidates are below its floor
-    // (Ledger reasons attach only to candidates the band admits).
-    const second = await decideWith(["band-a", "mid"], 1);
-    expect(second.cascadeStep).toBe(2);
-    expect(
-      second.selected.map((item) => [item.slug, item.cascadeStep]),
-    ).toEqual([["giant-paying", 2]]);
-    const belowGiantFloor = [
-      "below-installation-threshold",
-      "below-paying-class-minimum",
-    ];
-    expect(second.inspections.map((item) => [item.slug, item.reasons])).toEqual(
-      [
-        ["band-a", belowGiantFloor],
-        ["mid", belowGiantFloor],
-        ["low", belowGiantFloor],
-        ["giant-paying", []],
-        ["giant-quiet", ["below-paying-class-minimum"]],
-        ["giant-automattic", ["excluded-author"]],
-      ],
-    );
-    for (const item of second.selected)
-      expect(wordPressTargetSelectionSchema.safeParse(item).success).toBe(true);
-    // Every band exhausted: the 35k candidate is never admitted, and the
-    // primary band's empty decision stands.
-    const none = await decideWith(["band-a", "mid", "giant-paying"], 1);
-    expect(none.cascadeStep).toBeUndefined();
-    expect(none.selected).toEqual([]);
-    expect(none.cascade).toEqual([
-      { step: 0, eligible: 0 },
-      { step: 1, eligible: 0 },
-      { step: 2, eligible: 0 },
-    ]);
-  });
-
-  it("measures exhaustion against the caller's minimum and keeps the primary band's candidates inside a wider step", async () => {
-    const decision = await decideWith([], 2);
-    // Primary 1 < 2, step 1 adds mid (2); the 35k candidate is never admitted.
-    expect(decision.cascadeStep).toBe(1);
-    expect(decision.cascade).toEqual([
-      { step: 0, eligible: 1 },
-      { step: 1, eligible: 2 },
-    ]);
-    expect(decision.selected.map((item) => item.slug)).toEqual([
-      "band-a",
-      "mid",
-    ]);
-    expect(decision.selected.every((item) => item.cascadeStep === 1)).toBe(
-      true,
-    );
-    // The same policy digest binds the batch whichever step admitted it.
-    expect(
-      new Set(decision.selected.map((item) => item.policy.digest)).size,
-    ).toBe(1);
-  });
-
-  it("opens the mirror for a paying-class floor even when no history weight is set", async () => {
-    const quietWeights = {
-      ...automaticPolicy,
-      scoreWeights: { installations: 0.5, recency: 0 },
-    };
-    const harnessed = candidates();
-    const decision = await openWordPressSelection({
-      candidates: harnessed.selection,
-      ledger: ledgerOf(
-        ["band-a", "mid"].flatMap((slug, index) => trialOf(slug, index)),
-      ),
-      promptVariant: "wp2shell-bounty-v8",
-    }).decide(quietWeights, { minimum: 1 });
-    expect(harnessed.opened()).toBe(1);
-    expect(decision.selected.map((item) => item.slug)).toEqual([
-      "giant-paying",
-    ]);
-    // Without a paying-class floor and without weights the mirror stays closed.
-    const plain = candidates();
-    await plain.selection.rank({
-      ...quietWeights,
-      cascade: [{ minimumActiveInstallations: 50_000 }],
-    });
-    expect(plain.opened()).toBe(0);
+      (await selection.select(queuePolicy)).map(({ slug }) => slug),
+    ).toEqual(["popular", "small"]);
   });
 });

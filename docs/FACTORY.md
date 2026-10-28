@@ -88,7 +88,7 @@ flowchart TB
 | 委任された AI がラベルを付ける path | 上記の守る path、prompt の目的文、`policy/selection.json`、`.claude/skills/`、出力契約の雛形、Verifier の victim 契約。出典対照表と委任 comment を付ける |
 | 凍結しているもの | 不変条件、モジュール境界、判定器の集合、選定方針の構造。既定promptは所有者決定による v7 → v8 一本化を例外とする（ADR 0033）（DEVELOPMENT 第 2 節） |
 | 完了の定義 | Step 1: quota 1 週分を人手 0、scope 内 Finding 全件 export、review batch 1 回（最終設計 第 10 節） |
-| 停止条件 | 製品: runner の 6 停止理由。工場: open PR が 3 本を超えたら新しい実装 PR を出さない（第 5 節） |
+| 停止条件 | 製品: runner の 5 停止理由。工場: open PR が 3 本を超えたら新しい実装 PR を出さない（第 5 節） |
 | 作らないもの | 最終設計 第 13 節。自動 prompt 探索、自己改変する harness、第 2 の orchestrator（[報告](reviews/2026-10-15-software-factory-and-meta-harness.md) 第 4 節） |
 | 憲章自体の変更 | 報告 → 所有者の決定 → ADR（週 1 本まで）→ PR。AI は提案だけで、採否は人間（DEVELOPMENT 第 6 節） |
 
@@ -123,7 +123,7 @@ flowchart LR
   subgraph REV["製品ループ"]
     Q["review queue"] -->|batch 上限 3 件| STOP2["所有者が decide --minutes で記録"]
     Q -->|"週 15 件超"| STOP3["PARKING の低価値保留を再開"]
-    RUN["runner"] -->|"6 停止理由<br/>operator / errors / no-progress / programme-stale / exhausted / legacy-history-missing"| STOP4["止まって通知。人間が再開"]
+    RUN["runner"] -->|"5 停止理由<br/>operator / errors / no-progress / programme-stale / exhausted"| STOP4["止まって通知。人間が再開"]
   end
 ```
 
@@ -160,4 +160,4 @@ flowchart LR
 | 証拠の保持 | 台帳（digest 参照）、Private Evidence（Git 外）、experiments.md |
 | monitor | 週末の数字、`docs/reviews/` の日付付き報告、#270 型の Issue 化 |
 | tune | PARKING、ADR 週 1 本、wbh-tune（#271、Step 1 判定後） |
-| 逆圧 | open PR 3 本、review batch 3 件、runner の 6 停止理由 |
+| 逆圧 | open PR 3 本、review batch 3 件、runner の 5 停止理由 |

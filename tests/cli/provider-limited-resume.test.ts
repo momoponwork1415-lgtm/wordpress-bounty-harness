@@ -185,8 +185,6 @@ async function open(runtime: "codex-native/v1" | "claude-code/v1") {
     inspectWordPressLedgerExclusions({
       ledger,
       candidates: [{ slug: "limited", version: "1.0.0" }],
-      currentPromptVariant: "wp2shell-bounty-v8",
-      revisitPolicy: { kind: "never" },
     })[0]?.reasons;
   return { ledger, store, executed, run, reasons };
 }

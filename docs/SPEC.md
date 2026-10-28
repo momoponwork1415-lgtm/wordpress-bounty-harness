@@ -32,7 +32,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 | モジュール | 目的 | 公開インターフェース | 所有する記録 | 失敗時 | 出自 |
 | --- | --- | --- | --- | --- | --- |
-| `selection` | 方針に従って対象を機械的に選び、予算内で順序付ける | `select(policy) → TargetSelection[]`、`inspect` | 選定方針（人間が編集）、WordPress.org の観測、台帳の過去選定、選定記録とスコア内訳 | WordPress.org / Programme観測の unavailable / stale をeligibleにしない | 開発対象はslugと版を直接指定可。公開履歴は mirror の件数と公開日だけを採点に使う（ADR 0037） |
+| `selection` | 方針に従って対象を機械的に選び、予算内で順序付ける | `select(policy) → TargetSelection[]`、`inspect` | 選定方針（人間が編集）、WordPress.org の観測、台帳の過去選定、選定記録と初回・版上昇の理由 | WordPress.org / Programme観測の unavailable / stale をeligibleにしない | 開発対象はslugと版を直接指定可。インストール数と更新日で並べ、同版は 1 Trial、新版なら戻す（ADR 0037 の 2026-10-28 追記） |
 | `snapshot` | 対象plugin、WordPress本体、PHP、必要な依存pluginのsourceをdigestで固定する | `freeze(selection) → Snapshot`、`verify(digest)` | Target / Dependency Snapshot、canonical manifest | archiveの不正path・symlink・size超過を拒否し、必要な依存の欠落を黙って省略しない | 移植: `canonical-source-tree`、`canonical-json`、`immutable-file`、`private-artifact-store` |
 | `lab` | WordPress + MySQLの使い捨てgVisor環境を供給し、ロール別アカウントと、HTTP捕捉のrecorder・Lab browserを付ける。検証Labと、人間が観測する新しいreview Labの両方を立てる | `provision(snapshot, setup) → LabHandle`、`teardown` | Lab Setup digest、ロール認証情報（Lab内のみ） | source / image / runsc不一致では起動しない。provision失敗は `incomplete` 用の理由コード | 移植: `human-os` のgVisor候補検証Lab。拡張: ロール基準の正常操作記録。canaryの播種は2026-10-25に削除した（ADR 0040）。旧discovery用Labは退役し、過去の記録だけを読む |
 | `discovery` | 固定Snapshotで対象ごとにRoot＋子（上限は `discovery.maxChildren`、既定 4）の協調Trialを1回回す | `run(campaignInput) → DiscoveryRun`、`campaign(stopRule)` | Trial id、Root / 子の実行記録、model profile digest、prompt digest、usage、FindingとLeadのdigest参照 | provider / schema / sandbox失敗はtyped receiptとして残し、有効な個別成果を失わない。provider上限はcampaignを止め、runnerがbackoff後に同じcampaign IDで再開する（`runtimeShare` で両 runtime に分けた探索Labなしのcampaignでは、上限に当たった runtime の対象だけを止める。ADR 0032 の 2026-10-20 追記 3）。対象単位の失敗は `target-skipped` で次の対象へ進む | ADR 0029。旧単独Trialと二段構えの記録は読み続ける |
@@ -157,7 +157,7 @@ WordPress profile は Finding の `configurationPrecondition` と Verifier attac
 
 | 場所 | 手段 | 強さ |
 | --- | --- | --- |
-| `selection` | 対象外資産（作者、配布停止、ベンダー側service）を落とす。install下限と上限は[選定方針 JSON](../src/profiles/wordpress/policy/selection.json)を正本とし、プログラムの報奨対象下限は別のscope規則として記録する。公開履歴はローカル mirror の slug 単位の件数と公開日だけを採点に使い、記録の内容は読まず探索にも渡さない。mirror が方針の鮮度を超えて古ければ選定を止める（ADR 0037、ADR 0030 を上書き） | 機械的。方針と除外理由を残す |
+| `selection` | 対象外資産（作者、配布停止、ベンダー側service）を落とす。install下限は[選定方針 JSON](../src/profiles/wordpress/policy/selection.json)を正本とし、プログラムの報奨対象下限は別のscope規則として記録する。選定は mirror を開かず、インストール数と更新日で並べる。新版なら待たずに戻し、未提出 Finding と旧世代の履歴では除外しない（ADR 0037 の 2026-10-28 追記） | 機械的。方針と除外理由を残す |
 | `lab` | discoveryとverifierに渡す認証情報を未認証・subscriber・customer（WooCommerce有効時）に限る。contributor以上と管理者の認証情報は渡さない（例外: 検証skillのhandoffには前提作りのためだけにLabの設定管理者を渡し、`setup-done` 以後は攻撃者位置の資格だけを使う。ADR 0035）。設定は既定のまま、一般的な利用範囲の初期データ（公開フォーム1つ等）はprofileのsetup manifestで入れ、Lab Setup digestに記録する | 機械的。contributor以上の経路は試せない。設定変更もできない |
 | `discovery` | Harnessが付けるProgramme Boundaryの節に対象内の影響（下表）を書き（v5以降、目的promptは分類の順位を持たない。ADR 0032 の 2026-10-16 節）、trust境界宣言でcontributor以上と管理者が意図して付与する権限を信頼側に置く（通常のサイトが有効にし得る設定は除外せず前提として書く。ADR 0038 の 2026-10-26 追記 11） | 誘導。agentは他も報告してよいが、台帳で分類される |
 | `verification` と `review` | 人間がreview Labで確かめる観測をプログラムの受理条件に合わせる（下表）。scope評価はFindingと検証の観測（2026-10-25 以降は人間の観測と再現の記録、既存の記録では判定器の観測）だけから、方針ファイルの規則で `in-scope` / `out` / `ambiguous` を出す。agentの自己申告は使わない | 機械的。提出候補にならない |

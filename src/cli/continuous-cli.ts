@@ -25,7 +25,6 @@ export type ContinuousHostStatus = {
   readonly loginExpiresAt: Date | null;
   readonly programmeObservedAt: Date;
   readonly freeBytes: number;
-  readonly legacyHistoryAvailable: boolean;
   /** ceil(maximumTargets / maxConcurrentTargets) × (runWallTimeMinutes + 30 × 3 + 15). */
   readonly loginMarginMinutes: number;
 };
@@ -352,7 +351,6 @@ export async function continuousCommand(
       if (items.some(({ profile: pinned, image }) => pinned !== image))
         throw new Error("The runtime check differs from the runtime profile");
     },
-    legacyHistoryAvailable: async () => (await host()).legacyHistoryAvailable,
     readAuth: async () => {
       const expiresAt = (await host()).loginExpiresAt;
       return expiresAt === null ? null : { expiresAt };

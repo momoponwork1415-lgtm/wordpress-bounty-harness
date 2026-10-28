@@ -481,8 +481,6 @@ describe("discovery campaign stop and resume", () => {
       inspectWordPressLedgerExclusions({
         ledger,
         candidates,
-        currentPromptVariant: "short-objective",
-        revisitPolicy: { kind: "never" },
       })[0]?.reasons;
     expect(inspect()).toEqual([]);
 

@@ -11,8 +11,18 @@ const maximumResponseBytes = 1_000_000;
 const dayMilliseconds = 86_400_000;
 const slugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]*$/);
 const listingSchema = z.object({
-  info: z.object({ page: z.number().int().positive() }),
-  plugins: z.array(z.object({ slug: slugSchema })).max(50),
+  info: z.object({
+    page: z.number().int().positive(),
+    pages: z.number().int().nonnegative(),
+  }),
+  plugins: z
+    .array(
+      z.object({
+        slug: slugSchema,
+        active_installs: z.number().int().nonnegative(),
+      }),
+    )
+    .max(50),
 });
 
 export interface WordPressOrgCandidate {
@@ -33,7 +43,11 @@ interface ListingIdentity {
 }
 
 type UnavailableReason =
-  "http-error" | "network-failure" | "invalid-response" | "too-large";
+  | "http-error"
+  | "network-failure"
+  | "invalid-response"
+  | "too-large"
+  | "pagination-limit";
 
 export type WordPressOrgListingObservation = ListingIdentity & {
   readonly checkedAt: string;
@@ -42,6 +56,7 @@ export type WordPressOrgListingObservation = ListingIdentity & {
         readonly status: "available";
         readonly observedAt: string;
         readonly contentDigest: string;
+        readonly end?: "installation-floor" | "last-page";
       }
     | {
         readonly status: "stale";
@@ -59,10 +74,8 @@ export interface WordPressOrgCandidateEnumeration {
 
 export interface EnumerateWordPressOrgCandidatesOptions {
   readonly tags?: readonly string[];
-  readonly maxCandidates?: number;
+  readonly minimumActiveInstallations?: number;
   readonly maxAgeDays?: number;
-  readonly popularPages?: number;
-  readonly pagesPerTag?: number;
   readonly perPage?: number;
   readonly fetch?: typeof fetch;
   readonly clock?: () => Date;
@@ -89,6 +102,7 @@ function listingUrl(
   url.searchParams.set("request[per_page]", String(pageSize));
   if (kind === "popular") url.searchParams.set("request[browse]", "popular");
   else if (tag !== undefined) url.searchParams.set("request[tag]", tag);
+  url.searchParams.set("request[fields][active_installs]", "1");
   for (const field of [
     "description",
     "sections",
@@ -99,32 +113,6 @@ function listingUrl(
     url.searchParams.set(`request[fields][${field}]`, "0");
   }
   return url.toString();
-}
-
-function listingRequests(
-  tags: readonly string[],
-  popularPages: number,
-  pagesPerTag: number,
-  perPage: number,
-): ListingRequest[] {
-  const requests: ListingRequest[] = [];
-  for (let page = 1; page <= Math.max(popularPages, pagesPerTag); page++) {
-    if (page <= popularPages)
-      requests.push({
-        kind: "popular",
-        page,
-        sourceUrl: listingUrl("popular", page, perPage),
-      });
-    if (page <= pagesPerTag)
-      for (const tag of tags)
-        requests.push({
-          kind: "tag",
-          tag,
-          page,
-          sourceUrl: listingUrl("tag", page, perPage, tag),
-        });
-  }
-  return requests;
 }
 
 function unavailable(
@@ -140,6 +128,7 @@ async function observeListing(
   fetcher: typeof fetch,
   clock: () => Date,
   maxAgeDays: number,
+  minimumActiveInstallations: number,
 ): Promise<{
   listing: WordPressOrgListingObservation;
   slugs: readonly string[];
@@ -226,6 +215,24 @@ async function observeListing(
       };
     }
     const contentDigest = bytesDigest(bytes);
+    const belowFloor =
+      parsed.plugins.length > 0 &&
+      parsed.plugins.every(
+        (plugin) => plugin.active_installs < minimumActiveInstallations,
+      );
+    const lastPage =
+      request.page >= parsed.info.pages || parsed.plugins.length === 0;
+    // The upstream popular view caps at 99 pages; do not claim it exhausted a still-eligible population.
+    if (
+      !belowFloor &&
+      parsed.plugins.length > 0 &&
+      (request.page >= 999 ||
+        (request.kind === "popular" && request.page >= 99))
+    )
+      return {
+        listing: unavailable(request, "pagination-limit", checkedAt),
+        slugs: [],
+      };
     return {
       listing: {
         ...request,
@@ -233,8 +240,17 @@ async function observeListing(
         status: "available",
         observedAt: new Date(observed).toISOString(),
         contentDigest,
+        ...(belowFloor
+          ? { end: "installation-floor" as const }
+          : lastPage
+            ? { end: "last-page" as const }
+            : {}),
       },
-      slugs: parsed.plugins.map((plugin) => plugin.slug),
+      slugs: parsed.plugins
+        .filter(
+          (plugin) => plugin.active_installs >= minimumActiveInstallations,
+        )
+        .map((plugin) => plugin.slug),
     };
   } catch {
     return {
@@ -244,25 +260,17 @@ async function observeListing(
   }
 }
 
-/** Query bounded popular and tag pages. A stale or failed listing never contributes candidates. */
+/** Read install-ordered public listings through the floor or their final page (#533). */
 export async function enumerateWordPressOrgCandidates(
   options: EnumerateWordPressOrgCandidatesOptions = {},
 ): Promise<WordPressOrgCandidateEnumeration> {
-  const maxCandidates = boundedInteger(
-    options.maxCandidates ?? 100,
-    "maxCandidates",
-    2000,
-  );
-  const popularPages = boundedInteger(
-    options.popularPages ?? 1,
-    "popularPages",
-    20,
-  );
-  const pagesPerTag = boundedInteger(
-    options.pagesPerTag ?? 1,
-    "pagesPerTag",
-    5,
-  );
+  const minimumActiveInstallations =
+    options.minimumActiveInstallations ?? 10_000;
+  if (
+    !Number.isSafeInteger(minimumActiveInstallations) ||
+    minimumActiveInstallations < 0
+  )
+    throw new Error("minimumActiveInstallations must be a nonnegative integer");
   const perPage = boundedInteger(options.perPage ?? 20, "perPage", 50);
   const maxAgeDays = options.maxAgeDays ?? 2;
   if (!Number.isFinite(maxAgeDays) || maxAgeDays <= 0) {
@@ -286,57 +294,47 @@ export async function enumerateWordPressOrgCandidates(
   const listings: WordPressOrgListingObservation[] = [];
   const candidates: WordPressOrgCandidate[] = [];
   const seen = new Set<string>();
-  const availableGroups: Array<{
-    listing: Extract<WordPressOrgListingObservation, { status: "available" }>;
-    slugs: readonly string[];
-  }> = [];
-  for (const request of listingRequests(
-    tags,
-    popularPages,
-    pagesPerTag,
-    perPage,
-  )) {
-    const result = await observeListing(request, fetcher, clock, maxAgeDays);
-    listings.push(result.listing);
-    if (result.listing.status === "available") {
-      availableGroups.push({ listing: result.listing, slugs: result.slugs });
+  for (const tag of [undefined, ...tags]) {
+    const kind = tag === undefined ? "popular" : "tag";
+    for (let page = 1; page <= 999; page++) {
+      const request: ListingRequest = {
+        kind,
+        ...(tag === undefined ? {} : { tag }),
+        page,
+        sourceUrl: listingUrl(kind, page, perPage, tag),
+      };
+      const result = await observeListing(
+        request,
+        fetcher,
+        clock,
+        maxAgeDays,
+        minimumActiveInstallations,
+      );
+      const listing = result.listing;
+      listings.push(listing);
+      if (listing.status !== "available") break;
+      for (const slug of result.slugs) {
+        if (seen.has(slug)) continue;
+        seen.add(slug);
+        candidates.push({
+          slug,
+          sourceKind: kind,
+          ...(tag === undefined ? {} : { sourceTag: tag }),
+          sourcePage: page,
+          sourceUrl: listing.sourceUrl,
+          observedAt: listing.observedAt,
+          contentDigest: listing.contentDigest,
+        });
+      }
+      if (listing.end !== undefined) break;
     }
   }
-  const longestPage = Math.max(
-    0,
-    ...availableGroups.map((group) => group.slugs.length),
-  );
-  for (
-    let position = 0;
-    position < longestPage && candidates.length < maxCandidates;
-    position++
-  ) {
-    for (const group of availableGroups) {
-      const slug = group.slugs[position];
-      if (
-        slug === undefined ||
-        seen.has(slug) ||
-        candidates.length >= maxCandidates
-      )
-        continue;
-      seen.add(slug);
-      candidates.push({
-        slug,
-        sourceKind: group.listing.kind,
-        ...(group.listing.tag === undefined
-          ? {}
-          : { sourceTag: group.listing.tag }),
-        sourcePage: group.listing.page,
-        sourceUrl: group.listing.sourceUrl,
-        observedAt: group.listing.observedAt,
-        contentDigest: group.listing.contentDigest,
-      });
-    }
-  }
-  const status = listings.some((listing) => listing.status === "available")
-    ? "available"
+  // A failed source leaves an incomplete population, never an apparently empty queue.
+  const status = listings.some((listing) => listing.status === "unavailable")
+    ? "unavailable"
     : listings.some((listing) => listing.status === "stale")
       ? "stale"
-      : "unavailable";
+      : "available";
+  if (status !== "available") candidates.length = 0;
   return { status, candidates, listings };
 }

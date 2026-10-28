@@ -144,7 +144,6 @@ function hostProfile(
       loginExpiresAt: new Date("2027-01-01T00:00:00Z"),
       programmeObservedAt: new Date(NOW),
       freeBytes: 100 * 1024 ** 3,
-      legacyHistoryAvailable: true,
       loginMarginMinutes: 60,
     }),
     checkRuntime: async () => [],
@@ -497,7 +496,7 @@ describe("continuous run", () => {
     );
   });
 
-  it("stops when the host status says the legacy history is missing", async () => {
+  it("stops when the host status says the programme is stale", async () => {
     const sweeps: string[] = [];
     const t = await setup(
       hostProfile({
@@ -505,18 +504,15 @@ describe("continuous run", () => {
         sweeps,
         hostStatus: async () => ({
           loginExpiresAt: null,
-          programmeObservedAt: new Date(NOW),
-          freeBytes: 0,
-          legacyHistoryAvailable: false,
+          programmeObservedAt: new Date("2020-01-01"),
+          freeBytes: 100 * 1024 ** 3,
           loginMarginMinutes: 60,
         }),
       }),
     );
     expect(await t.command("run", RUN_OPTIONS)).toBe(0);
-    expect(await readFile(t.paths.stop, "utf8")).toBe(
-      "legacy-history-missing\n",
-    );
-    expect(sweeps).toEqual([]);
+    expect(await readFile(t.paths.stop, "utf8")).toBe("programme-stale\n");
+    expect(sweeps).toEqual(["remove"]);
   });
 
   it("sweeps only discovery leftovers through the profile", async () => {

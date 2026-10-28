@@ -56,7 +56,6 @@ import {
   createWordPressSelection,
   type WordPressSelectionPolicy,
 } from "../profiles/wordpress/selection/index.js";
-import { openWordfenceAdvisoryHistory } from "../profiles/wordpress/wordfence-history/advisory-counts.js";
 import { HandoffVerifier } from "../profiles/wordpress/verification/handoff-verifier.js";
 import { createWordPressHttpEvidenceReader } from "../profiles/wordpress/verification/http-evidence.js";
 import { createWordPressStateDiffReader } from "../profiles/wordpress/verification/lab-state-diff.js";
@@ -127,7 +126,6 @@ export const wordpressHostConfigSchema = z.strictObject({
     .strictObject({ databasePath: absolutePath, statePath: absolutePath })
     .optional(),
   /** Earlier generations' started / ambiguous slugs (D2); `continuous run` requires it. */
-  legacyHistory: z.strictObject({ file: absolutePath }).optional(),
 });
 export type WordPressHostConfig = z.infer<typeof wordpressHostConfigSchema>;
 
@@ -222,12 +220,6 @@ export async function createWordPressHostProfile(options: {
     sandboxImageDigest: digestOf(host.images.codex),
   });
 
-  // Selection reads the mirror's counts and dates only when the policy weights history (ADR 0037).
-  const advisoryHistory =
-    host.wordfenceHistory === undefined
-      ? undefined
-      : openWordfenceAdvisoryHistory(host.wordfenceHistory);
-
   // Public selection and source freezing need no provider credential or Lab.
   const selectionBoundaries = async (
     state: CliState,
@@ -298,7 +290,6 @@ export async function createWordPressHostProfile(options: {
         programmeRef,
         clock: state.clock,
         ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-        ...(advisoryHistory === undefined ? {} : { advisoryHistory }),
       }),
       freeze: async (target) => {
         const snapshot = await snapshotStore.freeze({
@@ -498,7 +489,6 @@ export async function createWordPressHostProfile(options: {
         programmeRef,
         clock: state.clock,
         ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-        ...(advisoryHistory === undefined ? {} : { advisoryHistory }),
       });
       return selection;
     };
@@ -660,9 +650,6 @@ export async function createWordPressHostProfile(options: {
     ...(host.wordfenceHistory === undefined
       ? {}
       : { wordfenceHistory: host.wordfenceHistory }),
-    ...(host.legacyHistory === undefined
-      ? {}
-      : { legacyHistoryFile: host.legacyHistory.file }),
   });
   return {
     ...profile,
@@ -750,12 +737,6 @@ export async function createWordPressHostProfile(options: {
           await free(host.workDirectory),
           await free(state.stateDirectory),
         ),
-        legacyHistoryAvailable:
-          host.legacyHistory !== undefined &&
-          (await stat(host.legacyHistory.file).then(
-            () => true,
-            () => false,
-          )),
         // Targets run in waves of maxConcurrentTargets; the margin covers one batch.
         // Under a Codex cap a whole batch on Codex runs in waves of that cap.
         loginMarginMinutes:

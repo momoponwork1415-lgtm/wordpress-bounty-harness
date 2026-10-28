@@ -80,7 +80,6 @@ import {
   type WordPressSelectionPolicy,
   type WordPressTargetSelection,
 } from "../profiles/wordpress/selection/index.js";
-import { loadWordPressLegacyHistory } from "../profiles/wordpress/selection/legacy-history.js";
 import { WORDPRESS_SANDBOX_LAYOUT } from "../profiles/wordpress/sandbox-layout.js";
 import { createWordPressScopeFacts } from "../profiles/wordpress/scope-facts.js";
 import { createWordfenceDuplicateLookup } from "../profiles/wordpress/wordfence-history/duplicate-lookup.js";
@@ -175,7 +174,6 @@ type ReservedSelection = {
 type ReservedSelectionBatch = {
   readonly id: string;
   readonly reportDigest: string;
-  readonly legacyHistoryDigest: string | null;
   readonly selections: readonly ReservedSelection[];
 };
 
@@ -207,15 +205,6 @@ async function reservedSelectionBatch(
   const batchSchema = z.object({
     schemaVersion: z.literal(1),
     policyDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
-    legacyHistory: z
-      .union([
-        z.object({
-          status: z.literal("available"),
-          digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
-        }),
-        z.object({ status: z.literal("unavailable") }),
-      ])
-      .optional(),
     selectedSnapshotDigests: z.array(z.string().regex(/^sha256:[a-f0-9]{64}$/)),
   });
   for (const batch of sortedBatches) {
@@ -274,10 +263,6 @@ async function reservedSelectionBatch(
     return {
       id: batch[0]!.event.campaignId,
       reportDigest: reportRef.digest,
-      legacyHistoryDigest:
-        report.legacyHistory?.status === "available"
-          ? report.legacyHistory.digest
-          : null,
       selections: result,
     };
   }
@@ -294,7 +279,6 @@ async function bindCampaignSelectionBatch(
   policy: WordPressSelectionPolicy,
   campaignId: string,
   targetSlug: string | null,
-  legacyHistoryDigest: string,
   /** The runner's own batch; without it, the latest batch of this policy (#604). */
   requestedBatchId?: string,
 ): Promise<readonly ReservedSelection[]> {
@@ -324,10 +308,6 @@ async function bindCampaignSelectionBatch(
     policy,
     binding?.selectionBatchId ?? requestedBatchId,
   );
-  if (batch.legacyHistoryDigest !== legacyHistoryDigest)
-    throw new Error(
-      "legacy-history-changed: reserved selection used different old Trial history; run select again",
-    );
   if (binding !== undefined) {
     if (
       binding.policyDigest !== canonicalDigest(policy) ||
@@ -1740,22 +1720,10 @@ async function resumeWithExplorationLab(options: {
 async function runWordPressCampaign(
   state: CliState,
   input: Parameters<CliProfile["runCampaign"]>[1],
-  options: Pick<WordPressCliProfileOptions, "legacyHistoryFile">,
   session: WordPressCampaignSession,
 ): ReturnType<CliProfile["runCampaign"]> {
   const { config, boundaries } = session;
   const policy = await session.policy();
-  // The policy's revisitPolicy is applied by `select`; a repeat Trial on a higher
-  // version is a selection outcome, not a campaign-level approval (ADR 0037 addendum).
-  let legacyHistoryDigest: string | undefined;
-  if ("candidateSource" in policy) {
-    const legacy = await loadWordPressLegacyHistory(options.legacyHistoryFile);
-    if (legacy.report.status !== "available")
-      throw new Error(
-        "legacy-history-missing: automatic campaign cannot start",
-      );
-    legacyHistoryDigest = legacy.report.digest;
-  }
   const reservedSelections =
     "candidateSource" in policy
       ? await bindCampaignSelectionBatch(
@@ -1763,7 +1731,6 @@ async function runWordPressCampaign(
           policy,
           input.campaignId,
           input.target,
-          legacyHistoryDigest!,
           input.selectionBatchId,
         )
       : undefined;
@@ -1953,23 +1920,16 @@ export function createWordPressCliProfile(
         WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID;
       // Automatic batches keep the historical floor of 3 unless the caller lowers it.
       const minimum = input.minimum ?? ("candidateSource" in policy ? 3 : 1);
-      // Policy, Ledger and legacy history decide; this command freezes and records.
-      // Below `minimum` eligible candidates the policy's cascade steps are tried in order.
+      // The selection queue decides; this command freezes and records.
       const decision = await openWordPressSelection({
         candidates: boundaries.selection,
         ledger: state.ledger,
-        ...(options.legacyHistoryFile === undefined
-          ? {}
-          : { legacyHistoryFile: options.legacyHistoryFile }),
-        promptVariant,
-        clock: state.clock,
       }).decide(policy, {
-        minimum,
         ...(input.reservedBatches === undefined
           ? {}
           : { reservedBatches: input.reservedBatches }),
       });
-      let inspected = decision.inspections;
+      const inspected = decision.inspections;
       // Freeze and batch outcomes are appended to the decision's reasons below.
       const reasons = new Map<string, string[]>(
         inspected.map((item) => [item.slug, [...item.reasons]]),
@@ -1984,55 +1944,31 @@ export function createWordPressCliProfile(
         diagnosticDigest: string;
         selectionArtifactDigest: string;
       }[] = [];
-      // Ranked beyond the cutoff fills in when a better-ranked source fails to
-      // freeze. When a band's freezes leave fewer than `minimum` targets, the
-      // next cascade bands are tried in turn, as the pre-freeze decision would
-      // have done had the failed sources not counted as eligible (#623).
-      const tried = [...decision.cascade];
-      const attempted = new Set<string>();
-      let bandUsed = decision.cascadeStep ?? 0;
-      const firstBand = Math.max(
-        0,
-        decision.bands.findIndex((band) => band.step === bandUsed),
-      );
-      for (const band of decision.bands.slice(firstBand)) {
-        if (band.step !== bandUsed) {
-          if (chosen.length >= minimum) break;
-          bandUsed = band.step;
-          if (!tried.some((entry) => entry.step === band.step))
-            tried.push({ step: band.step, eligible: band.ranked.length });
-          inspected = band.inspections;
-          for (const item of band.inspections)
-            if (!attempted.has(item.slug))
-              reasons.set(item.slug, [...item.reasons]);
+      // Keep filling the same queue when a higher-ranked source cannot freeze.
+      for (const target of decision.ranked) {
+        if (chosen.length >= policy.maximumTargets) {
+          reasons.get(target.slug)?.push("below-rank-cutoff");
+          continue;
         }
-        for (const target of band.ranked) {
-          if (attempted.has(target.slug)) continue;
-          attempted.add(target.slug);
-          if (chosen.length >= policy.maximumTargets) {
-            reasons.get(target.slug)?.push("below-rank-cutoff");
-            continue;
-          }
-          try {
-            chosen.push({ target, snapshot: await boundaries.freeze(target) });
-          } catch (error) {
-            reasons.get(target.slug)?.push("snapshot-unavailable");
-            const { reason, digest } = await storeTargetSkipDiagnostic(
-              state.store,
-              error,
-            );
-            const selectionId = targetSelectionId(target);
-            const selectionArtifactDigest = await state.store.putFiles({
-              "target-selection.json": canonicalJson(target),
-            });
-            freezeFailures.push({
-              selectionId,
-              snapshotDigest: canonicalDigest(target),
-              reason,
-              diagnosticDigest: digest,
-              selectionArtifactDigest,
-            });
-          }
+        try {
+          chosen.push({ target, snapshot: await boundaries.freeze(target) });
+        } catch (error) {
+          reasons.get(target.slug)?.push("snapshot-unavailable");
+          const { reason, digest } = await storeTargetSkipDiagnostic(
+            state.store,
+            error,
+          );
+          const selectionId = targetSelectionId(target);
+          const selectionArtifactDigest = await state.store.putFiles({
+            "target-selection.json": canonicalJson(target),
+          });
+          freezeFailures.push({
+            selectionId,
+            snapshotDigest: canonicalDigest(target),
+            reason,
+            diagnosticDigest: digest,
+            selectionArtifactDigest,
+          });
         }
       }
       const inspectionBySlug = new Map(
@@ -2059,11 +1995,7 @@ export function createWordPressCliProfile(
         })),
         selectedSnapshotDigests: chosen.map(({ snapshot }) => snapshot.digest),
         freezeFailures,
-        legacyHistory: decision.legacyHistory,
-        advisoryHistory: decision.advisoryHistory,
         minimum,
-        ...(bandUsed === 0 ? {} : { cascadeStep: bandUsed }),
-        cascade: tried,
       };
       const reportDigest = await state.store.putFiles({
         "selection-report.json": canonicalJson(report),
@@ -2108,10 +2040,6 @@ export function createWordPressCliProfile(
           type: "target-selected",
           selectionId: targetSelectionId(target),
           promptVariant,
-          // The band that admitted the target, so per-band yield can be read from the ledger.
-          ...(target.cascadeStep === undefined
-            ? {}
-            : { cascadeStep: target.cascadeStep }),
           artifacts: [
             { kind: "target-selection", digest: selectionDigest },
             { kind: "selection-report", digest: reportDigest },
@@ -2124,21 +2052,12 @@ export function createWordPressCliProfile(
       return {
         batchId,
         sourceStatus: decision.sourceStatus,
-        legacyHistory: decision.legacyHistory,
-        advisoryHistory: decision.advisoryHistory,
-        ...(bandUsed === 0 ? {} : { cascadeStep: bandUsed }),
-        cascade: tried,
         selected: chosen.map(({ target }) => ({
           targetId: target.targetId,
           version: target.version,
-          score: target.score,
-          scoreBreakdown: target.scoreBreakdown,
-          ...(target.advisoryHistory === undefined
-            ? {}
-            : { advisoryHistory: target.advisoryHistory }),
-          ...(target.cascadeStep === undefined
-            ? {}
-            : { cascadeStep: target.cascadeStep }),
+          activeInstallations: target.activeInstallations,
+          versionPublishedAt: target.versionPublishedAt,
+          reason: target.reason ?? "initial",
           observedAt:
             inspectionBySlug.get(target.slug)?.observedAt ?? target.selectedAt,
           ...(inspectionBySlug.get(target.slug)?.enumeration === undefined
@@ -2166,7 +2085,6 @@ export function createWordPressCliProfile(
       runWordPressCampaign(
         state,
         input,
-        options,
         await openWordPressCampaignSession(options, state, input),
       ),
     async discardStaleSelection(state, input) {
@@ -2373,28 +2291,16 @@ export function createWordPressCliProfile(
               ...configuredPluginPins,
               ...originalPluginPins,
             };
-            // Rechecking a known Finding does not need the candidate batch's
-            // history ranking, so the mirror is not opened here (ADR 0037).
-            const unranked = {
-              ...policy,
-              scoreWeights: {
-                ...policy.scoreWeights,
-                history: 0,
-                historyPayingClass: 0,
-              },
-            };
             const reverifyPolicy =
-              "candidateSource" in unranked
+              "candidateSource" in policy
                 ? (({
                     candidateSource: _candidateSource,
                     pluginDependencySlugs: _pluginDependencySlugs,
-                    cascade: _cascade,
                     ...rest
-                  }) => rest)(unranked)
-                : unranked;
+                  }) => rest)(policy)
+                : policy;
             const {
               targetSourcePins: _targetSourcePins,
-              maximumActiveInstallations: _maximumActiveInstallations,
               ...policyWithoutCapturedSources
             } = reverifyPolicy as WordPressSelectionPolicy & {
               targetSourcePins?: Readonly<Record<string, unknown>>;

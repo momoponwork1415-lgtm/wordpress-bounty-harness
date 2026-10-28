@@ -179,27 +179,12 @@ async function harness(
     readonly dependencySources?: boolean;
     /** Plugin sources sealed in the original and control Snapshots. */
     readonly snapshotPluginDependencies?: Readonly<Record<string, string>>;
-    readonly legacyHistoryUnavailable?: boolean;
     /** While it returns an error, the Lab's source resolution throws it inside provision. */
     readonly labProvisionError?: () => Error | undefined;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-cli-"));
   directories.push(root);
-  const legacyHistoryFile = join(root, "legacy-history.json");
-  if (!options.legacyHistoryUnavailable)
-    await writeFile(
-      legacyHistoryFile,
-      JSON.stringify({
-        schemaVersion: 1,
-        sourceDigest: sha("a"),
-        exportedAt: now,
-        sources: ["synthetic"],
-        started: [],
-        ambiguous: [],
-        reconsider: [],
-      }),
-    );
   const sourceDirectory = join(root, "source");
   await mkdir(join(sourceDirectory, "includes"), { recursive: true });
   await writeFile(
@@ -910,7 +895,6 @@ async function harness(
     newId: () => `id-${++ids}`,
     profile: createWordPressCliProfile({
       scopePolicy: await loadWordpressScopePolicy(),
-      legacyHistoryFile,
       ...(options.scopeFacts === undefined
         ? {}
         : { scopeFacts: options.scopeFacts }),
@@ -953,7 +937,6 @@ async function harness(
       maximumTargets: options.candidates?.length ?? 1,
       excludedAuthors: [],
       excludedSlugs: [],
-      scoreWeights: { installations: 1, recency: 1 },
     }),
   );
   const configPath = join(root, "campaign.json");
@@ -1149,7 +1132,6 @@ async function harness(
     docker,
     live,
     root,
-    legacyHistoryFile,
     ledger: () => state.ledger,
     state: () => state,
     profile: environment.profile,
@@ -3128,7 +3110,6 @@ describe("harness CLI vertical slice", () => {
       loginExpiresAt: new Date("2027-01-01T00:00:00Z"),
       programmeObservedAt: new Date(now),
       freeBytes: 100 * 1024 ** 3,
-      legacyHistoryAvailable: true,
       loginMarginMinutes: 60,
     });
     // The runner explores its first batch; any later state change stops it.
@@ -3263,6 +3244,7 @@ describe("harness CLI vertical slice", () => {
     async ({ failure, reason, children }) => {
       const { run, configPath, prompts, ledger } = await harness({
         candidates: ["synthetic-plugin", "zz-next-plugin"],
+        installs: { "synthetic-plugin": 10_000, "zz-next-plugin": 5_000 },
         [failure]: [1],
         ...(children ? { endedChildrenOnCalls: [1] } : {}),
         config: {
@@ -3874,6 +3856,27 @@ describe("harness CLI vertical slice", () => {
     ]);
   });
 
+  it.each(["missing", "unreadable"])(
+    "selects while the configured mirror is %s",
+    async (status) => {
+      const { run, root, configPath, ledger } = await harness({
+        history: true,
+      });
+      if (status === "missing") {
+        await rm(join(root, "wordfence.sqlite"));
+        await rm(join(root, "wordfence-state.json"));
+      } else {
+        await writeFile(join(root, "wordfence.sqlite"), "not a database");
+        await writeFile(join(root, "wordfence-state.json"), "not JSON");
+      }
+      const selected = await run("select", "--config", configPath);
+      expect(selected.code).toBe(0);
+      expect(selected.stderr).toBe("");
+      expect(ledger().read({ type: "target-selected" })).toHaveLength(1);
+      expect(ledger().read({ type: "discovery-run-started" })).toHaveLength(0);
+    },
+  );
+
   it("shows the history mirror freshness by the same rule as the duplicate lookup", async () => {
     const { run, root } = await harness({ history: true });
     // Viewing never initializes state; seed the fixture explicitly.
@@ -4121,7 +4124,7 @@ describe("harness CLI vertical slice", () => {
     expect(selected.stdout).toContain(
       "excluded wporg:broken-plugin  reasons snapshot-unavailable",
     );
-    expect(selected.stdout).toContain("wporg:synthetic-plugin 3.3.1 score");
+    expect(selected.stdout).toContain("wporg:synthetic-plugin 3.3.1 installs");
     const skips = ledger()
       .read({ type: "target-skipped" })
       .map(({ event }) => event);
@@ -4187,12 +4190,11 @@ describe("harness CLI vertical slice", () => {
       });
   });
 
-  it("falls through to the next cascade band when the primary band's only candidate fails to freeze (#623)", async () => {
+  it("continues the install queue when its highest ranked source fails to freeze (#533)", async () => {
     const { run, root, ledger, store } = await harness({
       candidates: ["broken-plugin", "item-b"],
       failFreeze: "broken-plugin",
       installs: { "broken-plugin": 150_000, "item-b": 60_000 },
-      legacyHistoryUnavailable: true,
     });
     const policyPath = join(root, "selection.json");
     const policy = JSON.parse(await readFile(policyPath, "utf8")) as Record<
@@ -4206,25 +4208,22 @@ describe("harness CLI vertical slice", () => {
       JSON.stringify({
         ...policy,
         promptVariant: "wp2shell-bounty-v11",
-        revisitPolicy: { kind: "never" },
+        revisitPolicy: { kind: "version-increased" },
         wordpressVersion: "6.8",
         maximumTargets: 3,
         candidateSource: {
           kind: "wordpress-org",
-          popularPages: 1,
+
           tags: [],
-          pagesPerTag: 1,
+
           perPage: 20,
-          maxCandidates: 20,
+
           maxAgeDays: 1,
         },
-        minimumActiveInstallations: 100_000,
-        maximumActiveInstallations: 1_000_000,
-        cascade: [{ minimumActiveInstallations: 50_000 }],
+        minimumActiveInstallations: 10_000,
       }),
     );
-    // Before the freeze the primary band holds one eligible candidate, so the
-    // decision stands on it; after its freeze fails the 50k band supplies the batch.
+    // A failed source does not prevent the remaining queue from supplying a batch.
     const selected = await run(
       "select",
       "--config",
@@ -4234,18 +4233,14 @@ describe("harness CLI vertical slice", () => {
     );
     expect(selected.code).toBe(0);
     expect(selected.stdout).toMatch(/^selection batch selection-/m);
-    expect(selected.stdout).toContain(
-      "cascade step 0 eligible 1; step 1 eligible 2 (selected)",
-    );
+    expect(selected.stdout).toContain("installs 60000");
     expect(selected.stdout).toContain(
       "excluded wporg:broken-plugin  reasons snapshot-unavailable",
     );
     const chosen = ledger()
       .read({ type: "target-selected" })
       .map(({ event }) => event);
-    expect(chosen).toMatchObject([
-      { selectionId: "wporg:item-b@9.9.9", cascadeStep: 1 },
-    ]);
+    expect(chosen).toMatchObject([{ selectionId: "wporg:item-b@9.9.9" }]);
     const reportRef = chosen[0]?.artifacts.find(
       (artifact) => artifact.kind === "selection-report",
     );
@@ -4257,12 +4252,6 @@ describe("harness CLI vertical slice", () => {
     expect(report.status).toBe("resolved");
     if (report.status === "resolved")
       expect(JSON.parse(report.bytes.toString("utf8"))).toMatchObject({
-        cascadeStep: 1,
-        // The 50k band also holds the 150k candidate, so it counts 2 before the freeze.
-        cascade: [
-          { step: 0, eligible: 1 },
-          { step: 1, eligible: 2 },
-        ],
         freezeFailures: [{ selectionId: "wporg:broken-plugin@9.9.9" }],
       });
   });
@@ -4271,7 +4260,6 @@ describe("harness CLI vertical slice", () => {
     const { run, root, ledger, store, configPath } = await harness({
       candidates: ["broken-plugin", "item-b"],
       failFreeze: "broken-plugin",
-      legacyHistoryUnavailable: true,
     });
     const policyPath = join(root, "selection.json");
     const policy = JSON.parse(await readFile(policyPath, "utf8")) as Record<
@@ -4285,16 +4273,16 @@ describe("harness CLI vertical slice", () => {
       JSON.stringify({
         ...policy,
         promptVariant: "wp2shell-bounty-v11",
-        revisitPolicy: { kind: "never" },
+        revisitPolicy: { kind: "version-increased" },
         wordpressVersion: "6.8",
         maximumTargets: 3,
         candidateSource: {
           kind: "wordpress-org",
-          popularPages: 1,
+
           tags: [],
-          pagesPerTag: 1,
+
           perPage: 20,
-          maxCandidates: 20,
+
           maxAgeDays: 1,
         },
       }),
@@ -4302,7 +4290,6 @@ describe("harness CLI vertical slice", () => {
     const selected = await run("select", "--config", policyPath);
     // Below the floor of 3: no batch, a reason per target, and no throw.
     expect(selected.code).toBe(0);
-    expect(selected.stdout).toContain("legacy history unavailable");
     expect(selected.stdout).toContain("no targets selected");
     expect(selected.stdout).toContain(
       "excluded wporg:item-b  reasons below-minimum",
@@ -4322,7 +4309,6 @@ describe("harness CLI vertical slice", () => {
     if (report.status === "resolved")
       expect(JSON.parse(report.bytes.toString("utf8"))).toMatchObject({
         freezeFailures: [{ selectionId: "wporg:broken-plugin@9.9.9" }],
-        legacyHistory: { status: "unavailable" },
         minimum: 3,
       });
     // The runner's floor of 1 makes a batch of the one eligible target.
@@ -4339,9 +4325,14 @@ describe("harness CLI vertical slice", () => {
       "--config",
       configPath,
     );
-    expect(automatic.code).toBe(1);
-    expect(automatic.stderr).toContain("legacy-history-missing");
-    expect(ledger().read({ campaignId: "campaign-no-legacy" })).toHaveLength(0);
+    expect(automatic.stderr).toBe("");
+    expect(automatic.code).toBe(0);
+    expect(
+      ledger().read({
+        campaignId: "campaign-no-legacy",
+        type: "discovery-run-started",
+      }),
+    ).not.toHaveLength(0);
     expect(
       (await run("select", "--config", policyPath, "--minimum", "0")).code,
     ).toBe(2);
@@ -4389,7 +4380,9 @@ describe("harness CLI vertical slice", () => {
     const { run, configPath, prompts } = await harness();
     const selected = await run("select", "--config", configPath);
     expect(selected.code).toBe(0);
-    expect(selected.stdout).toMatch(/^wporg:synthetic-plugin 3\.3\.1 score /m);
+    expect(selected.stdout).toMatch(
+      /^wporg:synthetic-plugin 3\.3\.1 installs /m,
+    );
 
     const unmatched = await run(
       "campaign",
@@ -4481,25 +4474,25 @@ describe("harness CLI vertical slice", () => {
       JSON.stringify({
         ...manual,
         promptVariant: "wp2shell-bounty-v11",
-        revisitPolicy: { kind: "never" },
+        revisitPolicy: { kind: "version-increased" },
         wordpressVersion: "6.8",
         maximumTargets: 3,
         candidateSource: {
           kind: "wordpress-org",
-          popularPages: 1,
+
           tags: [],
-          pagesPerTag: 1,
+
           perPage: 20,
-          maxCandidates: 20,
+
           maxAgeDays: 1,
         },
       }),
     );
     const first = await run("select", "--config", policyPath);
     expect(first.code).toBe(0);
-    expect(first.stdout).toContain("wporg:item-a 9.9.9 score");
-    expect(first.stdout).toContain("wporg:item-c 9.9.9 score");
-    expect(first.stdout).toContain("breakdown installations=");
+    expect(first.stdout).toContain("wporg:item-a 9.9.9 installs");
+    expect(first.stdout).toContain("wporg:item-c 9.9.9 installs");
+    expect(first.stdout).toContain("installs 5000");
     expect(first.stdout).toContain(
       "excluded wporg:item-d  reasons below-rank-cutoff",
     );
@@ -4516,12 +4509,12 @@ describe("harness CLI vertical slice", () => {
     expect(firstBatch.code).toBe(0);
     const second = await run("select", "--config", policyPath);
     expect(second.code).toBe(0);
-    expect(second.stdout).not.toContain("wporg:item-a 9.9.9 score");
+    expect(second.stdout).not.toContain("wporg:item-a 9.9.9 installs");
     expect(second.stdout).toContain(
       "excluded wporg:item-b  reasons previously-selected",
     );
-    expect(second.stdout).toContain("wporg:item-d 9.9.9 score");
-    expect(second.stdout).toContain("wporg:item-f 9.9.9 score");
+    expect(second.stdout).toContain("wporg:item-d 9.9.9 installs");
+    expect(second.stdout).toContain("wporg:item-f 9.9.9 installs");
     const reservations = ledger()
       .read({ type: "target-selected", limit: 100 })
       .filter(({ event }) => event.campaignId.startsWith("selection-"));
@@ -4592,7 +4585,7 @@ describe("harness CLI vertical slice", () => {
 
     const third = await run("select", "--config", policyPath);
     expect(third.code).toBe(0);
-    expect(third.stdout).toContain("wporg:item-g 9.9.9 score");
+    expect(third.stdout).toContain("wporg:item-g 9.9.9 installs");
     const labsBeforeCompletedResume = ledger().read({
       campaignId: "campaign-reserved",
       type: "lab-provisioned",
@@ -4638,7 +4631,7 @@ describe("harness CLI vertical slice", () => {
       policyPath,
       JSON.stringify({
         ...replayPolicy,
-        revisitPolicy: { kind: "version-or-prompt-changed" },
+        maximumUpdateAgeDays: 364,
       }),
     );
     const replay = await run(
@@ -4650,18 +4643,19 @@ describe("harness CLI vertical slice", () => {
       "--config",
       configPath,
     );
-    // A changed revisit rule is a changed policy digest: no batch matches it
-    // (the former `revisitPolicy: never` guard went with the ADR 0037 addendum).
+    // A changed policy digest cannot replay the old batch.
     expect(replay.code).toBe(1);
     expect(replay.stderr).toContain(
       "No reserved selection batch matches this policy",
     );
 
-    // A batch bound before legacy digests were recorded parses as null. The
-    // resumed campaign stops before writing another event until reselected.
+    // Historical report fields do not gate replay of a matching batch.
     await writeFile(
       policyPath,
-      JSON.stringify({ ...replayPolicy, revisitPolicy: { kind: "never" } }),
+      JSON.stringify({
+        ...replayPolicy,
+        revisitPolicy: { kind: "version-increased" },
+      }),
     );
     const oldSelection = reservations[0]?.event;
     if (oldSelection?.type !== "target-selected")
@@ -4670,7 +4664,7 @@ describe("harness CLI vertical slice", () => {
       string,
       unknown
     >;
-    delete oldReport.legacyHistory;
+    oldReport.legacyHistory = { status: "unavailable" };
     oldReport.selectedSnapshotDigests = [oldSelection.snapshotDigest];
     const oldReportDigest = await store().putFiles({
       "selection-report.json": JSON.stringify(oldReport),
@@ -4711,9 +4705,8 @@ describe("harness CLI vertical slice", () => {
       "--config",
       configPath,
     );
-    expect(oldResume.code).toBe(1);
-    expect(oldResume.stderr).toContain("legacy-history-changed");
-    expect(ledger().read({ campaignId: "campaign-old-bound" })).toHaveLength(1);
+    expect(oldResume.stderr).toBe("");
+    expect(oldResume.code).toBe(0);
   });
 
   it("keeps a held batch's targets out of another runner's selection and binds the batch a runner names (#604)", async () => {
@@ -4732,16 +4725,16 @@ describe("harness CLI vertical slice", () => {
       JSON.stringify({
         ...manual,
         promptVariant: "wp2shell-bounty-v11",
-        revisitPolicy: { kind: "never" },
+        revisitPolicy: { kind: "version-increased" },
         wordpressVersion: "6.8",
         maximumTargets: 3,
         candidateSource: {
           kind: "wordpress-org",
-          popularPages: 1,
+
           tags: [],
-          pagesPerTag: 1,
+
           perPage: 20,
-          maxCandidates: 20,
+
           maxAgeDays: 1,
         },
       }),
@@ -4826,16 +4819,16 @@ describe("harness CLI vertical slice", () => {
     const automatic = {
       ...manual,
       promptVariant: "wp2shell-bounty-v11",
-      revisitPolicy: { kind: "never" },
+      revisitPolicy: { kind: "version-increased" },
       wordpressVersion,
       maximumTargets: 3,
       candidateSource: {
         kind: "wordpress-org",
-        popularPages: 1,
+
         tags: [],
-        pagesPerTag: 1,
+
         perPage: 20,
-        maxCandidates: 20,
+
         maxAgeDays: 1,
       },
     };
@@ -4846,7 +4839,6 @@ describe("harness CLI vertical slice", () => {
       loginExpiresAt: new Date("2027-01-01T00:00:00Z"),
       programmeObservedAt: new Date(now),
       freeBytes: 100 * 1024 ** 3,
-      legacyHistoryAvailable: true,
       loginMarginMinutes: 60,
     });
     const batches = () => {
@@ -4898,7 +4890,7 @@ describe("harness CLI vertical slice", () => {
       policyPath,
       JSON.stringify({
         ...automatic,
-        revisitPolicy: { kind: "version-increased" },
+        maximumUpdateAgeDays: 364,
       }),
     );
     const restarted = await runner();
@@ -4995,7 +4987,6 @@ describe("harness CLI vertical slice", () => {
       loginExpiresAt: new Date("2027-01-01T00:00:00Z"),
       programmeObservedAt: new Date(now),
       freeBytes: 100 * 1024 ** 3,
-      legacyHistoryAvailable: true,
       loginMarginMinutes: 60,
     };
     (profile as { hostStatus?: unknown }).hostStatus = async () => host;
@@ -5028,7 +5019,7 @@ describe("harness CLI vertical slice", () => {
     expect((await run("continuous", "stop")).code).toBe(0);
     await expect(stat(join(state, "continuous.stop"))).resolves.toBeDefined();
 
-    host.legacyHistoryAvailable = false;
+    host.programmeObservedAt = new Date("2020-01-01");
     const blocked = await run("continuous", "run", ...command);
     expect(blocked.code).toBe(0);
     expect((await run("continuous", "status")).stdout).toContain(
@@ -5039,11 +5030,11 @@ describe("harness CLI vertical slice", () => {
       0,
     );
     expect((await run("continuous", "status")).stdout).toContain(
-      "reason legacy-history-missing",
+      "reason programme-stale",
     );
     expect((await run("continuous", "run", ...command)).code).toBe(0);
     expect((await run("continuous", "status")).stdout).toContain(
-      "reason legacy-history-missing",
+      "reason programme-stale",
     );
     expect((await run("continuous", "resume")).code).toBe(0);
     await writeFile(
@@ -5100,7 +5091,6 @@ describe("harness CLI vertical slice", () => {
       loginExpiresAt: new Date("2027-01-01T00:00:00Z"),
       programmeObservedAt: new Date(now),
       freeBytes: 100 * 1024 ** 3,
-      legacyHistoryAvailable: true,
       loginMarginMinutes: 60,
     });
     // The fake host lists a live Lab (wbh-<uuid>-*) next to discovery leftovers.
@@ -5157,7 +5147,6 @@ describe("harness CLI vertical slice", () => {
       loginExpiresAt: new Date("2027-01-01T00:00:00Z"),
       programmeObservedAt: new Date(now),
       freeBytes: 100 * 1024 ** 3,
-      legacyHistoryAvailable: true,
       loginMarginMinutes: 60,
     });
     // The other runner: a live process with its own state directory and no
@@ -5406,16 +5395,16 @@ describe("harness CLI vertical slice", () => {
       JSON.stringify({
         ...policy,
         promptVariant: "wp2shell-bounty-v11",
-        revisitPolicy: { kind: "never" },
+        revisitPolicy: { kind: "version-increased" },
         wordpressVersion: "6.8",
         maximumTargets: 3,
         candidateSource: {
           kind: "wordpress-org",
-          popularPages: 1,
+
           tags: [],
-          pagesPerTag: 1,
+
           perPage: 20,
-          maxCandidates: 20,
+
           maxAgeDays: 1,
         },
         pluginDependencySlugs: { "synthetic-plugin": ["elementor"] },
@@ -5538,107 +5527,81 @@ describe("harness CLI vertical slice", () => {
     ]);
   });
 
-  it.each([
-    {
-      name: "below the primary installation floor",
-      minimumActiveInstallations: 10_000,
-      maximumActiveInstallations: 20_000,
-      cascade: [{ minimumActiveInstallations: 1_000 }],
-    },
-    {
-      name: "above the primary installation ceiling",
-      minimumActiveInstallations: 0,
-      maximumActiveInstallations: 1_000,
-      cascade: [
-        {
-          minimumActiveInstallations: 1_000,
-          maximumActiveInstallations: null,
-        },
-      ],
-    },
-  ])(
-    "re-verifies an existing Finding from an automatic cascade $name",
-    async ({
-      minimumActiveInstallations,
-      maximumActiveInstallations,
-      cascade,
-    }) => {
-      const { seedHistory, run, configPath, root, ledger, frozenSelections } =
-        await harness();
-      const campaign = ["--campaign", "campaign-1"];
-      expect(
-        (
-          await run(
-            "campaign",
-            "run",
-            "--all",
-            ...campaign,
-            "--config",
-            configPath,
-          )
-        ).code,
-      ).toBe(0);
-      await seedHistory("campaign-1");
-      const finding = ledger()
-        .read({ campaignId: "campaign-1", type: "finding-recorded" })
-        .map(({ event }) => event)
-        .find(
-          (event) =>
-            event.type === "finding-recorded" &&
-            event.category === "account-takeover",
-        );
-      expect(finding?.type).toBe("finding-recorded");
-      if (finding?.type !== "finding-recorded") return;
+  it("re-verifies an existing Finding below the automatic installation floor", async () => {
+    const minimumActiveInstallations = 10_000;
+    const { seedHistory, run, configPath, root, ledger, frozenSelections } =
+      await harness();
+    const campaign = ["--campaign", "campaign-1"];
+    expect(
+      (
+        await run(
+          "campaign",
+          "run",
+          "--all",
+          ...campaign,
+          "--config",
+          configPath,
+        )
+      ).code,
+    ).toBe(0);
+    await seedHistory("campaign-1");
+    const finding = ledger()
+      .read({ campaignId: "campaign-1", type: "finding-recorded" })
+      .map(({ event }) => event)
+      .find(
+        (event) =>
+          event.type === "finding-recorded" &&
+          event.category === "account-takeover",
+      );
+    expect(finding?.type).toBe("finding-recorded");
+    if (finding?.type !== "finding-recorded") return;
 
-      const policyPath = join(root, "selection.json");
-      const policy = JSON.parse(await readFile(policyPath, "utf8")) as Record<
-        string,
-        unknown
-      >;
-      delete policy.candidateSlugs;
-      delete policy.pinnedVersions;
-      await writeFile(
-        policyPath,
-        JSON.stringify({
-          ...policy,
-          promptVariant: "wp2shell-bounty-v11",
-          revisitPolicy: { kind: "never" },
-          wordpressVersion: "6.8",
-          maximumTargets: 3,
-          candidateSource: {
-            kind: "wordpress-org",
-            popularPages: 1,
-            tags: [],
-            pagesPerTag: 1,
-            perPage: 20,
-            maxCandidates: 20,
-            maxAgeDays: 1,
-          },
-          minimumActiveInstallations,
-          maximumActiveInstallations,
-          cascade,
-        }),
-      );
-      const reverified = await run(
-        "review",
-        "reverify",
-        ...campaign,
-        "--finding",
-        finding.findingId,
-        "--config",
-        configPath,
-        "--version",
-        "3.3",
-      );
-      expect(reverified.stderr).toBe("");
-      expect(reverified.code).toBe(0);
-      expect(frozenSelections.at(-1)).toMatchObject({
-        slug: "synthetic-plugin",
-        version: "3.3",
-        dependencyVersionPolicy: "pinned-only",
-      });
-    },
-  );
+    const policyPath = join(root, "selection.json");
+    const policy = JSON.parse(await readFile(policyPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    delete policy.candidateSlugs;
+    delete policy.pinnedVersions;
+    await writeFile(
+      policyPath,
+      JSON.stringify({
+        ...policy,
+        promptVariant: "wp2shell-bounty-v11",
+        revisitPolicy: { kind: "version-increased" },
+        wordpressVersion: "6.8",
+        maximumTargets: 3,
+        candidateSource: {
+          kind: "wordpress-org",
+
+          tags: [],
+
+          perPage: 20,
+
+          maxAgeDays: 1,
+        },
+        minimumActiveInstallations,
+      }),
+    );
+    const reverified = await run(
+      "review",
+      "reverify",
+      ...campaign,
+      "--finding",
+      finding.findingId,
+      "--config",
+      configPath,
+      "--version",
+      "3.3",
+    );
+    expect(reverified.stderr).toBe("");
+    expect(reverified.code).toBe(0);
+    expect(frozenSelections.at(-1)).toMatchObject({
+      slug: "synthetic-plugin",
+      version: "3.3",
+      dependencyVersionPolicy: "pinned-only",
+    });
+  });
 
   it("refuses to re-verify an unconfirmed Finding on its original Snapshot and a config that names a removed Lab scenario (#353)", async () => {
     const { seedHistory, run, configPath, ledger, docker, root } =

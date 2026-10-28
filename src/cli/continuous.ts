@@ -52,7 +52,6 @@ const STOP_REASONS = [
   "no-progress",
   "programme-stale",
   "exhausted",
-  "legacy-history-missing",
 ] as const;
 
 export type ContinuousStopReason = (typeof STOP_REASONS)[number];
@@ -198,7 +197,6 @@ export interface ContinuousDeps {
   cleanupLeftovers(): Promise<number>;
   /** The same host check as `runtime check`; throws on failure. */
   preflight(): Promise<void>;
-  legacyHistoryAvailable(): Promise<boolean>;
   /** The provider login's expiry, re-read from its file; null when unreadable. */
   readAuth(): Promise<{ readonly expiresAt: Date } | null>;
   /** When the Programme scope copy was transcribed. */
@@ -800,8 +798,6 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     deps.signals.on("SIGTERM", onSignal);
     try {
       if (stopRequested()) return stop("operator");
-      if (!(await deps.legacyHistoryAvailable()))
-        return stop("legacy-history-missing");
       if (stopRequested()) return stop("operator");
       await deps.preflight();
       if (stopRequested()) return stop("operator");

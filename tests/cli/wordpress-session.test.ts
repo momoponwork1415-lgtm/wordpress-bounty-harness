@@ -30,7 +30,7 @@ const policyFile = (overrides: Record<string, unknown> = {}) => ({
   maximumTargets: 1,
   excludedAuthors: [],
   excludedSlugs: [],
-  scoreWeights: { installations: 1, recency: 1 },
+
   ...overrides,
 });
 

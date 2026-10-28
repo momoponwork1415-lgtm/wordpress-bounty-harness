@@ -29,34 +29,11 @@ const commonSelectionPolicy = {
   promptVariant: z.string().min(1).max(128).optional(),
   revisitPolicy: wordPressRevisitPolicySchema.optional(),
   minimumActiveInstallations: z.number().int().nonnegative(),
-  /** Hard ceiling of the default population (ADR 0032, 2026-10-16); the public-record exception for larger plugins is #295. */
-  maximumActiveInstallations: z.number().int().positive().optional(),
   maximumObservationAgeDays: z.number().positive(),
   maximumUpdateAgeDays: z.number().positive(),
   maximumTargets: z.number().int().positive(),
   excludedAuthors: z.array(z.string().min(1)),
   excludedSlugs: z.array(slugSchema),
-  scoreWeights: z.strictObject({
-    installations: z.number().nonnegative(),
-    recency: z.number().nonnegative(),
-    /** Public advisory count in the window, from the local mirror (ADR 0037). 0 or absent: the mirror is not opened. */
-    history: z.number().nonnegative().optional(),
-    /** One point per paying-class record in the window, up to `historyPayingClassCap` (ADR 0037, 2026-10-19 addendum). */
-    historyPayingClass: z.number().nonnegative().optional(),
-    /** How recently the newest counted record was published, 1 at the mirror's asOf and 0 at the window's edge. */
-    recordRecency: z.number().nonnegative().optional(),
-  }),
-  /** Days before the mirror's `last_successful_at` that records count (default 365). */
-  historyWindowDays: z.number().positive().max(3650).optional(),
-  /** Records at or above this count score the full history weight (default 10). */
-  historyCountCap: z.number().int().positive().max(1000).optional(),
-  /** Paying-class records beyond this count add nothing (default 3). */
-  historyPayingClassCap: z.number().int().positive().max(1000).optional(),
-  /** `select` stops when the mirror's last success is older than this (default 2). */
-  maximumHistoryAgeDays: z.number().positive().optional(),
-  /** Signal class names (primitive or terminal kind) that count as a paying class (default in `advisoryHistoryDefaults`). */
-  historyPayingClasses: z.array(z.string().min(1).max(64)).max(32).optional(),
-  /** Manual pin: select this version instead of the observed stable version. */
 } as const;
 
 const manualSelectionPolicy = z
@@ -101,72 +78,24 @@ const manualSelectionPolicy = z
     },
   );
 
-/**
- * One fallback band: the primary policy with these fields overridden. Tried in
- * order only when the primary band leaves fewer eligible candidates than the
- * caller's minimum (ADR 0037, 2026-10-19 addendum).
- */
-export const wordPressSelectionCascadeStepSchema = z.strictObject({
-  minimumActiveInstallations: z.number().int().nonnegative(),
-  /** null lifts the ceiling; absent keeps the primary policy's. */
-  maximumActiveInstallations: z.number().int().positive().nullable().optional(),
-  /** Candidates with fewer paying-class records in the window are ineligible at this step. */
-  minimumPayingClassCount: z.number().int().nonnegative().optional(),
+const automaticSelectionPolicy = z.strictObject({
+  ...commonSelectionPolicy,
+  /** Undeclared runtime dependencies resolved to official stable at freeze. */
+  pluginDependencySlugs: z
+    .record(slugSchema, z.array(slugSchema).max(16))
+    .optional(),
+  promptVariant: z.string().min(1).max(128),
+  revisitPolicy: wordPressRevisitPolicySchema,
+  maximumTargets: z.number().int().min(3).max(10),
+  /** The core image version pinned when select freezes the chosen targets. */
+  wordpressVersion: coreVersionSchema,
+  candidateSource: z.strictObject({
+    kind: z.literal("wordpress-org"),
+    tags: z.array(slugSchema).max(8),
+    perPage: z.number().int().min(1).max(50),
+    maxAgeDays: z.number().positive().max(7),
+  }),
 });
-
-export type WordPressSelectionCascadeStep = z.infer<
-  typeof wordPressSelectionCascadeStepSchema
->;
-
-const automaticSelectionPolicy = z
-  .strictObject({
-    ...commonSelectionPolicy,
-    cascade: z.array(wordPressSelectionCascadeStepSchema).max(8).optional(),
-    /** Undeclared runtime dependencies resolved to official stable at freeze. */
-    pluginDependencySlugs: z
-      .record(slugSchema, z.array(slugSchema).max(16))
-      .optional(),
-    promptVariant: z.string().min(1).max(128),
-    revisitPolicy: wordPressRevisitPolicySchema,
-    maximumTargets: z.number().int().min(3).max(10),
-    /** The core image version pinned when select freezes the chosen targets. */
-    wordpressVersion: coreVersionSchema,
-    candidateSource: z.strictObject({
-      kind: z.literal("wordpress-org"),
-      popularPages: z.number().int().min(1).max(20),
-      tags: z.array(slugSchema).max(8),
-      pagesPerTag: z.number().int().min(1).max(5),
-      perPage: z.number().int().min(1).max(50),
-      maxCandidates: z.number().int().min(5).max(2000),
-      maxAgeDays: z.number().positive().max(7),
-    }),
-  })
-  .refine(
-    (policy) =>
-      policy.maximumActiveInstallations === undefined ||
-      policy.maximumActiveInstallations > policy.minimumActiveInstallations,
-    {
-      message:
-        "maximumActiveInstallations must exceed minimumActiveInstallations",
-    },
-  )
-  .refine(
-    (policy) =>
-      (policy.cascade ?? []).every((step) => {
-        const ceiling =
-          step.maximumActiveInstallations === undefined
-            ? policy.maximumActiveInstallations
-            : step.maximumActiveInstallations;
-        return ceiling === null || ceiling === undefined
-          ? true
-          : ceiling > step.minimumActiveInstallations;
-      }),
-    {
-      message:
-        "Each cascade step's ceiling must exceed its minimumActiveInstallations",
-      path: ["cascade"],
-    },
-  );
 
 /** A policy nominates candidates manually or from the directory, never both. */
 export const wordPressSelectionPolicySchema = z.union([
@@ -188,29 +117,10 @@ export type SelectionReason =
   | "excluded-author"
   | "excluded-slug"
   | "below-installation-threshold"
-  | "above-installation-ceiling"
-  /** A cascade step's `minimumPayingClassCount` was not met (ADR 0037 addendum). */
-  | "below-paying-class-minimum"
   | "core-requirement-unavailable"
   | "core-version-incompatible"
   | "programme-asset-out-of-scope"
   | "programme-stale";
-
-/** Defaults the policy may override; `select` reads them through `advisoryHistorySettings`. */
-export const advisoryHistoryDefaults = {
-  windowDays: 365,
-  countCap: 10,
-  payingClassCap: 3,
-  maximumAgeDays: 2,
-  payingClasses: [
-    "stored-xss",
-    "sql-injection",
-    "privilege-escalation",
-    "authentication-bypass",
-    "arbitrary-file-upload",
-    "remote-code-execution",
-  ],
-} as const;
 
 /** Counts and dates from the public advisory mirror; no record content (ADR 0037). */
 export interface WordPressTargetAdvisoryHistory {
@@ -224,6 +134,7 @@ export interface WordPressTargetAdvisoryHistory {
 export interface WordPressTargetSelection extends TargetSelection {
   readonly slug: string;
   readonly activeInstallations: number;
+  readonly reason?: "initial" | "version-increased" | undefined;
   /** Legacy, read only: stored selections written before 2026-10-19 carry the High Threat tag match. */
   readonly highThreatSurface?: boolean | undefined;
   /** Legacy, read only: stored selections written before 2026-10-19 may carry a per-target run budget. */
@@ -238,22 +149,25 @@ export interface WordPressTargetSelection extends TargetSelection {
   readonly pluginDependencySlugs?: readonly string[] | undefined;
   readonly dependencyVersionPolicy?:
     "stable-observed" | "pinned-only" | undefined;
-  readonly scoreBreakdown: {
-    readonly installations: number;
-    readonly recency: number;
-    /** Legacy, read only: tag-surface points of selections written before 2026-10-19. */
-    readonly surface?: number | undefined;
-    /** Legacy, read only: High Threat points of selections written before 2026-10-19. */
-    readonly highThreat?: number | undefined;
-    readonly history: number;
-    /** Absent in records written before ADR 0037. */
-    readonly historyPayingClass?: number | undefined;
-    /** Absent in records written before the ADR 0037 addendum of 2026-10-19. */
-    readonly recordRecency?: number | undefined;
-  };
-  /** Present when the policy weights advisory history (ADR 0037). */
+  /** Legacy, read only: ranking fields on stored selections. */
+  readonly scoreBreakdown?:
+    | {
+        readonly installations: number;
+        readonly recency: number;
+        /** Legacy, read only: tag-surface points of selections written before 2026-10-19. */
+        readonly surface?: number | undefined;
+        /** Legacy, read only: High Threat points of selections written before 2026-10-19. */
+        readonly highThreat?: number | undefined;
+        readonly history: number;
+        /** Absent in records written before ADR 0037. */
+        readonly historyPayingClass?: number | undefined;
+        /** Absent in records written before the ADR 0037 addendum of 2026-10-19. */
+        readonly recordRecency?: number | undefined;
+      }
+    | undefined;
+  /** Legacy, read only: advisory counts in stored selections. */
   readonly advisoryHistory?: WordPressTargetAdvisoryHistory | undefined;
-  /** 1-based index into the policy's `cascade` that admitted this target; absent for the primary band. */
+  /** Legacy, read only: the 1-based cascade step in stored selections. */
   readonly cascadeStep?: number | undefined;
   readonly observationRef: WordPressOrgTargetObservationRef;
   readonly programmeRef: ProgrammeEligibilitySnapshotRef;
@@ -272,6 +186,7 @@ export const wordPressTargetSelectionSchema: z.ZodType<WordPressTargetSelection>
       digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
     }),
     activeInstallations: z.number().int().nonnegative(),
+    reason: z.enum(["initial", "version-increased"]).optional(),
     /** Legacy, read only (old stored selections). */
     highThreatSurface: z.boolean().optional(),
     /** Legacy, read only (old stored selections). */
@@ -286,17 +201,19 @@ export const wordPressTargetSelectionSchema: z.ZodType<WordPressTargetSelection>
     dependencyVersionPolicy: z
       .enum(["stable-observed", "pinned-only"])
       .optional(),
-    scoreBreakdown: z.strictObject({
-      installations: z.number().finite(),
-      recency: z.number().finite(),
-      /** Legacy, read only (old stored selections). */
-      surface: z.number().finite().optional(),
-      /** Legacy, read only (old stored selections). */
-      highThreat: z.number().finite().optional(),
-      history: z.number().finite(),
-      historyPayingClass: z.number().finite().optional(),
-      recordRecency: z.number().finite().optional(),
-    }),
+    scoreBreakdown: z
+      .strictObject({
+        installations: z.number().finite(),
+        recency: z.number().finite(),
+        /** Legacy, read only (old stored selections). */
+        surface: z.number().finite().optional(),
+        /** Legacy, read only (old stored selections). */
+        highThreat: z.number().finite().optional(),
+        history: z.number().finite(),
+        historyPayingClass: z.number().finite().optional(),
+        recordRecency: z.number().finite().optional(),
+      })
+      .optional(),
     advisoryHistory: z
       .strictObject({
         count: z.number().int().nonnegative(),

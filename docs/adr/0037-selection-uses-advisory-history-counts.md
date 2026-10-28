@@ -102,3 +102,21 @@ amended-by: 本文末尾の 2026-10-19 追記（公開統計による重みの�
 - `select` は、ある帯の凍結が終わって対象が `minimum` 未満なら、次の cascade の帯を順に凍結する。凍結に失敗した候補は再試行しない。報告の `cascadeStep` と `cascade` は、実際に対象を出した帯まで並べる。
 - `target-skipped`（stage `freeze`）の理由が `invalid-archive` なら、同じ試行で他の対象が凍結できたかに関係なく、その版を `freeze-deferred` として除外する。archive の拒否は host の都合ではなく版の性質だからである。`deferred` の扱いは変えない。
 
+
+## 2026-10-28 追記: 選定をインストール数順の列にする（#533）
+
+[所有者の最終決定](https://github.com/momoponwork1415-lgtm/wordpress-bounty-harness/issues/533#issuecomment-6464992081)で、本文の採点と鮮度 gate、追記の 90 日待ち・未提出 Finding・legacy 除外、cascade を上書きする。ADR 0030 のタグ・High Threat による順位と過去 Finding の除外、ADR 0032 の上限帯も本追記で閉じる。母集団を全件回せるため、履歴の採点をやめ、報酬額に関係するインストール数で順序を付ける。
+
+- 母集団は popular browse と各タグの一覧から、インストール数 10,000 以上、365 日以内更新、`excludedAuthors` / `excludedSlugs` 外の対象とする。
+- 順序はインストール数の降順、同じ段では更新日の降順とし、同点だけ slug で固定する。
+- 同版の Trial は 1 回とし、台帳に数えた同 slug の全 Trial より版が上がれば待たずに戻す。
+- `enumerate` は区画分配型の Trial として扱い、差し戻し・再開・`trace`・子を別の Trial に数えない。
+- SPEC 第 6 節の Trial に数えない run と provider 上限の再開、別ランナーの予約と同版の凍結失敗の扱いは変えない。
+- `legacy-history` のコード・設定・exporter と選定用ミラーローダーを削除し、既存の Git 外の履歴ファイル・台帳・Private Evidence は消さない。
+- 新方針は `cascade`、`maximumActiveInstallations`、`scoreWeights`、履歴の window・cap・class・最大 age、`revisitPolicy.minimumDaysSinceTrial` を拒否する。
+- 固定の `candidateSource.popularPages` / `pagesPerTag` / `maxCandidates` も外し、下限を割るか API 終端まで列挙して、上流上限や取得失敗による打切りを記録する。
+- 選定レポートと `target-selection.json` に `reason: initial | version-increased` を残し、既存イベントの digest 参照から読む。
+- 旧 `target-selection.json` の採点・履歴・帯の欄と既存台帳イベントは読み続ける。
+- ミラーは `wbh-screen` と `wbh-dedupe` に残し、探索プロンプト・契約・Programme Boundary は変更しない。
+
+切替時は新しい選定設定と、`legacyHistory` を外した host 設定のコピーを使う。方針 digest が変わるため、既存の予約バッチは従来の破棄記録を経て新しく選ぶ。稼働中の設定やランナーの切替は運用側で行う。消し方はこの変更の revert であり、記録済み artifact とイベントは残す。
