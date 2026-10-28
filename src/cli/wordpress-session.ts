@@ -146,6 +146,18 @@ const tracerSchema = roleSchema({
   maxParallel: z.number().int().min(1).max(8).default(2),
 });
 
+/** The same target wall used by admission, execution and the login margin. */
+export function wordPressPartitionedWallMinutes(
+  enumerator: { readonly wallMinutes: number },
+  partition: { readonly maxResubmits: number; readonly maxPartitions: number },
+  tracer: { readonly maxParallel: number; readonly wallMinutes: number },
+): number {
+  return (
+    enumerator.wallMinutes * (1 + partition.maxResubmits) +
+    Math.ceil(partition.maxPartitions / tracer.maxParallel) * tracer.wallMinutes
+  );
+}
+
 /**
  * Whether a discovery Lab is attached and how often the Root may reset it
  * (redesign 2026-10-25 §7). The string form is normalised to the object.
@@ -272,10 +284,11 @@ export const wordpressCampaignConfigSchema = z
       const partition = config.discovery.partition ?? partitionSchema.parse({});
       const tracer = config.discovery.tracer ?? tracerSchema.parse({});
       // One target's worst case: every send-back used, every partition filled.
-      const minutes =
-        enumerator.wallMinutes * (1 + partition.maxResubmits) +
-        Math.ceil(partition.maxPartitions / tracer.maxParallel) *
-          tracer.wallMinutes;
+      const minutes = wordPressPartitionedWallMinutes(
+        enumerator,
+        partition,
+        tracer,
+      );
       if (minutes > PARTITIONED_TARGET_CEILING_MINUTES)
         context.addIssue({
           code: "custom",

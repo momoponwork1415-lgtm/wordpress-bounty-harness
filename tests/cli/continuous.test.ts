@@ -715,6 +715,39 @@ describe("continuous runner", () => {
     await expectLatchedStop(t, "exhausted");
   });
 
+  it("starts with 135 minutes and waits below that margin before the next target", async () => {
+    const t = await setup([], { loginMarginMinutes: 135 });
+    let remaining = 135;
+    const started: number[] = [];
+    t.deps.readAuth = async () => ({
+      expiresAt: new Date(t.deps.clock().getTime() + remaining * 60_000),
+    });
+    const sleep = t.deps.sleep;
+    t.deps.sleep = async (ms) => {
+      remaining = 135;
+      await sleep(ms);
+    };
+    t.deps.runCampaign = async (input) => {
+      for (let target = 0; target < 2; target++) {
+        await input.beforeTarget?.();
+        if (input.stop()) break;
+        started.push(remaining);
+        remaining = 134;
+      }
+      await writeFile(continuousPaths(t.root).stop, "");
+      return {
+        campaignId: input.campaignId,
+        targets: [],
+        skipped: [],
+        stopped: "operator",
+      };
+    };
+    expect(await createContinuousRunner(t.deps).run()).toBe("operator");
+    expect(started).toEqual([135, 135]);
+    expect(t.states()).toContain("waiting-login");
+    expect(t.hours()).toBe(1 / 6);
+  });
+
   it("waits for a renewed login without exiting", async () => {
     const t = await setup([]);
     const start = t.deps.clock().getTime();

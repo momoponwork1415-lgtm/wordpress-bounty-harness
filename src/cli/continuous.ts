@@ -180,6 +180,8 @@ export interface ContinuousDeps {
     /** The batch a new campaign binds, instead of the latest unbound one (#604). */
     readonly selectionBatchId?: string;
     readonly stop: () => boolean;
+    /** Re-read login immediately before starting a target; a wait leaves in-flight targets running. */
+    readonly beforeTarget: () => Promise<void>;
     readonly signal?: AbortSignal;
     /** Resume the campaign's runs whose host died instead of running them again (ADR 0036). */
     readonly resumeInterrupted: { log(line: string): void };
@@ -202,7 +204,7 @@ export interface ContinuousDeps {
   /** When the Programme scope copy was transcribed. */
   programmeObservedAt(): Promise<Date>;
   statfs(): Promise<{ readonly freeBytes: number }>;
-  /** ceil(maximumTargets / maxConcurrentTargets) × (runWallTimeMinutes + 30 × 3 + 15). */
+  /** One target wall + 15 minutes, plus Lab reset time only when attached. */
   readonly loginMarginMinutes: number;
   clock(): Date;
   sleep(ms: number): Promise<void>;
@@ -879,6 +881,28 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       }
       providerBackoffFinished = !stopRequested();
     }
+    let loginWait: Promise<void> | undefined;
+    const waitForLogin = async () => {
+      if (stopRequested()) return;
+      let auth = await deps.readAuth();
+      const ready = () =>
+        auth !== null &&
+        auth.expiresAt.getTime() - deps.clock().getTime() >=
+          deps.loginMarginMinutes * MINUTE;
+      if (ready()) return;
+      // Concurrent starts each read auth, but share one wait while login is short.
+      loginWait ??= (async () => {
+        while (!stopRequested() && !ready()) {
+          await hold("waiting-login", LOGIN_POLL_MINUTES * MINUTE, {
+            expiredAt: auth?.expiresAt.toISOString() ?? "unavailable",
+          });
+          if (!stopRequested()) auth = await deps.readAuth();
+        }
+      })().finally(() => {
+        loginWait = undefined;
+      });
+      await loginWait;
+    };
     for (;;) {
       if (stopRequested()) return stop("operator");
       const now = deps.clock();
@@ -957,6 +981,11 @@ export function createContinuousRunner(deps: ContinuousDeps) {
             ? {}
             : { selectionBatchId: current.selectionBatchId }),
           stop: stopRequested,
+          beforeTarget: async () => {
+            await waitForLogin();
+            if (!stopRequested() && memo.state !== "running")
+              await enter("running", { campaignId });
+          },
           signal: operatorController.signal,
           resumeInterrupted: {
             log: (line) => deps.io.log(`${deps.clock().toISOString()} ${line}`),

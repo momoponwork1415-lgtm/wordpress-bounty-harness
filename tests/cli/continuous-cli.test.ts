@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { runCampaignPipeline } from "../../src/cli/pipeline.js";
 import { continuousCommand } from "../../src/cli/continuous-cli.js";
 import {
   continuousPaths,
@@ -123,7 +124,15 @@ async function setup(
       ...finished,
     });
   };
-  return { root, state, stdout, command, run, paths: continuousPaths(root) };
+  return {
+    root,
+    state,
+    io,
+    stdout,
+    command,
+    run,
+    paths: continuousPaths(root),
+  };
 }
 
 const RUN_OPTIONS = {
@@ -495,6 +504,94 @@ describe("continuous run", () => {
       "continuous run needs a host profile",
     );
   });
+
+  it.each([135, 134])(
+    "gates every target at the %s-minute login boundary",
+    async (initial) => {
+      let remaining = initial;
+      const started: string[] = [];
+      let finishFirst: (() => void) | undefined;
+      let firstFinished = false;
+      let firstRunningAtWait = false;
+      const targets = ["a", "b", "c"].map((name) => ({
+        targetId: `wporg:${name}`,
+        version: "1.0.0",
+        selectedAt: NOW,
+        score: 1,
+        policy: { id: "synthetic", digest: `sha256:${"a".repeat(64)}` },
+      }));
+      const t = await setup((stateDirectory) =>
+        hostProfile({
+          stateDirectory,
+          sweeps: [],
+          hostStatus: async () => ({
+            loginExpiresAt: new Date(Date.parse(NOW) + remaining * 60_000),
+            programmeObservedAt: new Date(NOW),
+            freeBytes: 100 * 1024 ** 3,
+            loginMarginMinutes: 135,
+          }),
+          select: async () => ({
+            batchId: "batch-1",
+            selected: targets.map(({ targetId, version }) => ({
+              targetId,
+              version,
+              activeInstallations: 1,
+              reason: "initial" as const,
+              observedAt: NOW,
+            })),
+            excluded: [],
+          }),
+          runCampaign: (state, input) =>
+            runCampaignPipeline({
+              ...state,
+              campaignId: input.campaignId,
+              discoveryLab: "none",
+              maxConcurrentTargets: 2,
+              stop: input.stop!,
+              beforeTarget: input.beforeTarget!,
+              pipeline: {
+                select: async () => targets,
+                freeze: async (target) => {
+                  started.push(target.targetId);
+                  if (target.targetId === "wporg:a") {
+                    await new Promise<void>((resolve) => {
+                      finishFirst = resolve;
+                    });
+                    firstFinished = true;
+                  } else if (target.targetId === "wporg:b") remaining = 134;
+                  else {
+                    finishFirst?.();
+                    requestContinuousStop(stateDirectory);
+                  }
+                  throw new Error("synthetic freeze completion");
+                },
+                setupFor: unused("setup"),
+                discovery: unused("discovery"),
+                lab: {} as never,
+                verification: {} as never,
+              },
+            }),
+        }),
+      );
+      const output = t.io.stdout;
+      t.io.stdout = (line) => {
+        output(line);
+        if (line.includes(" waiting-login ")) {
+          firstRunningAtWait = started.includes("wporg:a") && !firstFinished;
+          finishFirst?.();
+          requestContinuousStop(t.root);
+        }
+      };
+      expect(await t.command("run", RUN_OPTIONS)).toBe(0);
+      expect(started).toEqual(initial === 135 ? ["wporg:a", "wporg:b"] : []);
+      expect(t.stdout.some((line) => line.includes(" waiting-login "))).toBe(
+        true,
+      );
+      expect(firstRunningAtWait).toBe(initial === 135);
+      expect(firstFinished).toBe(initial === 135);
+      expect(t.stdout.at(-1)).toMatch(/ stopped reason=operator$/);
+    },
+  );
 
   it("stops when the host status says the programme is stale", async () => {
     const sweeps: string[] = [];

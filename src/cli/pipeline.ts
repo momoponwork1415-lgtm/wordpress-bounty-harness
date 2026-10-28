@@ -287,6 +287,8 @@ export async function runCampaignPipeline<
   readonly repeat?: number;
   /** Checked before each next target. True drains in-flight targets and stops as `operator`. */
   readonly stop?: () => boolean;
+  /** The runner waits for login here, while already running targets continue. */
+  readonly beforeTarget?: () => Promise<void>;
   readonly signal?: AbortSignal;
 }): Promise<CampaignSummary> {
   const { campaignId, ledger, pipeline, clock } = options;
@@ -679,10 +681,26 @@ export async function runCampaignPipeline<
   const worker = async () => {
     while (stopped === undefined) {
       if (pending.length === 0) return;
+      // Wait without reserving a slot; a live limit may change during login.
+      if (options.beforeTarget !== undefined && options.stop?.() !== true) {
+        try {
+          await options.beforeTarget();
+        } catch (error) {
+          fatalError ??=
+            error instanceof Error ? error : new Error(String(error));
+          requestStop("incomplete");
+          return;
+        }
+      }
+      if (stopped !== undefined) return;
       // Above the live limit, or with every pending target's runtime full, no
       // new target starts; the running ones go on.
       const claim = await scheduler.claim(pending);
       if (claim.kind === "empty") return;
+      if (stopped !== undefined) {
+        if (claim.kind === "claimed") scheduler.release(claim.index);
+        return;
+      }
       // The operator stop point: in-flight targets finish, no new target starts.
       const stopping = options.stop?.() === true;
       if (claim.kind === "waited" && !stopping) continue;

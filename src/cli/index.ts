@@ -201,6 +201,8 @@ export interface CliProfile {
       readonly repeat?: number;
       /** Checked before each next target; true drains the campaign as `operator`. */
       readonly stop?: () => boolean;
+      /** Runner login gate, awaited immediately before each target starts. */
+      readonly beforeTarget?: () => Promise<void>;
       /** Aborts exploration currently running when continuous mode receives SIGTERM. */
       readonly signal?: AbortSignal;
       /** Replaces the campaign config's selection policy path in process. */

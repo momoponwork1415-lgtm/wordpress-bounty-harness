@@ -115,6 +115,7 @@ import {
   readWordPressCampaignPolicy,
   wordPressRuntimeCaps,
   wordPressRuntimeCeilings,
+  wordPressPartitionedWallMinutes,
   type WordPressCampaignBoundaries,
   type WordPressCampaignConfig,
   type WordPressCampaignSession,
@@ -983,10 +984,11 @@ export async function planWordPressPartitionedDiscovery(
   // The worst case the config's superRefine already bounded; enforced again here.
   const targetWallMs = Math.min(
     PARTITIONED_TARGET_CEILING_MS,
-    (discovery.enumerator.wallMinutes * (1 + limits.maxResubmits) +
-      Math.ceil(limits.maxPartitions / discovery.tracer.maxParallel) *
-        discovery.tracer.wallMinutes) *
-      60_000,
+    wordPressPartitionedWallMinutes(
+      discovery.enumerator,
+      limits,
+      discovery.tracer,
+    ) * 60_000,
   );
   const trialId = state.newId();
   return {
@@ -1780,6 +1782,9 @@ async function runWordPressCampaign(
       ? {}
       : { runtimeCaps: wordPressRuntimeCaps(config)! }),
     ...(input.stop === undefined ? {} : { stop: input.stop }),
+    ...(input.beforeTarget === undefined
+      ? {}
+      : { beforeTarget: input.beforeTarget }),
     ...(input.signal === undefined ? {} : { signal: input.signal }),
     ledger: state.ledger,
     store: state.store,

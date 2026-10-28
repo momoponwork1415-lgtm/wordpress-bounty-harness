@@ -71,6 +71,7 @@ import {
   LEGACY_VERIFIER_RETIRED,
   readWordPressCampaignConfig,
   readWordPressSelectionPolicyFile,
+  wordPressPartitionedWallMinutes,
   type WordPressCampaignBoundaries,
   type WordPressCampaignConfig,
 } from "./wordpress-session.js";
@@ -707,7 +708,7 @@ export async function createWordPressHostProfile(options: {
           }
         : null;
     },
-    /** What `continuous run` checks before each batch (final design P6). */
+    /** Host facts for continuous checks and the login gate before each target. */
     async hostStatus(state, input) {
       const free = async (path: string) => {
         const fs = await statfs(path);
@@ -726,10 +727,15 @@ export async function createWordPressHostProfile(options: {
         ) as unknown,
       );
       const config = await readWordPressCampaignConfig(input.configPath);
-      const selection = await readWordPressSelectionPolicyFile(
-        input.selectionPath,
-      );
-      const wall = config.runWallTimeMinutes;
+      await readWordPressSelectionPolicyFile(input.selectionPath);
+      const wall =
+        config.discovery.mode === "partitioned"
+          ? wordPressPartitionedWallMinutes(
+              config.discovery.enumerator!,
+              config.discovery.partition!,
+              config.discovery.tracer!,
+            )
+          : config.runWallTimeMinutes;
       return {
         loginExpiresAt: login,
         programmeObservedAt: new Date(transcription.transcribedAt),
@@ -737,18 +743,13 @@ export async function createWordPressHostProfile(options: {
           await free(host.workDirectory),
           await free(state.stateDirectory),
         ),
-        // Targets run in waves of maxConcurrentTargets; the margin covers one batch.
-        // Under a Codex cap a whole batch on Codex runs in waves of that cap.
+        // Only the next target must fit; source-only runs have no Lab reset budget.
         loginMarginMinutes:
-          Math.ceil(
-            selection.maximumTargets /
-              Math.min(
-                config.resources.maxConcurrentTargets,
-                config.resources.maxConcurrentTargetsByRuntime?.codex ||
-                  config.resources.maxConcurrentTargets,
-              ),
-          ) *
-          (wall + 30 * 3 + 15),
+          wall +
+          15 +
+          (config.discovery.lab.mode === "none"
+            ? 0
+            : 30 * config.discovery.lab.maxResets),
       };
     },
   };

@@ -159,7 +159,7 @@ async function setup(
     );
     return { code, stdout, stderr };
   };
-  return { run, calls, credentialFilePath, configPath, root };
+  return { run, calls, credentialFilePath, configPath, root, profile };
 }
 
 /** Only checks run before an adapter exists: no target container, no network. */
@@ -210,6 +210,74 @@ describe("WordPress host entry", () => {
     expect(calls.length).toBeGreaterThan(0);
     expect(startedContainers(calls)).toEqual([]);
   });
+
+  it.each([
+    ["wide", "none", 3, 2, 3, 135],
+    ["wide", "none", 3, 2, 10, 135],
+    ["wide", "attached", 0, 2, 3, 135],
+    ["wide", "attached", 2, 2, 3, 195],
+    ["wide", "attached", 3, 2, 3, 225],
+    ["partitioned", "none", 3, 2, 3, 255],
+    ["partitioned", "none", 3, 4, 3, 165],
+    ["partitioned", "none", 3, 8, 3, 120],
+  ] as const)(
+    "budgets %s/%s resets=%s parallel=%s targets=%s as %s login minutes",
+    async (mode, lab, maxResets, maxParallel, maximumTargets, expected) => {
+      const { root, configPath, profile } = await setup();
+      await mkdir(join(root, "work"));
+      await writeFile(
+        join(root, "absent.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          transcribedAt: "2026-10-28",
+          pages: ["programme", "terms", "report-form"].map((sourceKind) => ({
+            kind: "wordfence-programme-page",
+            schemaVersion: 2,
+            sourceKind,
+            assertions: {},
+          })),
+        }),
+      );
+      const config = JSON.parse(await readFile(configPath, "utf8"));
+      await writeFile(
+        configPath,
+        JSON.stringify({
+          ...config,
+          runWallTimeMinutes: 120,
+          discovery: {
+            mode,
+            lab: { mode: lab, maxResets },
+            ...(mode === "partitioned"
+              ? {
+                  enumerator: { runtime: "codex" },
+                  tracer: { runtime: "codex", maxParallel },
+                }
+              : {}),
+          },
+          resources: { maxConcurrentTargets: 1, memoryBudgetMiB: 36864 },
+        }),
+      );
+      const selection = JSON.parse(
+        await readFile(
+          new URL(
+            "../../src/profiles/wordpress/policy/selection.json",
+            import.meta.url,
+          ),
+          "utf8",
+        ),
+      );
+      const selectionPath = join(root, "selection.json");
+      await writeFile(
+        selectionPath,
+        JSON.stringify({ ...selection, maximumTargets }),
+      );
+      const status = await profile.hostStatus!(
+        { stateDirectory: root } as never,
+        { configPath, selectionPath },
+      );
+      expect(status.loginMarginMinutes).toBe(expected);
+    },
+  );
 
   it("opens Codex partitioned roles without a Claude host section", async () => {
     const { run, configPath } = await setup();
