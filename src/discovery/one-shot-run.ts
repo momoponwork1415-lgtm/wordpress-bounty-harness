@@ -38,7 +38,21 @@ export type OneShotToolFile = {
   readonly content: Uint8Array;
 };
 
+/** A profile supplies the Lab data and the same setup boundary as its handoff. */
+export interface OneShotLab {
+  readonly endpoint: string;
+  readonly networkName: string;
+  readonly internalIp: string;
+  readonly labJson: string;
+  readonly administratorExpiresAt: string;
+  /** Extra output names, including non-JSON evidence, under the existing limits. */
+  readonly outputFileNames: readonly string[];
+  /** Revoke setup credentials and restart observation; only then return attack.json. */
+  closeSetup(signal: AbortSignal): Promise<string | undefined>;
+}
+
 export interface OneShotRun {
+  readonly lab?: OneShotLab;
   readonly runId: string;
   readonly targetSnapshotDigest: string;
   readonly profile: AgentRuntimeProfile;
@@ -48,7 +62,7 @@ export interface OneShotRun {
   /** Mounted read-only at `/workspace/tools/<name>`; the agent runs them itself. */
   readonly toolFiles: readonly OneShotToolFile[];
   /**
-   * `files`: the run's result is every `*.json` under `/workspace/output`.
+   * `files`: every `*.json` under `/workspace/output`, plus the Lab's named files.
    * `report`: the final message under the Finding / Lead report schema, as a
    * cooperative Root's.
    */
@@ -157,6 +171,7 @@ export function scriptRanIn(
  */
 export async function collectOutputFiles(
   directory: string,
+  names: readonly string[] = [],
 ): Promise<OneShotFile[]> {
   const files: OneShotFile[] = [];
   const entries = await readdir(directory, { withFileTypes: true });
@@ -164,7 +179,11 @@ export async function collectOutputFiles(
     left.name.localeCompare(right.name),
   )) {
     if (entry.isSymbolicLink()) throw new Error("One-shot output link");
-    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+    if (
+      !entry.isFile() ||
+      (!entry.name.endsWith(".json") && !names.includes(entry.name))
+    )
+      continue;
     const path = join(directory, entry.name);
     if ((await stat(path)).size > ONE_SHOT_MAX_OUTPUT_BYTES)
       throw new Error("One-shot output evidence limit exceeded");

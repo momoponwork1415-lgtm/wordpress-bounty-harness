@@ -1,6 +1,7 @@
 import { isAbsolute } from "node:path";
 
 import { canonicalJson } from "../infrastructure/canonical-json.js";
+import { admittedOneShotLab } from "./one-shot-lab.js";
 import { admitAgentRuntimeProfile } from "./agent-runtime-profile.js";
 import { jsonLines } from "./claude-session.js";
 import {
@@ -127,6 +128,8 @@ export class CodexOneShotRuntime implements OneShotExecutor {
       run.wallMs > ONE_SHOT_MAX_WALL_MS ||
       !admittedOneShotFiles(run.inputFiles, ONE_SHOT_MAX_INPUT_BYTES) ||
       !admittedOneShotFiles(run.toolFiles, ONE_SHOT_MAX_TOOL_BYTES) ||
+      !admittedOneShotLab(run, this.clock().getTime()) ||
+      (run.lab !== undefined && run.output !== "files") ||
       !isAbsolute(run.sourceDirectory) ||
       [run.dependencySource, ...(run.dependencySources ?? [])].some(
         (source) => source !== undefined && !isAbsolute(source.directory),
@@ -143,6 +146,9 @@ export class CodexOneShotRuntime implements OneShotExecutor {
           protocol: "responses",
           ...CODEX_DISCOVERY_BROKER_LIMITS,
           expiresAt: run.expiresAt,
+          ...(run.lab === undefined
+            ? {}
+            : { agentNetworkName: run.lab.networkName }),
         },
         (grant) =>
           this.sandbox.execute(
@@ -157,10 +163,19 @@ export class CodexOneShotRuntime implements OneShotExecutor {
               ),
               stdin: run.prompt,
               grant,
+              ...(run.lab === undefined
+                ? {}
+                : {
+                    labHost: {
+                      name: new URL(run.lab.endpoint).hostname,
+                      ipv4: run.lab.internalIp,
+                    },
+                  }),
               oneShot: {
                 inputFiles: run.inputFiles,
                 toolFiles: run.toolFiles,
                 wallMs: run.wallMs,
+                ...(run.lab === undefined ? {} : { lab: run.lab }),
               },
               supportFiles: [
                 {
@@ -217,6 +232,12 @@ export class CodexOneShotRuntime implements OneShotExecutor {
             status: result.status,
             exitCode: result.exitCode,
             failureKind: result.failureKind ?? null,
+            ...(run.lab === undefined
+              ? {}
+              : {
+                  outputFiles: result.outputFiles ?? [],
+                  labHandoff: result.labHandoff ?? null,
+                }),
           }),
         ),
       )
@@ -241,6 +262,17 @@ export class CodexOneShotRuntime implements OneShotExecutor {
       return finish("policy", "broker-request-cap");
     if (brokerRequestBytesExceeded(result.stdout))
       return finish("policy", "broker-request-bytes-cap");
+    if (
+      run.lab !== undefined &&
+      (result.labHandoff?.failure === "administrator-expired" ||
+        result.labHandoff?.failure === "setup-boundary")
+    )
+      return finish(
+        result.labHandoff?.failure === "administrator-expired"
+          ? "wall"
+          : "evidence",
+        result.labHandoff?.failure ?? "lab-handoff-missing",
+      );
     if (result.failureKind === "timed-out") return finish("wall");
     if (result.failureKind === "cancelled") return finish("operator");
     const policy = providerPolicyDetail(result);
@@ -257,6 +289,15 @@ export class CodexOneShotRuntime implements OneShotExecutor {
           : "provider",
         result.failureKind ?? `cli-exit:${result.exitCode}`,
       );
+    if (
+      run.lab !== undefined &&
+      (result.labHandoff === undefined ||
+        result.labHandoff.failure !== undefined)
+    )
+      return finish(
+        "evidence",
+        result.labHandoff?.failure ?? "lab-handoff-missing",
+      );
     if (diagnostic === undefined || result.rolloutFailure !== undefined)
       return finish("evidence", "diagnostic-seal-failed");
     if (granted.receipt.cleanup.status !== "completed")
@@ -270,7 +311,11 @@ export class CodexOneShotRuntime implements OneShotExecutor {
       return finish("evidence", "report-seal-failed");
     if (
       run.output === "files" &&
-      (result.outputFailure !== undefined || result.outputFiles === undefined)
+      (result.outputFailure !== undefined ||
+        result.outputFiles === undefined ||
+        run.lab?.outputFileNames.some(
+          (name) => !result!.outputFiles?.some((file) => file.name === name),
+        ))
     )
       return finish("evidence", "output-capture-failed");
     return finish();
