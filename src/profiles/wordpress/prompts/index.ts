@@ -404,6 +404,31 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     ],
   },
   {
+    id: "wp2shell-bounty-v18-wide",
+    digest:
+      "sha256:1ffb15f4f3f7ad6de70e330e10fd24c31513e41d250c8e0d6885b760a0a5c1f3",
+    outputContract: "v4",
+    status: "candidate",
+    mode: "wide",
+    // The v16-wide body, byte for byte (same fragments, same digest), on the
+    // v4 contract (Issue #639, ADR 0039 addendum 13). v16-wide only ever ran
+    // under v5, which cut Findings on its own (ADR 0038 addendum 15), so the
+    // owner's vendor sentence (2026-10-26) was never measured by itself. A
+    // separate id keeps the v5 Trials of v16-wide out of this comparison.
+    // Compared with v14-wide in production before either is current.
+    fragments: [
+      TASK,
+      { section: "objective", file: "first-principles-v11" },
+      { section: "strategy", file: "sinks-v16" },
+      { section: "strategy", file: "shapes-v12" },
+      { section: "persistence", file: "research-v11" },
+      { section: "coordination", file: "handover-v11" },
+      SOURCES,
+      { section: "coordination", file: "fixed-v14" },
+      { section: "coordination", file: "stop-wide-v13" },
+    ],
+  },
+  {
     id: "objective-partition-v1",
     digest:
       "sha256:0d0ab26416115827de2f6fb066531164d51955ea773f12c631cd74cbe5772916",

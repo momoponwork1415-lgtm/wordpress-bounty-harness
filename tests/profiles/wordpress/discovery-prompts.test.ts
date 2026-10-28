@@ -72,7 +72,7 @@ describe("WordPress prompt table", () => {
   it("derives the id lists and the current versions from the table", () => {
     const ids = WORDPRESS_DISCOVERY_PROMPTS.map((row) => row.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(31);
+    expect(ids).toHaveLength(32);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual(ids);
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       ...ids,
@@ -107,11 +107,15 @@ describe("WordPress prompt table", () => {
     // A candidate launches only when a campaign names it (DEVELOPMENT §5, #599).
     expect(
       WORDPRESS_DISCOVERY_PROMPTS.filter((row) => row.status === "candidate"),
-    ).toMatchObject([{ id: "wp2shell-bounty-v15-wide", mode: "wide" }]);
+    ).toMatchObject([
+      { id: "wp2shell-bounty-v15-wide", mode: "wide" },
+      { id: "wp2shell-bounty-v18-wide", mode: "wide" },
+    ]);
     expect(WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS).toEqual([
       "wp2shell-bounty-v11",
       "wp2shell-bounty-v14-wide",
       "wp2shell-bounty-v15-wide",
+      "wp2shell-bounty-v18-wide",
       "objective-partition-v1",
     ]);
     expect(
@@ -154,6 +158,7 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
       "wp2shell-bounty-v15-wide",
       "wp2shell-bounty-v16-wide",
       "wp2shell-bounty-v17-wide",
+      "wp2shell-bounty-v18-wide",
       "objective-partition-v1",
     ]);
     for (const row of WORDPRESS_DISCOVERY_PROMPTS.filter(
@@ -180,6 +185,9 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
         "sha256:1ffb15f4f3f7ad6de70e330e10fd24c31513e41d250c8e0d6885b760a0a5c1f3",
       "wp2shell-bounty-v17-wide":
         "sha256:9a32ddcf2083c8e82952907742823bfaa29f8068d346132206b87cf412165bc9",
+      // The v16-wide body on the v4 contract (ADR 0039 addendum 13); same digest.
+      "wp2shell-bounty-v18-wide":
+        "sha256:1ffb15f4f3f7ad6de70e330e10fd24c31513e41d250c8e0d6885b760a0a5c1f3",
       "objective-partition-v1":
         "sha256:0d0ab26416115827de2f6fb066531164d51955ea773f12c631cd74cbe5772916",
     } as const;
@@ -530,7 +538,8 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v14-wide" ||
         id === "wp2shell-bounty-v15-wide" ||
         id === "wp2shell-bounty-v16-wide" ||
-        id === "wp2shell-bounty-v17-wide"
+        id === "wp2shell-bounty-v17-wide" ||
+        id === "wp2shell-bounty-v18-wide"
       )
         expect(text).toContain("one specialist agent per sink class");
       // ADR 0042: the tracer's role definition names Findings and Leads; its objective is the task alone.
@@ -1231,6 +1240,7 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v15-wide" ||
         id === "wp2shell-bounty-v16-wide" ||
         id === "wp2shell-bounty-v17-wide" ||
+        id === "wp2shell-bounty-v18-wide" ||
         id === "objective-partition-v1"
       ) {
         // v5 leaves attacker positions and in-scope effects to the supplied
