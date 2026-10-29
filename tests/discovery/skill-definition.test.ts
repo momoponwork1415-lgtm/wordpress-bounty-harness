@@ -8,6 +8,8 @@ import { describe, expect, it } from "vitest";
 import {
   admittedStagedSkills,
   MAX_STAGED_SKILL_BYTES,
+  MAX_STAGED_SKILL_FILE_BYTES,
+  MAX_STAGED_SKILL_FILES,
   parseSkillDefinition,
   stageSkills,
 } from "../../src/discovery/skill-definition.js";
@@ -101,13 +103,64 @@ describe("staged skills", () => {
     ).toBe(false);
   });
 
-  it("writes each skill read-only at skills/<name>/SKILL.md under the home", async () => {
+  it("admits bounded, uniquely named supporting files beside SKILL.md (#687)", () => {
+    const one = (files: { name: string; content: string | Uint8Array }[]) =>
+      admittedStagedSkills([{ name: "wbh-tools", content: valid, files }]);
+    expect(one([])).toBe(true);
+    expect(
+      one([
+        { name: "list-v1.sh", content: "#!/bin/sh\n" },
+        { name: "reference-v1.md", content: new Uint8Array([35, 10]) },
+      ]),
+    ).toBe(true);
+    expect(one([{ name: "SKILL.md", content: "x" }])).toBe(false);
+    expect(one([{ name: "../x", content: "x" }])).toBe(false);
+    expect(one([{ name: "Upper.sh", content: "x" }])).toBe(false);
+    expect(one([{ name: "a.sh", content: "" }])).toBe(false);
+    expect(
+      one([
+        { name: "a.sh", content: "x" },
+        { name: "a.sh", content: "y" },
+      ]),
+    ).toBe(false);
+    expect(
+      one(
+        Array.from({ length: MAX_STAGED_SKILL_FILES + 1 }, (_, index) => ({
+          name: `f${index}.md`,
+          content: "x",
+        })),
+      ),
+    ).toBe(false);
+    expect(
+      one([
+        { name: "a.md", content: "x".repeat(MAX_STAGED_SKILL_FILE_BYTES) },
+        { name: "b.md", content: "x" },
+      ]),
+    ).toBe(false);
+  });
+
+  it("writes each skill read-only at skills/<name>/SKILL.md under the home, scripts executable", async () => {
     const home = await mkdtemp(join(tmpdir(), "skill-home-"));
     try {
-      await stageSkills(home, [{ name: "wbh-recon", content: valid }]);
+      await stageSkills(home, [
+        {
+          name: "wbh-recon",
+          content: valid,
+          files: [
+            { name: "list-v1.sh", content: "#!/bin/sh\necho\n" },
+            { name: "reference-v1.md", content: "# ref\n" },
+          ],
+        },
+      ]);
       const path = join(home, "skills", "wbh-recon", "SKILL.md");
       expect(await readFile(path, "utf8")).toBe(valid);
       expect((await stat(path)).mode & 0o777).toBe(0o400);
+      const script = join(home, "skills", "wbh-recon", "list-v1.sh");
+      expect((await stat(script)).mode & 0o777).toBe(0o500);
+      expect(
+        (await stat(join(home, "skills", "wbh-recon", "reference-v1.md")))
+          .mode & 0o777,
+      ).toBe(0o400);
       await expect(
         stageSkills(home, [{ name: "wbh-recon", content: valid }]),
       ).rejects.toThrow();

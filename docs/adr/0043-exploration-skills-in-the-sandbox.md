@@ -50,3 +50,10 @@ amends: 0029（単一協調 Trial の主経路）と 0039（探索の mode）に
 ## 消し方
 
 `discovery.skills` を外せば従来の Trial。消すときは `src/discovery/skill-definition.ts`、`prompts/skills.ts`、`prompts/skills/`、設定と台帳の `skills` 欄、Claude runner の setting source の分岐、sandbox の staging と test を消し、この ADR と GLOSSARY の行、measurement.md の 5b 節、reviews/README の参照を revert する。台帳の既存 event は消さない。
+
+## 2026-10-30 追記 1: 支援 file と `wbh-tools-v1`（#687）
+
+- スキルの directory に `SKILL.md` 以外の file（script、参照文）を置ける。registry の行が `files [{name, digest}]` で固定し、Harness は読み込み時に digest を照合して sandbox の CLI home の同じ directory に写す。`.sh` は実行可（0500）、他は読み取り専用（0400）。1 本 16 file まで、合計 1 MiB まで、名前は `^[a-z0-9][a-z0-9._-]{0,63}$` で `SKILL.md` は使えない。Harness は支援 file を実行せず、出力も読まない。出力は agent が `/workspace/research` に残し、research artifact として全件保存される。
+- 2 本目は `wbh-tools-v1`。区画分配型（ADR 0042）が持っていた列挙 script 2 本（`enumerate-hooks-v1.sh`、`enumerate-sinks-v2.sh`）と本体機能の固定参照（`core-fixed-list-v1.md`）を `prompts/skills/wbh-tools-v1/` に移し、agent が自分で走らせて地図（`wbh-recon-v1`）と突き合わせる手順を `SKILL.md` に書く。全文と対照表は [docs/reviews/2026-10-30-exploration-skills-wbh-tools-v1.md](../reviews/2026-10-30-exploration-skills-wbh-tools-v1.md)。
+- 「変えないこと」の 2 項目目（区画分配型を比較の腕として残す）は、所有者決定 2026-10-30 で取り消した。区画分配型は #685 で削除し、再利用する部分はスキルとして運ぶ。ADR 0042 の追記を参照。
+- 消し方に足す: `prompts/skills/wbh-tools-v1/` と registry の行、`skill-definition.ts` の `files` と `admittedSkillFiles`、transport schema の `files`、test の支援 file の項を消す。

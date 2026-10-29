@@ -2547,7 +2547,15 @@ describe("Codex native agent runtime", () => {
 
 describe("Codex native agent runtime skills (ADR 0043)", () => {
   it("hands the run's skills to the sandbox command unchanged, and none without them", async () => {
-    const skills = [{ name: "wbh-recon", content: "---\nname: wbh-recon\n" }];
+    const skills = [
+      { name: "wbh-recon", content: "---\nname: wbh-recon\n" },
+      {
+        name: "wbh-tools",
+        content: "---\nname: wbh-tools\n",
+        // #687: supporting files ride along with the skill.
+        files: [{ name: "list-v1.sh", content: "#!/bin/sh\n" }],
+      },
+    ];
     const commands: CodexSandboxCommand[] = [];
     const runtime = new CodexNativeAgentRuntime(
       sandbox(transcript, commands),
