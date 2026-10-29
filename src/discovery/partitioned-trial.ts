@@ -128,7 +128,7 @@ type SentBackRejection =
         | "proposal-missing"
         | "proposal-unreadable"
         | "proposal-invalid";
-      /** The first schema issue, bounded; file text only, never in the ledger. */
+      /** One schema issue, capped at 200 characters; file text stays out of the ledger. */
       readonly detail?: string;
     };
 
