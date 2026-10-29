@@ -23,6 +23,7 @@ import type {
   OneShotExecutor,
   ProviderAttachmentStore,
 } from "../discovery/index.js";
+import { MAX_STAGED_SKILLS } from "../discovery/skill-definition.js";
 import type { ExpectedSourceTree } from "../infrastructure/canonical-source-tree.js";
 import type { ScopeFactsProvider } from "../review/index.js";
 import type { Snapshot } from "../snapshot/index.js";
@@ -47,6 +48,10 @@ import {
   WORDPRESS_VERIFIER_PROMPT_ID,
   wordPressDiscoveryModeOf,
 } from "../profiles/wordpress/prompts/index.js";
+import {
+  WORDPRESS_LAUNCHABLE_DISCOVERY_SKILL_IDS,
+  wordPressDiscoverySkillRecord,
+} from "../profiles/wordpress/prompts/skills.js";
 import type {
   WordpressScopeInput,
   WordpressScopePolicy,
@@ -199,6 +204,14 @@ const commonCampaignFields = {
       enumerator: enumeratorSchema.optional(),
       partition: partitionSchema.optional(),
       tracer: tracerSchema.optional(),
+      /**
+       * ADR 0043: exploration skills staged into the agent CLI's home for a
+       * `deep` or `wide` Trial; absent, none. Ids name pinned versions.
+       */
+      skills: z
+        .array(z.enum(WORDPRESS_LAUNCHABLE_DISCOVERY_SKILL_IDS))
+        .max(MAX_STAGED_SKILLS)
+        .optional(),
     })
     .prefault({}),
   selectionPolicyPath: z.string().min(1).optional(),
@@ -262,6 +275,23 @@ export const wordpressCampaignConfigSchema = z
         path: ["promptId"],
         message: `The ${mode} mode runs ${WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS.filter((id) => wordPressDiscoveryModeOf(id) === mode).join(" or ")} only`,
       });
+    if (config.discovery.skills !== undefined) {
+      if (mode === "partitioned")
+        context.addIssue({
+          code: "custom",
+          path: ["discovery", "skills"],
+          message: "discovery.skills applies to the deep and wide modes only",
+        });
+      const names = config.discovery.skills.map(
+        (id) => wordPressDiscoverySkillRecord(id)!.name,
+      );
+      if (new Set(names).size !== names.length)
+        context.addIssue({
+          code: "custom",
+          path: ["discovery", "skills"],
+          message: "discovery.skills names each skill once",
+        });
+    }
     for (const role of ["enumerator", "partition", "tracer"] as const)
       if (mode !== "partitioned" && config.discovery[role] !== undefined)
         context.addIssue({

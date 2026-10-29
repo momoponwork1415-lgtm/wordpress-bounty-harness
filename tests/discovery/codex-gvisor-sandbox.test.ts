@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import {
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rm,
   stat,
@@ -1078,6 +1079,112 @@ describe("gVisor Codex sandbox", () => {
         );
         expect(args.some((arg) => arg.startsWith("--mount="))).toBe(false);
       }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("gVisor Codex sandbox skills (ADR 0043)", () => {
+  const skill =
+    "---\nname: wbh-recon\ndescription: Use first.\n---\n\n# wbh-recon v1\n\nMap the plugin.\n";
+  async function execute(
+    root: string,
+    skills: { name: string; content: string }[] | undefined,
+    onRun: (codexHome: string) => Promise<void>,
+  ) {
+    const source = await mkdtemp(join(root, "source-"));
+    await writeFile(join(source, "main.txt"), "fixed source");
+    const expectedTree = await measureCanonicalSourceTree(source, {
+      maxEntries: 10,
+      maxBytes: 1024,
+    });
+    const sandbox = new GvisorCodexSandbox({
+      dockerExecutablePath: "/usr/bin/docker",
+      image: `node@${digest}`,
+      bundledCatalogPath: "/opt/codex/model-catalog.json",
+      scratchRootDirectory: root,
+      ownerDirectory: join(root, "discovery-owners"),
+      maxOutputBytes: 1024 * 1024,
+      timeoutMs: 60_000,
+      runDocker: async (args) => {
+        if (args.includes("--network=internal-run")) {
+          const home = args
+            .map((arg) =>
+              /^--mount=type=bind,src=(.+),dst=\/tmp\/codex$/.exec(arg),
+            )
+            .find((match) => match !== null)?.[1];
+          await onRun(home!);
+        }
+        return {
+          kind: "exited",
+          exitCode: 0,
+          stdout: args.includes("--version")
+            ? "codex-cli 0.164.0\n"
+            : args.includes("/opt/codex/model-catalog.json")
+              ? `${"b".repeat(64)}  /opt/codex/model-catalog.json\n`
+              : "",
+          stderr: "",
+        };
+      },
+    });
+    return sandbox.execute({
+      executable: "codex",
+      args: ["exec", "--json", "-"],
+      stdin: "Objective.",
+      supportFiles: [
+        { path: "/opt/codex-support/report-schema.json", content: "{}" },
+      ],
+      grant: {
+        baseUrl: "http://172.28.0.2:8080",
+        authorization: `Bearer ${randomBytes(32).toString("hex")}`,
+        dockerNetworkName: "internal-run",
+        model: "gpt-6.1-sol",
+        protocol: "responses",
+        expiresAt: "2026-10-08T07:30:00Z",
+      },
+      sourceMount: {
+        directory: source,
+        path: "/workspace/main",
+        mode: "ro",
+        expectedTree,
+      },
+      ...(skills === undefined ? {} : { skills }),
+    });
+  }
+
+  it("stages each skill at skills/<name>/SKILL.md in the CLI home before the run", async () => {
+    const root = await mkdtemp(join(tmpdir(), "gvisor-codex-skills-"));
+    try {
+      let staged: string | undefined;
+      const result = await execute(
+        root,
+        [{ name: "wbh-recon", content: skill }],
+        async (home) => {
+          staged = await readFile(
+            join(home, "skills", "wbh-recon", "SKILL.md"),
+            "utf8",
+          );
+        },
+      );
+      expect(result.status).toBe("exited");
+      expect(staged).toBe(skill);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("stages nothing without skills and refuses a skill list the sandbox does not admit", async () => {
+    const root = await mkdtemp(join(tmpdir(), "gvisor-codex-noskills-"));
+    try {
+      let entries: string[] | undefined;
+      await execute(root, undefined, async (home) => {
+        entries = await readdir(home);
+      });
+      expect(entries).not.toContain("skills");
+      await expect(
+        execute(root, [{ name: "../escape", content: skill }], async () => {}),
+      ).rejects.toThrow();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -65,6 +65,7 @@
 - 旧版の探索プロンプトと実験結果は、過去 Trial の digest と構成を照合するために残す。ただし、旧版を使う新規 Trial は起動しない。索引あり・なしの Trial や旧来の段付き Trial を、同じ比較の分母に混ぜない。v8 以降は、脆弱性が必ずあるという前提も、固定した攻撃経路も与えない。
 - エージェントに渡る文章（プロンプト本文、スキル本文、Harness が生成する節の雛形）は、`owner-approved` ラベルが付くまでマージしない。2026-10-13 以降、所有者は採否とラベル付与を AI に委任している。AI は委任を明記した PR コメントを残す（DEVELOPMENT.md 第 5 節）。2026-10-18 以降は、所有者の読了もマージの条件ではない。ADR・SPEC・方針・判定器のパスも含めて、委任済みの AI が差分を確認してラベルを付ける。採否は探索の数字で決める（ADR 0032 の 2026-10-18 節）。AI は出典対照表にある要素だけを書き、要素を足さない。
 - プロンプト本文を変えたら版を上げ、旧版を残して、固定した digest を更新する。旧プロンプトは、過去 Trial の目的文と digest を照合するために維持する。台帳にある旧 `stage` / `continuationOf` 付きのイベントも読み続け、既存のイベントを消さない。
+- 探索の手順は目的文に足さず、スキル（`src/profiles/wordpress/prompts/skills/<id>/SKILL.md`）に分ける（ADR 0043）。campaign 設定の `discovery.skills` で id を名指ししたときだけ、Harness が digest を検証して sandbox の CLI home に置き、台帳の `configuration.skills` に id と digest を残す。`deep` と `wide` だけで使え、既定は無し。本文は手順だけで、型の一覧、判断の基準、対象固有の名前、Harness が強制する数は書かない。agent に渡る文章なので `owner-approved` の規則に従う。
 - Finding / Lead の出力契約はプロンプト本文に書かない。Harness がスキーマから生成する節として渡す（ADR 0019）。候補は出力境界で棄却しない。正規化して受理するか、保留する（ADR 0018）。
 - 受理した Finding のうち impact が次の 10 種に当たるものは、`finding-parked` として台帳と Private Evidence に残す。
   - Programme Boundary の外にある 5 種: `other`、`csrf-to-write`、`missing-authz`、`idor`、`reflected-xss`

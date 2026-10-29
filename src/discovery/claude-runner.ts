@@ -21,7 +21,9 @@ export const claudeRunnerChildLimitDenial = (maxChildren: number): string =>
  * the pinned directive instead of sending the objective again (ADR 0036).
  * With `oneShot`, it runs one turn of one agent (ADR 0042): `maxChildren`
  * is 0, the Agent tool is not offered, and `outputSchema` may be absent for
- * a role that writes files instead of a report.
+ * a role that writes files instead of a report. With `skills`, the Skill
+ * tool is offered and the SDK lists exactly those names from the staged
+ * config directory (ADR 0043).
  */
 export const CLAUDE_RUNNER_SOURCE = String.raw`
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -55,11 +57,21 @@ if (
   (config.outputSchema !== undefined &&
     (typeof config.outputSchema !== "object" || config.outputSchema === null)) ||
   (config.resumeSessionId !== undefined &&
-    (typeof config.resumeSessionId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(config.resumeSessionId)))
+    (typeof config.resumeSessionId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(config.resumeSessionId))) ||
+  (config.skills !== undefined &&
+    (!Array.isArray(config.skills) || config.skills.length === 0 || config.skills.length > 8 ||
+      config.skills.some((name) => typeof name !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(name))))
 ) process.exit(2);
 const MAX_CHILDREN = config.maxChildren;
+// ADR 0043: the skills the Harness staged under the config directory. The SDK
+// lists only these names, reads them only with the user setting source (the
+// staged, otherwise empty home), and needs the Skill tool on the surface.
+const SKILLS = config.skills ?? [];
 // Without children the Agent tool is not offered at all; the hook still denies it.
-const TOOLS = MAX_CHILDREN === 0 ? ALL_TOOLS.filter((tool) => tool !== "Agent") : ALL_TOOLS;
+const TOOLS = [
+  ...(MAX_CHILDREN === 0 ? ALL_TOOLS.filter((tool) => tool !== "Agent") : ALL_TOOLS),
+  ...(SKILLS.length === 0 ? [] : ["Skill"]),
+];
 const CHILD_LIMIT = DENIALS.childLimit.replace("{n}", String(MAX_CHILDREN));
 
 let pending = 0;
@@ -148,7 +160,8 @@ async function turn(prompt) {
       tools: TOOLS,
       allowedTools: [...TOOLS, REPORT_TOOL],
       permissionMode: "default",
-      settingSources: [],
+      settingSources: SKILLS.length === 0 ? [] : ["user"],
+      ...(SKILLS.length === 0 ? {} : { skills: SKILLS }),
       pathToClaudeCodeExecutable: "/usr/local/bin/claude",
       persistSession: true,
       strictMcpConfig: true,

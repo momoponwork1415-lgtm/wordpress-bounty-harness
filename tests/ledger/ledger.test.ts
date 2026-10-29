@@ -434,6 +434,36 @@ describe("Ledger public interface", () => {
     ).rejects.toThrow();
   });
 
+  it("records the staged skills by id and digest and still reads starts without them (ADR 0043)", async () => {
+    const { ledger } = await fixture();
+    const skills = [{ id: "wbh-recon-v1", digest: `sha256:${"c".repeat(64)}` }];
+    await ledger.append({
+      ...common("skilled-start"),
+      type: "discovery-run-started",
+      runId: "run-skilled",
+      labId: "lab-skilled",
+      history: { mode: "none" },
+      configuration: { promptVariant: "wp2shell-bounty-v11", skills },
+    });
+    const start = ledger
+      .read({ type: "discovery-run-started" })
+      .map(({ event }) =>
+        event.type === "discovery-run-started" ? event.configuration : null,
+      )
+      .at(-1);
+    expect(start).toMatchObject({ skills });
+    await expect(
+      ledger.append({
+        ...common("bad-skill-start"),
+        type: "discovery-run-started",
+        runId: "run-bad-skill",
+        labId: "lab-bad-skill",
+        history: { mode: "none" },
+        configuration: { promptVariant: "wp2shell-bounty-v11", skills: [] },
+      }),
+    ).rejects.toThrow();
+  });
+
   it("counts boundary candidates once across rejection and replay, with classified holds and token rates", async () => {
     const { ledger, artifactStore } = await fixture();
     const proof = await evidence(artifactStore);

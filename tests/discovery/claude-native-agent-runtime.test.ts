@@ -893,3 +893,18 @@ describe("Claude native agent runtime", () => {
     });
   });
 });
+
+describe("Claude native agent runtime skills (ADR 0043)", () => {
+  it("stages the run's skills and names them on the runner input, and neither without them", async () => {
+    const skills = [{ name: "wbh-recon", content: "---\nname: wbh-recon\n" }];
+    const { runtime: claude, commands } = await runtime(
+      lines(readTool, turn([{ claim: "first" }])),
+    );
+    await claude.execute({ ...run, skills });
+    expect(commands.at(-1)?.skills).toEqual(skills);
+    expect(commands.at(-1)?.input.skills).toEqual(["wbh-recon"]);
+    await claude.execute(run);
+    expect(commands.at(-1)).not.toHaveProperty("skills");
+    expect(commands.at(-1)?.input).not.toHaveProperty("skills");
+  });
+});

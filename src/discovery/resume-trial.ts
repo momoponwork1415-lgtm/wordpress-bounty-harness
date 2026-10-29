@@ -166,6 +166,7 @@ function configurationOf(
       "lab",
       "model",
       "effort",
+      "skills",
     ]),
   };
 }

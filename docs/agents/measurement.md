@@ -75,6 +75,14 @@ PR の「測った数字」に貼る列は固定する。
 - 比べる相手は同じ対象の v14-wide（契約 v4）。数えるものは群の数、段 1b を通った数、Lab で観測できた数、1 対象あたりの時間と token。
 - 段階 1 の PR 1（形）は数字を持たない。PR 2（runtime）で dev set 3 Trial、PR 3 で `rowSource: "script-only"` の腕を足して同じ 20 対象 k=2。
 
+## 5b. 探索スキルの腕（ADR 0043）
+
+`discovery.skills` を書いた campaign は、目的文も契約も変えずに、名指しした `SKILL.md` を sandbox の CLI home に置く。台帳の `discovery-run-started.configuration.skills [{id, digest}]` で腕を分ける。
+
+- 比べる相手は同じ mode・同じ選定帯で `discovery.skills` を書かない Trial。campaign を 2 つ用意し、対象を交互に回して Trial 数をそろえる。
+- 数えるものは上の表と同じ（Finding / Trial、Lead / Trial、段 1b の成立、Lab で人間が `match` を記録した数、読んだ file 数、token、時間）。加えて research artifact を開いて `recon-map.md` の有無と大きさ、Corrections 節の行数を書く。中身は読まない。
+- 既定を有りに切り替えるかは DEVELOPMENT 第 5 節の 6 段で決める。形だけの PR（#682 の PR 1）は数字を持たず、所有者が探索の再開を指示した後に測る。
+
 ## 6. 記録先
 
 - 再発見 case: `docs/evaluation/<日付>-<用途>.md` に表と注記、Issue #127 に comment。

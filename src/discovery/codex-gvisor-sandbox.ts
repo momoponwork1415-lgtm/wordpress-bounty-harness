@@ -58,6 +58,7 @@ import {
   ONE_SHOT_MAX_TOOL_BYTES,
   ONE_SHOT_MAX_WALL_MS,
 } from "./one-shot-run.js";
+import { admittedStagedSkills, stageSkills } from "./skill-definition.js";
 import { MINIMUM_ACTIVE_RUNNER_SOURCE } from "./minimum-active-runner.js";
 import { admittedOneShotLab, watchOneShotLab } from "./one-shot-lab.js";
 import {
@@ -851,6 +852,7 @@ export class GvisorCodexSandbox implements CodexSandbox {
       command.supportFiles.length !== 1 ||
       command.supportFiles[0]?.path !==
         "/opt/codex-support/report-schema.json" ||
+      (command.skills !== undefined && !admittedStagedSkills(command.skills)) ||
       (command.minimumActiveMs === undefined
         ? command.resumeArgs !== undefined || command.resumePrompt !== undefined
         : !Number.isSafeInteger(command.minimumActiveMs) ||
@@ -979,6 +981,9 @@ export class GvisorCodexSandbox implements CodexSandbox {
       // the same digest-verified source mounts and a new grant apply as always.
       if (command.resume !== undefined && researchDirectory !== undefined)
         await seedResume(codexHome, researchDirectory, command.resume);
+      // ADR 0043: the CLI lists `skills/<name>/SKILL.md` under its home to the model.
+      if (command.skills !== undefined)
+        await stageSkills(codexHome, command.skills);
       if (tls !== undefined) {
         await writeFile(join(staging, "grant-ca.pem"), tls.caPem, {
           flag: "wx",

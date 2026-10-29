@@ -113,6 +113,18 @@ export {
   type RoleDefinitionFrontMatter,
 } from "./role-definition.js";
 export {
+  admittedStagedSkills,
+  MAX_STAGED_SKILL_BYTES,
+  MAX_STAGED_SKILLS,
+  parseSkillDefinition,
+  SKILL_NAME,
+  skillDefinitionFrontMatterSchema,
+  stageSkills,
+  type SkillDefinition,
+  type SkillDefinitionFrontMatter,
+  type StagedSkill,
+} from "./skill-definition.js";
+export {
   collapseInventory,
   INVENTORY_MAX_ROWS,
   inventoryRowSchema,
