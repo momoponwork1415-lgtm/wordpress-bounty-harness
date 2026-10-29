@@ -14,10 +14,11 @@
 
 ## 測った数字
 
-探索に触る PR は、同じ 6 case を各 3 run・同じ版で回し、次の 3 つを出す（出し方は docs/reviews/2026-10-26-system-history-and-metrics.md 第 4 節、採否の 6 段は docs/DEVELOPMENT.md 第 5 節）。
-M1 開発セットの OK 率（3 run 中 2 run 以上で scope 内 Finding が 1 件以上の case 数 / 6、公開経路一致の run 数を併記）、M2 Trial あたりの scope 内 Finding（Trial 数 / completed / Finding / Lead / wall 中央値 / 失敗理由を含む）、M3 common-usage の割合。
-検証・レビュー・提出に触る PR は M4 確認数 / M5 提出数 / M6 報酬のどれが動くかを書く。触らない PR は「なし」。
+検査した head SHA、コマンドと結果、確認できていないことを書く。独立レビューの対象 SHA と判定はレビュー comment に残す。
+探索入力の変更は、本番の同じ選定帯で旧新版を交互に同数 Trial 回した数字を出す（docs/DEVELOPMENT.md 第 5 節の 6 段、docs/agents/measurement.md）。開発セットは、本番で scope 内 Finding が出るのに人間の match が 1 週間 0 件の切り分け時だけ。
+配線・runtime・選定は異なる slug の初回 3 Trial の completed・wall・停止理由を書く。検証・レビュー・提出は M4 確認数 / M5 提出数 / M6 報酬のどれが動くかを、対象外なら「なし」と書く。
 
 ## 消し方
 
-実験軸や opt-in の機能なら、消すときに削除するファイルと設定の名前。それ以外は「該当なし」。
+変更を戻す手順と、適用後に確認する動作を書く。本番への適用が不要なら、その理由を書く。
+実験軸や opt-in の機能なら、削除するファイルと設定の名前を書く。台帳の互換性に影響する場合は、コードの revert と記録の扱いを分ける。
