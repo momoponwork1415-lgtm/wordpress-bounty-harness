@@ -35,6 +35,23 @@ describe("WordPress discovery skills", () => {
       expect(skill.body.startsWith(`# ${row.name} v`)).toBe(true);
       expect(skill.body.length).toBeGreaterThan(500);
       expect(Buffer.byteLength(skill.text, "utf8")).toBeLessThan(16_000);
+      // Supporting files (#687): every file in the directory is pinned, by name and digest.
+      const pinnedFiles = (
+        row as { files?: readonly { name: string; digest: string }[] }
+      ).files ?? [];
+      const inDirectory = (
+        await readdir(new URL(`${row.id}/`, skillsUrl))
+      ).sort();
+      expect(inDirectory).toEqual(
+        ["SKILL.md", ...pinnedFiles.map((file) => file.name)].sort(),
+      );
+      expect(skill.files.map((file) => file.name)).toEqual(
+        pinnedFiles.map((file) => file.name),
+      );
+      for (const file of skill.files)
+        expect(sha256(file.content)).toBe(
+          pinnedFiles.find((pinned) => pinned.name === file.name)?.digest,
+        );
     }
     const onDisk = (await readdir(skillsUrl, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory())

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 import {
@@ -18,7 +19,16 @@ interface WordPressDiscoverySkillRecord {
   readonly id: string;
   /** The front matter `name`: what the CLI lists and the agent invokes. */
   readonly name: string;
+  /** sha256 of `SKILL.md`. */
   readonly digest: `sha256:${string}`;
+  /**
+   * Supporting files staged beside `SKILL.md` (#687), each pinned by digest.
+   * Any change to one is a new skill id, as with the body.
+   */
+  readonly files?: readonly {
+    readonly name: string;
+    readonly digest: `sha256:${string}`;
+  }[];
   /** `current` rows may be named by a new campaign; `archived` rows are read back only. */
   readonly status: "current" | "archived";
 }
@@ -49,6 +59,8 @@ export const WORDPRESS_LAUNCHABLE_DISCOVERY_SKILL_IDS =
 export type WordPressDiscoverySkill = SkillDefinition & {
   readonly id: WordPressDiscoverySkillId;
   readonly sourceUrl: URL;
+  /** The supporting files as read from the skill's directory, digest-checked. */
+  readonly files: readonly { readonly name: string; readonly content: Buffer }[];
 };
 
 export function wordPressDiscoverySkillRecord(
@@ -73,5 +85,15 @@ export async function loadWordPressDiscoverySkill(
     throw new Error("Skill definition differs from its pinned digest");
   if (definition.frontMatter.name !== record.name)
     throw new Error("Skill definition names another skill");
-  return { ...definition, id, sourceUrl };
+  const pinned: WordPressDiscoverySkillRecord = record;
+  const files = await Promise.all(
+    (pinned.files ?? []).map(async (file) => {
+      const content = await readFile(new URL(file.name, sourceUrl));
+      const digest = `sha256:${createHash("sha256").update(content).digest("hex")}`;
+      if (digest !== file.digest)
+        throw new Error("Skill file differs from its pinned digest");
+      return { name: file.name, content };
+    }),
+  );
+  return { ...definition, id, sourceUrl, files };
 }

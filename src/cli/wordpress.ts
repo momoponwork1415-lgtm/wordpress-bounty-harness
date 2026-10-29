@@ -730,6 +730,11 @@ function stagedSkills(
   return skills.map((skill) => ({
     name: skill.frontMatter.name,
     content: skill.text,
+    ...(skill.files.length === 0
+      ? {}
+      : {
+          files: skill.files.map(({ name, content }) => ({ name, content })),
+        }),
   }));
 }
 

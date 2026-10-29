@@ -1090,7 +1090,13 @@ describe("gVisor Codex sandbox skills (ADR 0043)", () => {
     "---\nname: wbh-recon\ndescription: Use first.\n---\n\n# wbh-recon v1\n\nMap the plugin.\n";
   async function execute(
     root: string,
-    skills: { name: string; content: string }[] | undefined,
+    skills:
+      | {
+          name: string;
+          content: string;
+          files?: { name: string; content: string }[];
+        }[]
+      | undefined,
     onRun: (codexHome: string) => Promise<void>,
   ) {
     const source = await mkdtemp(join(root, "source-"));
@@ -1169,6 +1175,53 @@ describe("gVisor Codex sandbox skills (ADR 0043)", () => {
       );
       expect(result.status).toBe("exited");
       expect(staged).toBe(skill);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("stages a skill's supporting files beside SKILL.md, scripts executable (#687)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "gvisor-codex-skill-files-"));
+    try {
+      let entries: string[] | undefined;
+      let modes: number[] | undefined;
+      await execute(
+        root,
+        [
+          {
+            name: "wbh-recon",
+            content: skill,
+            files: [
+              { name: "list-v1.sh", content: "#!/bin/sh\necho\n" },
+              { name: "reference-v1.md", content: "# ref\n" },
+            ],
+          },
+        ],
+        async (home) => {
+          const directory = join(home, "skills", "wbh-recon");
+          entries = (await readdir(directory)).sort();
+          modes = await Promise.all(
+            ["list-v1.sh", "reference-v1.md"].map(
+              async (name) => (await stat(join(directory, name))).mode & 0o777,
+            ),
+          );
+        },
+      );
+      expect(entries).toEqual(["SKILL.md", "list-v1.sh", "reference-v1.md"]);
+      expect(modes).toEqual([0o500, 0o400]);
+      await expect(
+        execute(
+          root,
+          [
+            {
+              name: "wbh-recon",
+              content: skill,
+              files: [{ name: "SKILL.md", content: "x" }],
+            },
+          ],
+          async () => {},
+        ),
+      ).rejects.toThrow();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
