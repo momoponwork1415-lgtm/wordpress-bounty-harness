@@ -17,6 +17,7 @@ import {
   defineClaudeRuntimeProfile,
   GvisorClaudeSandbox,
   GvisorCodexSandbox,
+  PARTITIONED_ROLE_MEMORY_PROFILES,
   ProviderAttachmentStore,
   readPrivateChatgptLogin,
 } from "../discovery/index.js";
@@ -332,6 +333,13 @@ export async function createWordPressHostProfile(options: {
     config: WordPressCampaignConfig,
     state: CliState,
   ): Promise<WordPressCampaignBoundaries> => {
+    const compactRoleMemory =
+      config.discovery.mode === "partitioned" &&
+      config.resources.partitionedRoleMemoryProfile !== undefined
+        ? PARTITIONED_ROLE_MEMORY_PROFILES[
+            config.resources.partitionedRoleMemoryProfile
+          ]
+        : undefined;
     for (const directory of Object.values(directories))
       await mkdir(directory, { recursive: true, mode: 0o700 });
     const sandbox = new GvisorCodexSandbox({
@@ -341,6 +349,9 @@ export async function createWordPressHostProfile(options: {
       scratchRootDirectory: directories.codexScratch,
       maxOutputBytes: 64 * 1024 * 1024,
       timeoutMs: config.runWallTimeMinutes * 60_000,
+      ...(compactRoleMemory === undefined
+        ? {}
+        : { oneShotMemoryMiB: compactRoleMemory.sandboxMiB }),
       ...(runtimeProfile.subagent.modelId === "unavailable"
         ? {}
         : { memoryMiB: CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB }),
@@ -434,8 +445,7 @@ export async function createWordPressHostProfile(options: {
           }),
     });
     const attachments = new ProviderAttachmentStore(directories.attachments);
-    const runtime = new CodexNativeAgentRuntime(
-      sandbox,
+    const broker = (memoryMiB?: number) =>
       createProviderCredentialEgressBroker({
         dockerExecutablePath: host.dockerExecutablePath,
         brokerImage: host.images.broker,
@@ -447,7 +457,11 @@ export async function createWordPressHostProfile(options: {
         scratchRootDirectory: directories.brokerScratch,
         proxyBundleDirectory,
         clock: state.clock,
-      }),
+        ...(memoryMiB === undefined ? {} : { memoryMiB }),
+      });
+    const runtime = new CodexNativeAgentRuntime(
+      sandbox,
+      broker(),
       attachments,
       host.images.codex,
       wordPressLabCommandRule,
@@ -564,7 +578,9 @@ export async function createWordPressHostProfile(options: {
       executor: runtime,
       oneShot: new CodexOneShotRuntime(
         sandbox,
-        runtime.broker,
+        compactRoleMemory === undefined
+          ? runtime.broker
+          : broker(compactRoleMemory.brokerMiB),
         attachments,
         host.images.codex,
         wordPressLabCommandRule,

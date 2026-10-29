@@ -67,6 +67,7 @@ export { CodexOneShotRuntime } from "./codex-one-shot-runtime.js";
 export {
   scriptRanIn,
   ONE_SHOT_SANDBOX_MEMORY_MIB,
+  PARTITIONED_ROLE_MEMORY_PROFILES,
   type OneShotExecutor,
   type OneShotFile,
   type OneShotResult,

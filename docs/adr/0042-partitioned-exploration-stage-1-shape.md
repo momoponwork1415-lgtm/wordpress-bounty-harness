@@ -121,3 +121,11 @@ Codex の一発 sandbox も既存の役用の 4,096 MiB を使う。子のない
 役の Markdown は変更しない。役が名指しする旧 filename `enumerate-sinks-v1.sh` は、v2 を選んだ pack の中だけ、v2 と同じ bytes の互換名として mount する。記録する選択 ID と digest は v2 であり、保存した v1 と、v1 を明示した pack の bytes は変えない。v1/v2 の同時指定は filename の衝突として拒否する。
 
 消し方: v2 の file と登録、互換 mount を消し、既定の道具を v1、1 区画の既定値を 60（設定上限 400）へ戻す。
+
+## 追記 5（2026-10-29）: 本番用の選択式メモリ枠
+
+所有者決定（#680）。Codex の区画分配型を 5 対象、各 8 区画、追跡役 8 並列で動かすため、本番専用の選択式 `compact-768-256` を設ける。この指定では一発 sandbox の cgroup 上限を 768 MiB、broker の cgroup 上限を 256 MiB とし、設定の memory 予算も同じ値の合計 1,024 MiB を 1 役として検査する。40 役の上限合計は 40,960 MiB である。指定しない既存設定の sandbox 4,096 MiB、broker 512 MiB と検査は変えない。
+
+新しい枠の本番採用は、隔離した異なる本番選定対象 3 件以上で各役の peak、OOM、wall、停止理由、provider 制限を測り、候補上限を支えられると確認した後にする。切替は #633 に記録し、1 対象から 2、3、5 対象へ増やしながら資源を観測する。固定ソース、プロンプト、道具、Snapshot、台帳 event 型、Programme Boundary、gVisor と broker の境界は変えない。
+
+消し方: 新しい枠の指定を外した設定で従来の cgroup 上限と検査へ戻す。
