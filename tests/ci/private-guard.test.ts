@@ -8,11 +8,20 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 const script = fileURLToPath(
   new URL("../../scripts/check-private-evidence.sh", import.meta.url),
 );
+// Git hooks export paths such as GIT_DIR. A fixture must never operate on that
+// repository, even when the suite is run from the pre-push hook.
+const fixtureEnvironment = Object.fromEntries(
+  Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_")),
+);
 let directory: string;
 let base: string;
 
 function git(...args: string[]): string {
-  return execFileSync("git", args, { cwd: directory, encoding: "utf8" }).trim();
+  return execFileSync("git", args, {
+    cwd: directory,
+    env: fixtureEnvironment,
+    encoding: "utf8",
+  }).trim();
 }
 
 async function put(path: string, content: string): Promise<void> {
@@ -38,7 +47,7 @@ function commit(): string {
 function check(head: string) {
   return spawnSync("bash", [script], {
     cwd: directory,
-    env: { ...process.env, BASE: base, HEAD: head },
+    env: { ...fixtureEnvironment, BASE: base, HEAD: head },
     encoding: "utf8",
   });
 }
