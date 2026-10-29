@@ -222,3 +222,61 @@ describe("Claude runner", () => {
     ).rejects.toThrow();
   });
 });
+
+/** A stand-in SDK that reports the setting sources, skills and tools it was given. */
+const SKILLS_SDK = `
+export async function* query({ options }) {
+  const hook = options.hooks.PreToolUse[0].hooks[0];
+  const skill = await hook({ tool_name: "Skill" });
+  yield {
+    type: "result", subtype: "success", is_error: false, session_id: "s",
+    settingSources: options.settingSources, skills: options.skills ?? null, tools: options.tools,
+    skillDecision: skill.hookSpecificOutput?.permissionDecisionReason ?? "allow",
+  };
+}
+`;
+
+describe("Claude runner skills (ADR 0043)", () => {
+  const base = {
+    prompt: "p",
+    resumePrompt: "r",
+    minimumActiveMs: 1,
+    maxChildren: 4,
+    model: "m",
+    effort: "high",
+    outputSchema: { type: "object" },
+  };
+
+  it("enables exactly the staged skills from the user setting source and offers the Skill tool", async () => {
+    const events = await runWithConfig(SKILLS_SDK, {
+      ...base,
+      skills: ["wbh-recon"],
+    });
+    const result = events.find((event) => event.type === "result");
+    expect(result).toMatchObject({
+      settingSources: ["user"],
+      skills: ["wbh-recon"],
+      skillDecision: "allow",
+    });
+    expect(result?.tools).toContain("Skill");
+  });
+
+  it("loads no setting source and offers no Skill tool without skills", async () => {
+    const events = await runWithConfig(SKILLS_SDK, base);
+    const result = events.find((event) => event.type === "result");
+    expect(result).toMatchObject({
+      settingSources: [],
+      skills: null,
+      skillDecision: CLAUDE_RUNNER_DENIALS.outsideSurface,
+    });
+    expect(result?.tools).not.toContain("Skill");
+  });
+
+  it("refuses a skill list that is empty, too long or badly named", async () => {
+    for (const skills of [[], ["Bad Name"], ["../x"], Array(9).fill("s")]) {
+      await expect(
+        runWithConfig(SKILLS_SDK, { ...base, skills }),
+      ).rejects.toMatchObject({ code: 2 });
+    }
+  });
+});

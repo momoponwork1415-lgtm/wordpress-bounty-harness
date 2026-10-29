@@ -52,6 +52,7 @@ import {
 import type { ProgrammeIntelligence } from "../../src/profiles/wordpress/programme-intelligence/index.js";
 import { loadWordpressScopePolicy } from "../../src/profiles/wordpress/scope-policy.js";
 import { loadWordPressDiscoveryAsset } from "../../src/profiles/wordpress/prompts/index.js";
+import { loadWordPressDiscoverySkill } from "../../src/profiles/wordpress/prompts/skills.js";
 import {
   createWordPressSelection,
   loadWordPressSelectionPolicy,
@@ -1517,6 +1518,39 @@ describe("harness CLI vertical slice", () => {
       "coordination",
       "persistence",
     ]);
+  });
+
+  it("stages the campaign's exploration skills into the Trial and records them by id and digest (ADR 0043)", async () => {
+    const { run, configPath, prompts, ledger, transportRuns } = await harness({
+      config: { discovery: { lab: "none", skills: ["wbh-recon-v1"] } },
+    });
+    const result = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-skills",
+      "--config",
+      configPath,
+    );
+    expect(result.code).toBe(0);
+    const skill = await loadWordPressDiscoverySkill("wbh-recon-v1");
+    expect(transportRuns[0]?.skills).toEqual([
+      { name: "wbh-recon", content: skill.text },
+    ]);
+    // The objective text is unchanged; the skill reaches the agent through the CLI's own listing.
+    const objective = await loadWordPressDiscoveryAsset("wp2shell-bounty-v11");
+    expect(prompts[0]).toContain(objective.text.trim());
+    expect(prompts[0]).not.toContain("wbh-recon");
+    const started = ledger()
+      .read({ campaignId: "campaign-skills", type: "discovery-run-started" })
+      .at(0)?.event;
+    expect(started).toMatchObject({
+      configuration: {
+        promptVariant: "wp2shell-bounty-v11",
+        skills: [{ id: "wbh-recon-v1", digest: skill.digest }],
+      },
+    });
   });
 
   it("keeps old objective bytes readable but rejects them for new campaigns", async () => {

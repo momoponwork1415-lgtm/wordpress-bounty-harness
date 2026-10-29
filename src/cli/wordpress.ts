@@ -20,6 +20,7 @@ import {
   recordInterruptedRun,
   runParametersSection,
   SANDBOX_INPUT_MOUNT_PATH,
+  type StagedSkill,
 } from "../discovery/index.js";
 import type {
   AgentRuntimeProfile,
@@ -74,6 +75,11 @@ import {
   type WordPressDiscoveryAsset,
   type WordPressOutputContractVersion,
 } from "../profiles/wordpress/prompts/index.js";
+import {
+  loadWordPressDiscoverySkill,
+  wordPressDiscoverySkillRecord,
+  type WordPressDiscoverySkill,
+} from "../profiles/wordpress/prompts/skills.js";
 import { createWordpressScopeEvaluator } from "../profiles/wordpress/scope-policy.js";
 import {
   openWordPressSelection,
@@ -717,6 +723,16 @@ function wordPressResumeParagraph(objective: WordPressDiscoveryAsset): string {
 }
 
 /** The source mounts of one Snapshot as the transport run names them. */
+/** What the sandbox stages: the front matter name and the whole pinned file. */
+function stagedSkills(
+  skills: readonly WordPressDiscoverySkill[],
+): StagedSkill[] {
+  return skills.map((skill) => ({
+    name: skill.frontMatter.name,
+    content: skill.text,
+  }));
+}
+
 function wordPressSourceMounts(source: WordPressDiscoverySource) {
   return {
     sourceDirectory: source.directory,
@@ -1089,6 +1105,10 @@ async function planWordPressDiscovery(
   const maxRuns = repeat;
   const stopRules = { maxRuns, noFindingRuns: 1 };
   const runParameters = wordPressRunParameters(config, runtime.runtimeProfile);
+  // ADR 0043: the campaign's skills, pinned by digest, staged into the CLI's home.
+  const skills = await Promise.all(
+    (config.discovery.skills ?? []).map(loadWordPressDiscoverySkill),
+  );
   const promptFor = (selectedObjective: typeof objective) =>
     wordPressDiscoveryPromptText({
       objective: selectedObjective,
@@ -1160,6 +1180,9 @@ async function planWordPressDiscovery(
           lab: runParameters.lab,
           model: runParameters.runtime.model,
           effort: runParameters.runtime.effort,
+          ...(skills.length === 0
+            ? {}
+            : { skills: skills.map(({ id, digest }) => ({ id, digest })) }),
         },
         run: {
           runId: trialId,
@@ -1170,6 +1193,7 @@ async function planWordPressDiscovery(
           maxChildren: runParameters.maxChildren,
           minimumActiveMs: wordPressMinimumActiveMs(config),
           resumePrompt,
+          ...(skills.length === 0 ? {} : { skills: stagedSkills(skills) }),
           ...(lab?.exploration === undefined
             ? {}
             : {
@@ -1385,6 +1409,19 @@ async function resumeWordPressRun(
     loadWordPressDiscoveryAsset(WORDPRESS_TRUST_BOUNDARY.id),
   ]);
   const resumePrompt = wordPressResumeParagraph(objective);
+  // A segment receives the skills its Trial recorded, at the recorded digests
+  // (ADR 0043); a version the registry no longer has cannot be rebuilt.
+  const recordedSkills: WordPressDiscoverySkill[] = [];
+  for (const recorded of started.configuration.skills ?? []) {
+    const record = wordPressDiscoverySkillRecord(recorded.id);
+    if (record === undefined || record.digest !== recorded.digest)
+      return {
+        status: "refused",
+        reason: "skill-version-differs",
+        detail: `${recorded.id} at ${recorded.digest} is not in the skill registry`,
+      };
+    recordedSkills.push(await loadWordPressDiscoverySkill(record.id));
+  }
   // The Snapshot the run was frozen on; the sandbox re-verifies every tree digest at mount.
   const snapshot = await boundaries.loadSnapshot(started.snapshotDigest);
   if (snapshot.digest !== started.snapshotDigest)
@@ -1483,6 +1520,9 @@ async function resumeWordPressRun(
     prompt,
     maxChildren: runParameters.maxChildren,
     resumePrompt,
+    ...(recordedSkills.length === 0
+      ? {}
+      : { skills: stagedSkills(recordedSkills) }),
     ...wordPressSourceMounts(source),
   };
   const { recoverInterrupted } = runtime.executor;

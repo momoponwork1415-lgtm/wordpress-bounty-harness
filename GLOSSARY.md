@@ -44,6 +44,7 @@
 | 区画分配型（partitioned） | Root を置かず、Harness が役ごとに AI を起こす Trial。列挙役 1 体が入口と出口の一覧（inventory）と区画の案を出し、Harness が形と上限を検査して、区画ごとに追跡役 1 体を起こす。`discovery.mode: "partitioned"`（ADR 0042）。 |
 | 列挙役（enumerator） | 区画分配型で対象ごとに 1 体。サンドボックスに置かれた列挙の script を自分で走らせて点検し、script が拾えない行を足し、行 id 付きの inventory と区画の案を返す。定義は `prompts/agents/enumerator-v<n>.md`。 |
 | 追跡役（tracer） | 区画分配型で区画ごとに 1 体。自分の区画の行から入口と出口をたどり、契約 v4（solo）の形で Finding / Lead を返す。子を起こさない。定義は `prompts/agents/tracer-v<n>.md`。 |
+| 探索スキル（discovery skill） | 探索の手順 1 つを書いた `SKILL.md`。campaign 設定 `discovery.skills` で id を名指しすると、Harness が digest を検証して sandbox の CLI home（Codex `CODEX_HOME/skills`、Claude `CLAUDE_CONFIG_DIR/skills`）に置き、CLI が name と description を Root と子に一覧する。目的文は変えない。registry は `prompts/skills.ts`、本文は `prompts/skills/<id>/SKILL.md`（ADR 0043）。 |
 | 区画（partition） | 列挙役が機能のまとまりで切った inventory の行の集合。Harness は schema、重複、上限（1 区画の行数、区画数）だけを検査し、超えた案は切り分けずに差し戻す（`maxResubmits` まで）。`partition-assigned` に行数と digest が残り、Finding / Lead に `partition` が付く。 |
 | Discovery run | モデル実行の記録単位。Trial の中で何回モデルを呼んだかと区別する。 |
 | Finding | 攻撃者の立場、入口から影響までのソース上の経路、観測を備えた未確認の主張。 |

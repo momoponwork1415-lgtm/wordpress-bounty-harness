@@ -430,3 +430,139 @@ describe("Claude gVisor sandbox", () => {
     expect(calls).toEqual([]);
   });
 });
+
+describe("Claude gVisor sandbox skills (ADR 0043)", () => {
+  const skill =
+    "---\nname: wbh-recon\ndescription: Use first.\n---\n\n# wbh-recon v1\n\nMap the plugin.\n";
+  async function execute(
+    root: string,
+    command: {
+      skills?: { name: string; content: string }[];
+      inputSkills?: string[];
+    },
+    onRun: (home: string, stdin: string | undefined) => Promise<void>,
+  ) {
+    const source = await mkdtemp(join(root, "source-"));
+    await writeFile(join(source, "fixed.php"), "<?php");
+    const tree = await measureCanonicalSourceTree(source, {
+      maxEntries: 10,
+      maxBytes: 1024,
+    });
+    const sandbox = new GvisorClaudeSandbox({
+      dockerExecutablePath: "/usr/bin/docker",
+      image: `claude@sha256:${"a".repeat(64)}`,
+      scratchRootDirectory: root,
+      ownerDirectory: join(root, "discovery-owners"),
+      maxOutputBytes: 1024 * 1024,
+      timeoutMs: 60_000,
+      runDocker: async (args, stdin) => {
+        if (args.includes("--network=trial-internal")) {
+          const home = args
+            .map((arg) =>
+              /^--mount=type=bind,src=(.+),dst=\/tmp\/claude$/.exec(arg),
+            )
+            .find((match) => match !== null)?.[1];
+          await onRun(home!, stdin);
+        }
+        return {
+          kind: "exited",
+          exitCode: 0,
+          stdout: args.includes("--version") ? "2.1.296 (Claude Code)\n" : "",
+          stderr: "",
+        };
+      },
+    });
+    return sandbox.execute({
+      grant: {
+        baseUrl: "http://172.20.0.5:8080",
+        authorization: `Bearer ${"t".repeat(43)}`,
+        dockerNetworkName: "trial-internal",
+        model: "claude-opus-5-5",
+        subagentModel: "claude-opus-5-5",
+        protocol: "anthropic-messages",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+      input: {
+        prompt: "Objective.",
+        resumePrompt: "Before giving up.",
+        minimumActiveMs: 1,
+        maxChildren: 4,
+        model: "claude-opus-5-5",
+        effort: "high",
+        outputSchema: {},
+        ...(command.inputSkills === undefined
+          ? {}
+          : { skills: command.inputSkills }),
+      },
+      subagentModel: "claude-opus-5-5",
+      sourceMount: { directory: source, expectedTree: tree },
+      dependencyMounts: [],
+      ...(command.skills === undefined ? {} : { skills: command.skills }),
+    });
+  }
+
+  it("stages each skill under the config directory and names it on the runner's stdin", async () => {
+    const root = await mkdtemp(join(tmpdir(), "gvisor-claude-skills-"));
+    try {
+      let staged: string | undefined;
+      let input: unknown;
+      const result = await execute(
+        root,
+        {
+          skills: [{ name: "wbh-recon", content: skill }],
+          inputSkills: ["wbh-recon"],
+        },
+        async (home, stdin) => {
+          staged = await readFile(
+            join(home, "skills", "wbh-recon", "SKILL.md"),
+            "utf8",
+          );
+          input = JSON.parse(stdin ?? "{}");
+        },
+      );
+      expect(result.status).toBe("exited");
+      expect(staged).toBe(skill);
+      expect(input).toMatchObject({ skills: ["wbh-recon"] });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses names on stdin that differ from the staged skills, before starting anything", async () => {
+    const root = await mkdtemp(join(tmpdir(), "gvisor-claude-badskills-"));
+    try {
+      let started = false;
+      const onRun = async () => {
+        started = true;
+      };
+      await expect(
+        execute(root, { inputSkills: ["wbh-recon"] }, onRun),
+      ).rejects.toThrow("not admitted");
+      await expect(
+        execute(
+          root,
+          {
+            skills: [{ name: "wbh-recon", content: skill }],
+            inputSkills: ["wbh-other"],
+          },
+          onRun,
+        ),
+      ).rejects.toThrow("not admitted");
+      await expect(
+        execute(
+          root,
+          { skills: [{ name: "wbh-recon", content: skill }] },
+          onRun,
+        ),
+      ).rejects.toThrow("not admitted");
+      expect(started).toBe(false);
+      let input: unknown;
+      await execute(root, {}, async (_, stdin) => {
+        input = JSON.parse(stdin ?? "{}");
+      });
+      expect(input).not.toHaveProperty("skills");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

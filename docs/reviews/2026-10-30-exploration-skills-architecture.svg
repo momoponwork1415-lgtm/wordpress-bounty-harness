@@ -1,0 +1,144 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="820" viewBox="0 0 1280 820" font-family="Segoe UI, Hiragino Sans, Noto Sans JP, sans-serif" font-size="14">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#4b5563"/></marker>
+  </defs>
+  <rect width="1280" height="820" fill="#ffffff"/>
+  <text x="24" y="34" font-size="20" font-weight="600" fill="#111827">探索のアーキテクチャ（#682 以降）: 形は Harness、中身はスキルと目的文</text>
+  <text x="24" y="56" fill="#4b5563">Root 配分型（v8/v11/v14 の協調 Trial）を主経路に戻し、やり方をスキルとして sandbox の CLI home に置く。区画分配型は比較の腕として残す。</text>
+
+  <!-- Harness lane -->
+  <rect x="24" y="80" width="300" height="700" rx="10" fill="#f3f4f6" stroke="#9ca3af"/>
+  <text x="40" y="106" font-weight="600" fill="#111827">Harness（制御だけ。判断を持たない）</text>
+  <g fill="#ffffff" stroke="#6b7280">
+    <rect x="40" y="120" width="268" height="58" rx="6"/>
+    <rect x="40" y="190" width="268" height="58" rx="6"/>
+    <rect x="40" y="260" width="268" height="112" rx="6"/>
+    <rect x="40" y="384" width="268" height="76" rx="6"/>
+    <rect x="40" y="472" width="268" height="90" rx="6"/>
+    <rect x="40" y="574" width="268" height="90" rx="6"/>
+    <rect x="40" y="676" width="268" height="90" rx="6"/>
+  </g>
+  <g fill="#111827">
+    <text x="52" y="142" font-weight="600">1. 選定</text><text x="52" y="162" fill="#4b5563">install 順と版上昇再訪（#533）</text>
+    <text x="52" y="212" font-weight="600">2. Snapshot と digest</text><text x="52" y="232" fill="#4b5563">plugin・core・依存を版と digest で固定</text>
+    <text x="52" y="282" font-weight="600">3. Trial の組み立て</text>
+    <text x="52" y="302" fill="#4b5563">目的文 v11 / v14（変えない）</text>
+    <text x="52" y="320" fill="#4b5563">＋ 生成節: 出力契約 v4、Run parameters</text>
+    <text x="52" y="338" fill="#4b5563">＋ スキル: campaign 設定 discovery.skills</text>
+    <text x="52" y="356" fill="#4b5563">　　を digest 検証して CLI home に置く（新）</text>
+    <text x="52" y="406" font-weight="600">4. gVisor + broker</text><text x="52" y="426" fill="#4b5563">読み取り専用 mount、外向きは provider API のみ</text>
+    <text x="52" y="444" fill="#4b5563">maxChildren と制限時間を強制</text>
+    <text x="52" y="494" font-weight="600">5. 受け取り</text><text x="52" y="514" fill="#4b5563">全件保存、schema で正規化</text>
+    <text x="52" y="532" fill="#4b5563">Programme Boundary 外は park</text>
+    <text x="52" y="550" fill="#4b5563">Lead は全件 review leads へ</text>
+    <text x="52" y="596" font-weight="600">6. 台帳 / Private Evidence</text>
+    <text x="52" y="616" fill="#4b5563">discovery-run-started.configuration</text>
+    <text x="52" y="634" fill="#4b5563">　.skills [{id, digest}]（新）</text>
+    <text x="52" y="652" fill="#4b5563">prompt digest、mode、子の数、wall</text>
+    <text x="52" y="698" font-weight="600">7. 検証列 → Lab → 人間</text>
+    <text x="52" y="718" fill="#4b5563">段 1b wbh-source-check → verify Lab →</text>
+    <text x="52" y="736" fill="#4b5563">review observe / decide（人間）→ wbh-report</text>
+    <text x="52" y="754" fill="#4b5563">Harness は判定器を持たない（ADR 0040）</text>
+  </g>
+
+  <!-- Sandbox lane -->
+  <rect x="356" y="80" width="580" height="700" rx="10" fill="#eff6ff" stroke="#60a5fa"/>
+  <text x="372" y="106" font-weight="600" fill="#111827">使い捨て sandbox（gVisor）: 1 対象 1 Trial、中身は AI が決める</text>
+
+  <rect x="372" y="122" width="548" height="92" rx="6" fill="#ffffff" stroke="#60a5fa"/>
+  <text x="384" y="144" font-weight="600" fill="#111827">CLI home（Codex: CODEX_HOME/skills、Claude: CLAUDE_CONFIG_DIR/skills）</text>
+  <g fill="#dbeafe" stroke="#3b82f6"><rect x="384" y="156" width="118" height="44" rx="5"/><rect x="512" y="156" width="118" height="44" rx="5" stroke-dasharray="4 3"/><rect x="640" y="156" width="118" height="44" rx="5" stroke-dasharray="4 3"/><rect x="768" y="156" width="140" height="44" rx="5" stroke-dasharray="4 3"/></g>
+  <g fill="#1e3a8a" font-size="12">
+    <text x="392" y="174" font-weight="600">wbh-recon v1</text><text x="392" y="190">地図を作る（PR 1）</text>
+    <text x="520" y="174" font-weight="600">wbh-tools</text><text x="520" y="190">列挙 script は HINT</text>
+    <text x="648" y="174" font-weight="600">wbh-trace</text><text x="648" y="190">3 方向の追跡と引継ぎ</text>
+    <text x="776" y="174" font-weight="600">wbh-coverage / refute</text><text x="776" y="190">読んだ・止まった台帳、反証</text>
+  </g>
+  <text x="384" y="226" font-size="12" fill="#4b5563">CLI が name と description を一覧にして model に見せる。本文は使う時に読む。実線 = この PR、破線 = 後続 PR。</text>
+
+  <rect x="372" y="244" width="548" height="124" rx="6" fill="#ffffff" stroke="#60a5fa"/>
+  <text x="384" y="266" font-weight="600" fill="#111827">Root（配分役）</text>
+  <text x="384" y="286" fill="#4b5563">目的文 + 契約 + Run parameters を読む → /wbh-recon で地図を作る → 地図の単位（subsystem）で子に配る</text>
+  <text x="384" y="304" fill="#4b5563">子の報告を集め、挑戦し、次の輪を起こす。最低時間まで同じセッションで続ける（deep）。</text>
+  <text x="384" y="322" fill="#4b5563">Harness は「何体」「いつまで」だけ強制する。どこを読むか、何を仮説にするかは Root とスキルの仕事。</text>
+  <text x="384" y="352" font-size="12" fill="#6b7280">※ v8 で報奨 8 件が出た形。ADR 0034 で消した Harness 側の索引・dispatch は戻さない。</text>
+
+  <g fill="#ffffff" stroke="#60a5fa"><rect x="372" y="392" width="128" height="76" rx="6"/><rect x="512" y="392" width="128" height="76" rx="6"/><rect x="652" y="392" width="128" height="76" rx="6"/><rect x="792" y="392" width="128" height="76" rx="6"/></g>
+  <g fill="#111827" font-size="12">
+    <text x="382" y="412" font-weight="600">子 1: 設定画面</text><text x="382" y="430" fill="#4b5563">地図の節 + wrapper 表</text><text x="382" y="448" fill="#4b5563">短命、1 単位で返る</text>
+    <text x="522" y="412" font-weight="600">子 2: 公開機能 A</text><text x="522" y="430" fill="#4b5563">同上</text>
+    <text x="662" y="412" font-weight="600">子 3: 連携 / 外部</text><text x="662" y="430" fill="#4b5563">同上</text>
+    <text x="802" y="412" font-weight="600">子 n ≤ maxChildren</text><text x="802" y="430" fill="#4b5563">Harness が上限を強制</text>
+  </g>
+
+  <rect x="372" y="492" width="548" height="112" rx="6" fill="#fefce8" stroke="#ca8a04"/>
+  <text x="384" y="514" font-weight="600" fill="#111827">/workspace/research（Trial 内で共有、書き込み可）</text>
+  <text x="384" y="534" fill="#4b5563">recon-map.md: 形、subsystem、入口の表、wrapper 表、共有 helper、store、JS 境界、未読、修正</text>
+  <text x="384" y="552" fill="#4b5563">&lt;family&gt;.md / REGISTRY.md: 目的文が定める子ごとの記録と方針の登録簿</text>
+  <text x="384" y="570" fill="#4b5563">後続 PR: 読んだ・止まった coverage 台帳。Trial が終わると Harness が archive として封じる（research artifact）</text>
+  <text x="384" y="592" font-size="12" fill="#6b7280">Trial をまたぐ持ち越しは無し（毎回やり直し、所有者決定 4）。持ち越す案は PARKING へ。</text>
+
+  <rect x="372" y="628" width="548" height="76" rx="6" fill="#ffffff" stroke="#60a5fa"/>
+  <text x="384" y="650" font-weight="600" fill="#111827">読み取り専用の入力</text>
+  <text x="384" y="670" fill="#4b5563">/workspace/main（plugin）、/workspace/wordpress（core）、/workspace/dependencies/&lt;slug&gt;</text>
+  <text x="384" y="688" fill="#4b5563">trust 境界宣言、Programme Boundary。公開履歴はカタログ情報のみ（不変条件 1）</text>
+
+  <rect x="372" y="720" width="548" height="48" rx="6" fill="#ffffff" stroke="#60a5fa"/>
+  <text x="384" y="740" font-weight="600" fill="#111827">最終報告（契約 v4 の JSON）: Finding / Lead</text>
+  <text x="384" y="758" fill="#4b5563">子の有効な Finding / Lead は Root の報告と独立に保存される</text>
+
+  <!-- Right lane -->
+  <rect x="968" y="80" width="288" height="700" rx="10" fill="#f0fdf4" stroke="#4ade80"/>
+  <text x="984" y="106" font-weight="600" fill="#111827">比較と計測</text>
+  <rect x="984" y="122" width="256" height="150" rx="6" fill="#ffffff" stroke="#4ade80"/>
+  <text x="996" y="144" font-weight="600" fill="#111827">腕 A: 協調 Trial（主経路）</text>
+  <text x="996" y="164" fill="#4b5563">deep v11 / wide v14</text>
+  <text x="996" y="182" fill="#4b5563">discovery.skills 無し = 従来どおり</text>
+  <text x="996" y="200" fill="#4b5563">discovery.skills 有り = スキル腕</text>
+  <text x="996" y="218" fill="#4b5563">同じ選定帯で交互に回す</text>
+  <text x="996" y="236" fill="#4b5563">6 段で採否（DEVELOPMENT §5）</text>
+  <text x="996" y="258" font-size="12" fill="#6b7280">探索は所有者の再開指示の後に測る</text>
+
+  <rect x="984" y="290" width="256" height="112" rx="6" fill="#ffffff" stroke="#4ade80"/>
+  <text x="996" y="312" font-weight="600" fill="#111827">腕 B: 区画分配型（ADR 0042）</text>
+  <text x="996" y="332" fill="#4b5563">列挙役 → 形の検査 → 追跡役</text>
+  <text x="996" y="350" fill="#4b5563">mode: partitioned、Root 無し</text>
+  <text x="996" y="368" fill="#4b5563">スキルは当てない（比較の腕）</text>
+  <text x="996" y="386" fill="#4b5563">script の再現率は CVE ベンチで測定済み</text>
+
+  <rect x="984" y="420" width="256" height="150" rx="6" fill="#ffffff" stroke="#4ade80"/>
+  <text x="996" y="442" font-weight="600" fill="#111827">数えるもの</text>
+  <text x="996" y="462" fill="#4b5563">Finding / Trial、Lead / Trial</text>
+  <text x="996" y="480" fill="#4b5563">段 1b を通った数（成立）</text>
+  <text x="996" y="498" fill="#4b5563">Lab で人間が match を記録した数</text>
+  <text x="996" y="516" fill="#4b5563">読んだ file 数、token、時間</text>
+  <text x="996" y="534" fill="#4b5563">recon-map.md の有無と大きさ</text>
+  <text x="996" y="552" fill="#4b5563">（research artifact から読む）</text>
+
+  <rect x="984" y="590" width="256" height="176" rx="6" fill="#ffffff" stroke="#4ade80"/>
+  <text x="996" y="612" font-weight="600" fill="#111827">変えないもの</text>
+  <text x="996" y="632" fill="#4b5563">目的文の本文と digest</text>
+  <text x="996" y="650" fill="#4b5563">出力契約 v4</text>
+  <text x="996" y="668" fill="#4b5563">不変条件 1〜8、ADR 0040</text>
+  <text x="996" y="686" fill="#4b5563">判定基準・型一覧はスキルに書かない</text>
+  <text x="996" y="704" fill="#4b5563">（契約 v5 / v17 の教訓）</text>
+  <text x="996" y="722" fill="#4b5563">消し方: discovery.skills を外せば</text>
+  <text x="996" y="740" fill="#4b5563">従来の Trial。file と registry を消す</text>
+
+  <!-- arrows -->
+  <g stroke="#4b5563" stroke-width="1.6" fill="none" marker-end="url(#a)">
+    <path d="M308 316 L372 170"/>
+    <path d="M308 330 L372 300"/>
+    <path d="M308 420 L356 420"/>
+    <path d="M920 744 L1000 744 L1000 770" stroke-opacity="0"/>
+    <path d="M646 368 L646 392"/>
+    <path d="M436 468 L436 492"/>
+    <path d="M576 468 L576 492"/>
+    <path d="M716 468 L716 492"/>
+    <path d="M856 468 L856 492"/>
+    <path d="M640 214 L640 244"/>
+    <path d="M646 704 L646 720"/>
+    <path d="M372 744 L308 520"/>
+  </g>
+  <text x="330" y="300" font-size="11" fill="#4b5563" transform="rotate(-62 330 300)">stage</text>
+</svg>

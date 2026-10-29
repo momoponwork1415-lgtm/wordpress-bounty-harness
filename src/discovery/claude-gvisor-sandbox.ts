@@ -55,6 +55,11 @@ import {
   type OneShotToolFile,
 } from "./one-shot-run.js";
 import {
+  admittedStagedSkills,
+  stageSkills,
+  type StagedSkill,
+} from "./skill-definition.js";
+import {
   SANDBOX_INPUT_MOUNT_PATH,
   SANDBOX_OUTPUT_MOUNT_PATH,
   SANDBOX_RESEARCH_MOUNT_PATH,
@@ -122,6 +127,11 @@ export interface ClaudeSandboxCommand {
     readonly resumeSessionId?: string;
     /** With `resumeSessionId`: Harness-generated facts sent before the directive on the first turn. */
     readonly resumeNotice?: string;
+    /**
+     * ADR 0043: the names of `skills` below, which the runner enables for
+     * the session; present exactly when `skills` is.
+     */
+    readonly skills?: readonly string[];
   };
   /**
    * The model every child runs on, from the profile's `subagent.modelId`
@@ -147,6 +157,8 @@ export interface ClaudeSandboxCommand {
   readonly databaseHost?: { readonly name: string; readonly ipv4: string };
   /** The exploration Lab's control endpoint (ADR 0003, 2026-10-25 addendum). */
   readonly controlHost?: { readonly name: string; readonly ipv4: string };
+  /** ADR 0043: skills staged at `<CLAUDE_CONFIG_DIR>/skills/<name>/SKILL.md` before the runner starts. */
+  readonly skills?: readonly StagedSkill[];
 }
 
 export interface ClaudeSandboxResult {
@@ -287,6 +299,19 @@ export class ClaudeSandboxNotAdmittedError extends Error {
 }
 
 /** A one-shot command's own shape (ADR 0042); the cooperative shape is the other branch. */
+/** The staged skills and the names the runner enables are the same list (ADR 0043). */
+function admittedSkills(command: ClaudeSandboxCommand): boolean {
+  if (command.skills === undefined) return command.input.skills === undefined;
+  return (
+    admittedStagedSkills(command.skills) &&
+    command.input.skills !== undefined &&
+    command.input.skills.length === command.skills.length &&
+    command.input.skills.every(
+      (name, index) => command.skills![index]?.name === name,
+    )
+  );
+}
+
 function admittedOneShot(command: ClaudeSandboxCommand): boolean {
   const { input, oneShot } = command;
   if (oneShot === undefined) return input.oneShot === undefined;
@@ -395,6 +420,7 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
         ? command.input.resumeSessionId !== undefined
         : !admittedResumeSeed(command.resume, command.input.resumeSessionId)) ||
       !admittedOneShot(command) ||
+      !admittedSkills(command) ||
       (command.oneShot === undefined &&
         (command.input.resumePrompt === undefined ||
           command.input.outputSchema === undefined ||
@@ -454,6 +480,8 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
       ];
       if (command.resume !== undefined)
         await seedResume(home, research, command.resume);
+      // ADR 0043: Claude Code lists `skills/<name>/SKILL.md` under its config directory.
+      if (command.skills !== undefined) await stageSkills(home, command.skills);
       if (oneShot !== undefined)
         await stageOneShotFiles(input!, tools!, oneShot);
       await writeFile(join(staging, "runner.mjs"), CLAUDE_RUNNER_SOURCE, {

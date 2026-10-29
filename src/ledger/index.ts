@@ -202,6 +202,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         .optional(),
       model: id.optional(),
       effort: id.optional(),
+      /** ADR 0043: the exploration skills staged for the run, by id and file digest; absent when none. */
+      skills: z.array(z.strictObject({ id, digest })).min(1).max(8).optional(),
       axis: z.literal("history").optional(),
       arm: z.enum(["a", "b"]).optional(),
       arms: z

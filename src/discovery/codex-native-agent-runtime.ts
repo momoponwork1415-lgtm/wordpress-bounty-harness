@@ -2,6 +2,12 @@ import { z } from "zod";
 import { isAbsolute, posix } from "node:path";
 
 import type { OneShotFile, OneShotRun } from "./one-shot-run.js";
+import {
+  MAX_STAGED_SKILL_BYTES,
+  MAX_STAGED_SKILLS,
+  SKILL_NAME,
+  type StagedSkill,
+} from "./skill-definition.js";
 
 import type { ExpectedSourceTree } from "../infrastructure/canonical-source-tree.js";
 import {
@@ -337,6 +343,8 @@ export interface CodexSandboxCommand {
   readonly databaseHost?: { readonly name: string; readonly ipv4: string };
   /** The exploration Lab's control endpoint (ADR 0003, 2026-10-25 addendum). */
   readonly controlHost?: { readonly name: string; readonly ipv4: string };
+  /** ADR 0043: skills staged at `<CODEX_HOME>/skills/<name>/SKILL.md` before the CLI starts. */
+  readonly skills?: readonly StagedSkill[];
 }
 export interface CodexSandboxResult {
   readonly labHandoff?: import("./one-shot-lab.js").OneShotLabHandoff;
@@ -457,6 +465,8 @@ export interface DiscoveryTransportRun {
     readonly tree: ExpectedSourceTree;
   }[];
   readonly expiresAt: string;
+  /** ADR 0043: the exploration skills the campaign names, staged into the CLI's home. */
+  readonly skills?: readonly StagedSkill[];
 }
 export interface DiscoveryTransportResult {
   readonly receipt: NativeRunReceipt;
@@ -549,6 +559,16 @@ const discoveryTransportRunSchema = z.strictObject({
     entries: z.number().int().nonnegative(),
     bytes: z.number().int().nonnegative(),
   }),
+  /** ADR 0043: the sandbox re-checks names and sizes; the schema bounds the list. */
+  skills: z
+    .array(
+      z.strictObject({
+        name: z.string().regex(SKILL_NAME),
+        content: z.string().min(1).max(MAX_STAGED_SKILL_BYTES),
+      }),
+    )
+    .max(MAX_STAGED_SKILLS)
+    .optional(),
   dependencySource: z
     .strictObject({
       path: dependencyMountPathSchema,
@@ -1706,6 +1726,7 @@ function sandboxCommand(
           },
         }),
     stdin: run.prompt,
+    ...(run.skills === undefined ? {} : { skills: run.skills }),
     supportFiles: [
       {
         path: "/opt/codex-support/report-schema.json",

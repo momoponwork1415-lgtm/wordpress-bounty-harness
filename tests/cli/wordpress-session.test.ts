@@ -255,3 +255,39 @@ describe("WordPress campaign session", () => {
     expect((await session.policy()).id).toBe("override-policy");
   });
 });
+
+describe("discovery skills (ADR 0043)", () => {
+  it("accepts pinned skill ids for a deep or wide campaign", async () => {
+    const { open } = await fixture({
+      config: { discovery: { lab: "none", skills: ["wbh-recon-v1"] } },
+    });
+    const session = await open();
+    expect(session.config.discovery.skills).toEqual(["wbh-recon-v1"]);
+    const wide = await fixture({
+      config: {
+        discovery: { lab: "none", mode: "wide", skills: ["wbh-recon-v1"] },
+      },
+    });
+    expect((await wide.open()).config.discovery.skills).toEqual([
+      "wbh-recon-v1",
+    ]);
+  });
+
+  it("rejects unknown ids, repeated skills and skills on a partitioned campaign", async () => {
+    for (const config of [
+      { discovery: { lab: "none", skills: ["wbh-other-v1"] } },
+      { discovery: { lab: "none", skills: ["wbh-recon-v1", "wbh-recon-v1"] } },
+      {
+        discovery: {
+          lab: "none",
+          mode: "partitioned",
+          skills: ["wbh-recon-v1"],
+        },
+        promptId: "objective-partition-v1",
+      },
+    ]) {
+      const { open } = await fixture({ config });
+      await expect(open()).rejects.toThrow();
+    }
+  });
+});
