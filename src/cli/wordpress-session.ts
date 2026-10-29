@@ -8,6 +8,7 @@ import {
   claudeEffortSchema,
   claudeModelSchema,
   ONE_SHOT_SANDBOX_MEMORY_MIB,
+  PARTITIONED_ROLE_MEMORY_PROFILES,
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB,
   DEFAULT_MAX_CHILDREN,
   MAX_CHILDREN_LIMIT,
@@ -216,6 +217,8 @@ const commonCampaignFields = {
       maxConcurrentRuns: z.number().int().min(1).max(4).default(1),
       maxConcurrentTargets: z.number().int().min(1).max(10).default(1),
       memoryBudgetMiB: z.number().int().positive(),
+      /** Explicitly opt in to the smaller cgroup caps for Codex partitioned roles. */
+      partitionedRoleMemoryProfile: z.literal("compact-768-256").optional(),
       /**
        * Opt-in caps per discovery runtime under maxConcurrentTargets (2026-10-19).
        * Absent, only the total applies.
@@ -274,11 +277,30 @@ export const wordpressCampaignConfigSchema = z
           path: ["discovery", role],
           message: `discovery.${role} applies to the partitioned mode only`,
         });
+    if (
+      mode !== "partitioned" &&
+      config.resources.partitionedRoleMemoryProfile !== undefined
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["resources", "partitionedRoleMemoryProfile"],
+        message:
+          "The compact role memory profile applies to partitioned mode only",
+      });
     if (mode === "partitioned") {
       const enumerator =
         config.discovery.enumerator ?? enumeratorSchema.parse({});
       const partition = config.discovery.partition ?? partitionSchema.parse({});
       const tracer = config.discovery.tracer ?? tracerSchema.parse({});
+      if (
+        config.resources.partitionedRoleMemoryProfile !== undefined &&
+        (enumerator.runtime !== "codex" || tracer.runtime !== "codex")
+      )
+        context.addIssue({
+          code: "custom",
+          path: ["resources", "partitionedRoleMemoryProfile"],
+          message: "The compact role memory profile requires Codex roles",
+        });
       // One target's worst case: every send-back used, every partition filled.
       const minutes =
         enumerator.wallMinutes * (1 + partition.maxResubmits) +
@@ -290,12 +312,15 @@ export const wordpressCampaignConfigSchema = z
           path: ["discovery", "tracer", "wallMinutes"],
           message: `One target may take ${minutes} minutes; the ceiling is ${PARTITIONED_TARGET_CEILING_MINUTES}`,
         });
-      // A tracer starts no children, so its sandbox is the one-shot size.
+      // A tracer starts no children. The selected cgroup caps are the budget unit.
+      const roleMemory =
+        PARTITIONED_ROLE_MEMORY_PROFILES[
+          config.resources.partitionedRoleMemoryProfile ?? "standard"
+        ];
+      const roleMemoryMiB = roleMemory.sandboxMiB + roleMemory.brokerMiB;
       const sandboxes = Math.max(
         1,
-        Math.floor(
-          config.resources.memoryBudgetMiB / PARTITIONED_TRACER_RUN_MEMORY_MIB,
-        ),
+        Math.floor(config.resources.memoryBudgetMiB / roleMemoryMiB),
       );
       if (tracer.maxParallel > sandboxes)
         context.addIssue({
@@ -310,7 +335,7 @@ export const wordpressCampaignConfigSchema = z
         context.addIssue({
           code: "custom",
           path: ["resources", "maxConcurrentTargets"],
-          message: `${config.resources.maxConcurrentTargets} target(s) × ${tracer.maxParallel} tracer(s) need ${concurrent * PARTITIONED_TRACER_RUN_MEMORY_MIB} MiB; the budget holds ${sandboxes} tracer run(s)`,
+          message: `${config.resources.maxConcurrentTargets} target(s) × ${tracer.maxParallel} tracer(s) need ${concurrent * roleMemoryMiB} MiB; the budget holds ${sandboxes} tracer run(s)`,
         });
     }
     const floor =
@@ -497,9 +522,14 @@ export async function readWordPressCampaignConfig(
   const config = wordpressCampaignConfigSchema.parse(
     JSON.parse(await readFile(configPath, "utf8")) as unknown,
   );
-  if (config.resources.memoryBudgetMiB < DISCOVERY_RUN_MEMORY_MIB)
+  const minimumMemoryMiB =
+    config.resources.partitionedRoleMemoryProfile === undefined
+      ? DISCOVERY_RUN_MEMORY_MIB
+      : PARTITIONED_ROLE_MEMORY_PROFILES["compact-768-256"].sandboxMiB +
+        PARTITIONED_ROLE_MEMORY_PROFILES["compact-768-256"].brokerMiB;
+  if (config.resources.memoryBudgetMiB < minimumMemoryMiB)
     throw new Error(
-      `The memory budget is below one discovery run (${DISCOVERY_RUN_MEMORY_MIB} MiB)`,
+      `The memory budget is below one discovery run (${minimumMemoryMiB} MiB)`,
     );
   return config;
 }

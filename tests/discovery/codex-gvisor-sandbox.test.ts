@@ -138,9 +138,14 @@ describe("gVisor Codex sandbox", () => {
     }
   });
 
-  it.each([false, true])(
-    "mounts one-shot files read-only and captures bounded JSON (link: %s)",
-    async (link) => {
+  it.each([
+    [false, undefined],
+    [false, 768],
+    [true, undefined],
+    [true, 768],
+  ] as const)(
+    "mounts one-shot files read-only and captures bounded JSON (link: %s, memory: %s)",
+    async (link, oneShotMemoryMiB) => {
       const root = await mkdtemp(join(tmpdir(), "codex-one-shot-"));
       try {
         const source = join(root, "source");
@@ -159,11 +164,12 @@ describe("gVisor Codex sandbox", () => {
           ownerDirectory: join(root, "owners"),
           maxOutputBytes: 1024 * 1024,
           memoryMiB: 10240,
+          ...(oneShotMemoryMiB === undefined ? {} : { oneShotMemoryMiB }),
           timeoutMs: 60_000,
           runDocker: async (args, _stdin, timeout) => {
             if (args.includes("--network=internal-run")) {
               expect(timeout).toBe(1234);
-              expect(args).toContain("--memory=4096m");
+              expect(args).toContain(`--memory=${oneShotMemoryMiB ?? 4096}m`);
               expect(args).toContain("--runtime=runsc");
               expect(
                 args.find((arg) => arg.includes("dst=/workspace/main")),
