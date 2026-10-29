@@ -53,6 +53,7 @@ import {
   collectOutputFiles,
   stageOneShotFiles,
   ONE_SHOT_SANDBOX_MEMORY_MIB,
+  PARTITIONED_ROLE_MEMORY_PROFILES,
   ONE_SHOT_MAX_INPUT_BYTES,
   ONE_SHOT_MAX_TOOL_BYTES,
   ONE_SHOT_MAX_WALL_MS,
@@ -620,6 +621,8 @@ export interface GvisorCodexSandboxOptions {
   readonly maxOutputBytes: number;
   readonly timeoutMs: number;
   readonly memoryMiB?: number;
+  /** Opt-in cap for childless one-shot runs; cooperative runs keep memoryMiB. */
+  readonly oneShotMemoryMiB?: number;
   readonly clock?: () => Date;
   readonly runDocker?: DockerRun;
   readonly randomUuid?: () => string;
@@ -697,6 +700,14 @@ export class GvisorCodexSandbox implements CodexSandbox {
         options.memoryMiB > CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB)
     )
       throw new Error("Codex sandbox options are invalid");
+    if (
+      options.oneShotMemoryMiB !== undefined &&
+      (!Number.isSafeInteger(options.oneShotMemoryMiB) ||
+        options.oneShotMemoryMiB <
+          PARTITIONED_ROLE_MEMORY_PROFILES["compact-768-256"].sandboxMiB ||
+        options.oneShotMemoryMiB > ONE_SHOT_SANDBOX_MEMORY_MIB)
+    )
+      throw new Error("Codex one-shot memory limit is invalid");
     this.#options = options;
     this.#user = nonRootContainerUser("Codex sandbox");
   }
@@ -1012,7 +1023,10 @@ export class GvisorCodexSandbox implements CodexSandbox {
       const args = this.#runArgs({
         ...(command.oneShot === undefined
           ? {}
-          : { memoryMiB: ONE_SHOT_SANDBOX_MEMORY_MIB }),
+          : {
+              memoryMiB:
+                this.#options.oneShotMemoryMiB ?? ONE_SHOT_SANDBOX_MEMORY_MIB,
+            }),
         agent: {
           name: containerName,
           network: command.grant.dockerNetworkName,

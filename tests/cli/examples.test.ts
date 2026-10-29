@@ -243,6 +243,58 @@ describe("partitioned example (ADR 0042 stage 1, shape only)", () => {
       ),
     ) as Record<string, unknown>;
 
+  it("admits five Codex targets with eight tracers only under the opt-in compact role memory profile", async () => {
+    const source = await partitioned();
+    const role = { runtime: "codex", model: "gpt-6-sol", effort: "ultra" };
+    const discovery = {
+      mode: "partitioned",
+      enumerator: { ...role, wallMinutes: 20 },
+      partition: { maxEntriesPerPartition: 300, maxPartitions: 8 },
+      tracer: { ...role, wallMinutes: 45, maxParallel: 8 },
+    };
+    const resources = {
+      maxConcurrentRuns: 1,
+      maxConcurrentTargets: 5,
+      maxConcurrentTargetsByRuntime: { codex: 5, claude: 0 },
+      memoryBudgetMiB: 40 * (768 + 256),
+      partitionedRoleMemoryProfile: "compact-768-256",
+    };
+    const compact = wordpressCampaignConfigSchema.safeParse({
+      ...source,
+      discovery,
+      resources,
+    });
+    expect(compact.success).toBe(true);
+    expect(compact.data?.resources.partitionedRoleMemoryProfile).toBe(
+      "compact-768-256",
+    );
+    expect(
+      wordpressCampaignConfigSchema.safeParse({
+        ...source,
+        discovery,
+        resources: { ...resources, partitionedRoleMemoryProfile: undefined },
+      }).success,
+    ).toBe(false);
+    expect(
+      wordpressCampaignConfigSchema.safeParse({
+        ...source,
+        discovery: {
+          ...discovery,
+          tracer: { runtime: "claude", maxParallel: 8 },
+        },
+        resources,
+      }).success,
+    ).toBe(false);
+    expect(
+      wordpressCampaignConfigSchema.safeParse({
+        ...source,
+        discovery: { mode: "wide" },
+        promptId: "wp2shell-bounty-v14-wide",
+        resources,
+      }).success,
+    ).toBe(false);
+  });
+
   it("admits Codex roles with the existing Codex model and effort schema", async () => {
     const source = await partitioned();
     const role = { runtime: "codex", model: "gpt-6-sol", effort: "ultra" };

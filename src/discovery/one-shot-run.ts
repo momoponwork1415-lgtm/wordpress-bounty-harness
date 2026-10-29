@@ -17,6 +17,11 @@ import { SANDBOX_TOOLS_MOUNT_PATH } from "./sandbox-layout.js";
 const ONE_SHOT_FILE_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 /** One agent without children, plus a separately accounted broker. */
 export const ONE_SHOT_SANDBOX_MEMORY_MIB = 4096;
+/** Opt-in caps for Codex partitioned roles; the default keeps historical runs unchanged. */
+export const PARTITIONED_ROLE_MEMORY_PROFILES = {
+  standard: { sandboxMiB: ONE_SHOT_SANDBOX_MEMORY_MIB, brokerMiB: 512 },
+  "compact-768-256": { sandboxMiB: 768, brokerMiB: 256 },
+} as const;
 export const ONE_SHOT_MAX_FILES = 16;
 export const ONE_SHOT_MAX_TOOL_BYTES = 1024 * 1024;
 export const ONE_SHOT_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
