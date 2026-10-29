@@ -698,6 +698,80 @@ describe("continuous runner", () => {
     await expectLatchedStop(t, "no-progress");
   });
 
+  it("keeps running when each partitioned batch concludes a Trial", async () => {
+    const steps: Step[] = [];
+    const t = await setup(steps);
+    const concluded: Step = async ({ campaignId }) => {
+      const trialId = `trial-${campaignId}`;
+      for (const runKind of ["enumerate", "trace"] as const) {
+        const runId = `${trialId}-${runKind}`;
+        await t.append(campaignId, {
+          type: "discovery-run-started",
+          runId,
+          trialId,
+          trialOrdinal: 0,
+          runKind,
+          history: { mode: "none" },
+          configuration: {
+            promptVariant: "partitioned-v1",
+            mode: "partitioned",
+          },
+        });
+        await t.append(campaignId, {
+          type: "discovery-run-finished",
+          runId,
+          outcome: "completed",
+          costUsd: "unavailable",
+          wallTimeMs: 1,
+        });
+      }
+      await t.append(campaignId, {
+        type: "discovery-concluded",
+        stoppedBy: "max-runs",
+      });
+      return {};
+    };
+    steps.push(concluded, concluded, concluded);
+    expect(await t.runner.run()).toBe("operator");
+    expect(t.calls).toHaveLength(4);
+    expect(t.runner.memo().consecutiveNoProgressBatches).toBe(0);
+  });
+
+  it("still stops after three partitioned batches without a concluded Trial", async () => {
+    const steps: Step[] = [];
+    const t = await setup(steps);
+    const failed: Step = async ({ campaignId }) => {
+      const runId = `enumerate-${campaignId}`;
+      await t.append(campaignId, {
+        type: "discovery-run-started",
+        runId,
+        trialId: `trial-${campaignId}`,
+        trialOrdinal: 0,
+        runKind: "enumerate",
+        history: { mode: "none" },
+        configuration: { promptVariant: "partitioned-v1", mode: "partitioned" },
+      });
+      await t.append(campaignId, {
+        type: "discovery-run-finished",
+        runId,
+        outcome: "failed",
+        reason: "schema",
+        costUsd: "unavailable",
+        wallTimeMs: 1,
+      });
+      await t.append(campaignId, {
+        type: "target-skipped",
+        selectionId: "wporg:x@1.0.0",
+        stage: "discovery",
+        reason: "run-failed",
+      });
+      return {};
+    };
+    steps.push(failed, failed, failed);
+    expect(await t.runner.run()).toBe("no-progress");
+    await expectLatchedStop(t, "no-progress");
+  });
+
   it("sleeps a day on an empty pool, retries a failed listing hourly, and stops exhausted on the third empty day", async () => {
     const results = ["unavailable", "available", "available", "available"];
     const t = await setup([], {
