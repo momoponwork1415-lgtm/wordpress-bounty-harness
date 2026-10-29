@@ -37,6 +37,6 @@ scope 内 Finding 2 件は source-only のエージェント申告であり、�
 
 ## 解釈の限界と原記録
 
-対象固有の CVE、原因、PoC と公開後の履歴は探索入力へ渡していない。一方、全対象共通の [`core-fixed-list-v1`](../../src/profiles/wordpress/discovery/tools/core-fixed-list-v1.md)には 2026-10-27 時点の公開記録を横断集計した HINT が含まれる。対象 CVE の公開日は 2026-10-02 であり、この HINT は [SPEC §2.1](../SPEC.md) の held-out 時点制限を越える。従って今回の 2 / 2 は参考観測に限り、held-out 再発見の成功数には入れない。モデルの事前知識も除外できず、Lab での発火や所有者の提出判断も示さない。
+対象固有の CVE、原因、PoC と公開後の履歴は探索入力へ渡していない。一方、全対象共通の [`core-fixed-list-v1`](../../src/profiles/wordpress/discovery/tools/core-fixed-list-v1.md)には 2026-10-27 時点の公開記録を横断集計した HINT が含まれる。対象 CVE の公開日は 2026-10-02 であり、この HINT は [SPEC §2.1](../SPEC.md) の held-out 時点制限を越える。従って今回の 2 / 2 は参考観測に限り、held-out 再発見の成功数には入れない。時点制限を満たす成績には、公開日前で切った共通道具を用いる別 Trial が必要である。モデルの事前知識も除外できず、Lab での発火や所有者の提出判断も示さない。
 
 原記録は Git 外の隔離 state `/home/dev/worktree/_archive/issue-127-devset-partitioned-20261029/relevanssi/state` にある。Finding の本文、payload、HTTP 記録、認証情報と、公開 CVE に一致しない新規候補の内容はこの文書に含めない。隔離 unit は exit 0 で停止し、隔離コンテナは残っていない。
