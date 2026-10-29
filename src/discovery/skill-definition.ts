@@ -64,16 +64,60 @@ export function parseSkillDefinition(text: string): SkillDefinition {
   };
 }
 
-/** A skill as the sandbox receives it: the staged directory name and the file. */
+/**
+ * A supporting file staged beside `SKILL.md` (#687): a script or a reference
+ * the procedure names. It lives in the skill directory only; the Harness
+ * neither runs it nor reads its output.
+ */
+export type StagedSkillFile = {
+  readonly name: string;
+  readonly content: string | Uint8Array;
+};
+
+/** A skill as the sandbox receives it: the staged directory name and the files. */
 export type StagedSkill = {
   readonly name: string;
   readonly content: string;
+  readonly files?: readonly StagedSkillFile[];
 };
 
 /** The most skills one Trial may receive. */
 export const MAX_STAGED_SKILLS = 8;
 /** The largest skill file the sandbox stages. */
 export const MAX_STAGED_SKILL_BYTES = 32 * 1024;
+/** The most supporting files one skill may carry. */
+export const MAX_STAGED_SKILL_FILES = 16;
+/** The largest total of one skill's supporting files. */
+export const MAX_STAGED_SKILL_FILE_BYTES = 1024 * 1024;
+/** A supporting file name: one path segment, no leading dot, never `SKILL.md`. */
+export const SKILL_FILE_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+
+function byteLength(content: string | Uint8Array): number {
+  return typeof content === "string"
+    ? Buffer.byteLength(content)
+    : content.byteLength;
+}
+
+/** Whether one skill's supporting files are bounded, uniquely named, non-empty. */
+export function admittedSkillFiles(files: readonly StagedSkillFile[]): boolean {
+  if (files.length > MAX_STAGED_SKILL_FILES) return false;
+  const names = new Set<string>();
+  let total = 0;
+  for (const file of files) {
+    if (
+      !SKILL_FILE_NAME.test(file.name) ||
+      file.name === "SKILL.md" ||
+      names.has(file.name)
+    )
+      return false;
+    names.add(file.name);
+    const size = byteLength(file.content);
+    if (size <= 0) return false;
+    total += size;
+    if (total > MAX_STAGED_SKILL_FILE_BYTES) return false;
+  }
+  return true;
+}
 
 /** Whether a sandbox may stage these skills: bounded, uniquely named, non-empty. */
 export function admittedStagedSkills(skills: readonly StagedSkill[]): boolean {
@@ -85,6 +129,8 @@ export function admittedStagedSkills(skills: readonly StagedSkill[]): boolean {
     const size =
       typeof skill.content === "string" ? Buffer.byteLength(skill.content) : -1;
     if (size <= 0 || size > MAX_STAGED_SKILL_BYTES) return false;
+    if (skill.files !== undefined && !admittedSkillFiles(skill.files))
+      return false;
   }
   return true;
 }
@@ -92,6 +138,8 @@ export function admittedStagedSkills(skills: readonly StagedSkill[]): boolean {
 /**
  * Writes each skill at `<home>/skills/<name>/SKILL.md`, the layout both Codex
  * (`CODEX_HOME`) and Claude Code (`CLAUDE_CONFIG_DIR`) read user skills from.
+ * Supporting files go beside it; a `.sh` file is executable, everything else
+ * is read-only.
  */
 export async function stageSkills(
   home: string,
@@ -104,5 +152,11 @@ export async function stageSkills(
       flag: "wx",
       mode: 0o400,
     });
+    for (const file of skill.files ?? []) {
+      await writeFile(join(directory, file.name), file.content, {
+        flag: "wx",
+        mode: file.name.endsWith(".sh") ? 0o500 : 0o400,
+      });
+    }
   }
 }

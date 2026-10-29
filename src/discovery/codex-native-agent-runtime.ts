@@ -4,7 +4,10 @@ import { isAbsolute, posix } from "node:path";
 import type { OneShotFile, OneShotRun } from "./one-shot-run.js";
 import {
   MAX_STAGED_SKILL_BYTES,
+  MAX_STAGED_SKILL_FILE_BYTES,
+  MAX_STAGED_SKILL_FILES,
   MAX_STAGED_SKILLS,
+  SKILL_FILE_NAME,
   SKILL_NAME,
   type StagedSkill,
 } from "./skill-definition.js";
@@ -565,6 +568,19 @@ const discoveryTransportRunSchema = z.strictObject({
       z.strictObject({
         name: z.string().regex(SKILL_NAME),
         content: z.string().min(1).max(MAX_STAGED_SKILL_BYTES),
+        /** #687: supporting files beside `SKILL.md`; the sandbox re-checks the total. */
+        files: z
+          .array(
+            z.strictObject({
+              name: z.string().regex(SKILL_FILE_NAME),
+              content: z.union([
+                z.string().min(1).max(MAX_STAGED_SKILL_FILE_BYTES),
+                z.instanceof(Uint8Array),
+              ]),
+            }),
+          )
+          .max(MAX_STAGED_SKILL_FILES)
+          .optional(),
       }),
     )
     .max(MAX_STAGED_SKILLS)
