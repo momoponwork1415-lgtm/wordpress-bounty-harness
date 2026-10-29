@@ -7,6 +7,9 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 concurrency:
   group: check-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -16,11 +19,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: 10.33.0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: pnpm
@@ -44,54 +47,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - name: Reject private evidence and submission artefacts
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -eu
-          # base との二点 diff だと、PR branch が古い main から分岐している間に main 側へ入った変更が逆向きに見える。merge-base からの三点 diff にする。
-          added=$(git diff --name-only --diff-filter=AMR "$(git merge-base "$BASE" "$HEAD")" "$HEAD")
-          bad=$(printf '%s\n' "$added" | grep -Ei \
-            '(^|/)(\.private|evidence|poc|attachments|private-evidence)(/|$)|(^|/)(wordfence-fill|submission-package|human-verification|verification-package)[^/]*\.json$|\.(har|sqlite|sqlite3|db|png|jpe?g|gif|webp|mp4|mov|webm|zip|tar|gz|7z|pcap|pem|key)$' \
-            || true)
-          if [ -n "$bad" ]; then
-            echo "Private Evidence か提出 package の構成物に見える path があります（SPEC.md 第 2 節 8、docs/DEVELOPMENT.md 第 5 節）:"
-            echo "$bad"
-            exit 1
-          fi
-          big=$(printf '%s\n' "$added" | while read -r f; do
-            [ -f "$f" ] && [ "$(wc -c < "$f")" -gt 524288 ] && echo "$f ($(wc -c < "$f") bytes)" || true
-          done)
-          if [ -n "$big" ]; then
-            echo "512 KiB を超えるファイルが追加されています。記録や複製は Git 外に置く:"
-            echo "$big"
-            exit 1
-          fi
-          # 内容走査: 文書・設定・script に Lab の canary token、HTTP 捕捉の行、秘密鍵が貼られていないか。
-          # src/ と tests/ は fixture が同じ語を使うので対象外（path guard のみ）。
-          content=$(git diff -U0 "$(git merge-base "$BASE" "$HEAD")" "$HEAD" -- docs/ examples/ scripts/ containers/ '*.md' ':!src/**' ':!tests/**' ':!.github/workflows/check.yml' \
-            | grep -E '^\+' | grep -vE '^\+\+\+' \
-            | grep -nE 'wbh-canary-[A-Za-z0-9-]{8,}|\{"request":\s*\{"method":|BEGIN (RSA |OPENSSH |EC )?PRIVATE KEY|wordpress_logged_in_[0-9a-f]{32}=' || true)
-          if [ -n "$content" ]; then
-            echo "Private Evidence に見える内容（canary token、HTTP 捕捉、秘密鍵、session cookie）が文書に貼られています:"
-            echo "$content" | cut -c1-120
-            exit 1
-          fi
-          echo "private-guard: ok"
+        run: bash scripts/check-private-evidence.sh
 
   adr-guard:
     # docs/adr/ と docs/SPEC.md、agent に渡る文章（prompt、skill、出力契約、victim 契約）、
     # および所有者が決めた方針そのもの（policy/、Programme Boundary の impact 分類）を変える PR は
-    # 所有者の owner-approved ラベルが要る（docs/DEVELOPMENT.md 第 5 節・第 6 節、ADR 0032）
+    # 委任済みの AI が確認して付ける owner-approved ラベルが要る（docs/DEVELOPMENT.md 第 5 節・第 6 節、ADR 0032）
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - name: Require owner-approved label for ADR and agent-facing text changes
@@ -102,7 +75,7 @@ jobs:
         run: |
           has_label() { printf '%s' "$LABELS" | tr ',' '\n' | grep -qx 'owner-approved'; }
           BASE=$(git merge-base "$BASE" "$HEAD")  # 三点 diff（private-guard と同じ理由）
-          # 所有者本人のラベルが要る path（docs/DEVELOPMENT.md 第 5 節、2026-10-14）
+          # 委任済みの AI が確認してラベルを付ける方針の path（docs/DEVELOPMENT.md 第 5 節、2026-10-18）
           adr=$(git diff --name-only "$BASE" "$HEAD" -- \
             docs/adr/ docs/SPEC.md \
             src/profiles/wordpress/prompts/trust-boundary-v1.md \
@@ -118,7 +91,7 @@ jobs:
             src/profiles/wordpress/verification/codex-verifier.ts \
             src/profiles/wordpress/policy/selection.json | wc -l)
           if [ "$adr" -gt 0 ] && ! has_label; then
-            echo "docs/adr/、docs/SPEC.md、trust 境界宣言、Programme Boundary、policy の方針、判定器の成功条件に差分があります。所有者本人が owner-approved ラベルを付けるまで merge できません。"
+            echo "docs/adr/、docs/SPEC.md、trust 境界宣言、Programme Boundary、policy の方針、判定器の成功条件に差分があります。委任済みの AI が差分を確認し、委任 comment と owner-approved ラベルを付けるまで merge できません。"
             exit 1
           fi
           if [ "$text" -gt 0 ] && ! has_label; then
