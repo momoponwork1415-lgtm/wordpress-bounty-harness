@@ -31,7 +31,12 @@ import {
   wordPressReviewLabDown,
   type HeldVerificationLabSession,
 } from "../../../src/profiles/wordpress/lab/review-lab.js";
-import { presentHeldVerificationLab } from "../../../src/cli/index.js";
+import { presentHeldVerificationLab, runCli } from "../../../src/cli/index.js";
+import { openState } from "../../../src/cli/state.js";
+import {
+  createWordPressHostProfile,
+  wordpressHostConfigSchema,
+} from "../../../src/cli/wordpress-host.js";
 import { liveLabOwner } from "../../../src/infrastructure/lab-owner-record.js";
 import { createWordPressScopeFacts } from "../../../src/profiles/wordpress/scope-facts.js";
 import {
@@ -528,16 +533,70 @@ describe("handoff verification through the real transport and observer (#525)", 
   it("holds two verification Labs in one state for separate human observations and Lab-id teardown (#605)", async () => {
     const root = await mkdtemp(join(tmpdir(), "wbh-two-held-labs-"));
     directories.push(root);
-    const store = new PrivateArtifactStore({
-      rootDirectory: join(root, "evidence"),
-      maxEntries: 100,
-      maxBytes: 1024 * 1024,
-    });
-    const ledger = new Ledger({
-      databasePath: join(root, "ledger.sqlite"),
-      artifactStore: store,
-    });
+    const state = await openState(root);
+    const { store, ledger } = state;
     const host = dockerHost();
+    const profile = await createWordPressHostProfile({
+      host: wordpressHostConfigSchema.parse({
+        schemaVersion: 1,
+        dockerExecutablePath: "/definitely/no-docker",
+        workDirectory: join(root, "work"),
+        credentialFilePath: join(root, "synthetic-credential"),
+        images: {
+          database: `mariadb@${sha("1")}`,
+          wordpress: `wordpress@${sha("2")}`,
+          wordpressCli: `wordpress-cli@${sha("3")}`,
+          browser: `verification-browser@${sha("4")}`,
+          codex: `codex@${sha("5")}`,
+          broker: `node-recorder@${sha("5")}`,
+        },
+        codex: {
+          bundledCatalogPath: "/opt/codex/model-catalog.json",
+          runtimeProfile: {
+            id: "codex-sol-high",
+            requestedModelId: "gpt-6.1-sol",
+            requestedEffort: "high",
+            codexCliVersion: "0.161.0",
+            bundledCatalogDigest: sha("c"),
+            authenticationMethod: "host-private-bearer",
+            cyberAccessProgram: "standard",
+            serviceTier: "default",
+            subagent: { modelId: "unavailable", effort: "unavailable" },
+          },
+        },
+        wordfenceProgrammeTranscriptionPath: join(root, "absent.json"),
+      }),
+      runDocker: async (args) => {
+        const answered = daemon(host, args);
+        const removal =
+          args[0] === "rm" ||
+          ((args[0] === "network" || args[0] === "volume") && args[1] === "rm");
+        return {
+          kind: "exited",
+          ...(answered ?? {
+            exitCode: removal ? 0 : 125,
+            stdout: "",
+            stderr: removal ? "" : "unexpected synthetic Docker command",
+          }),
+        };
+      },
+      fetch: () => Promise.reject(new Error("no network in tests")),
+    });
+    const command = async (...argv: string[]) => {
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      const code = await runCli(
+        argv,
+        { stateDirectory: root, profile },
+        {
+          stdout: (line) => stdout.push(line),
+          stderr: (line) => stderr.push(line),
+        },
+      );
+      return { code, stdout, stderr };
+    };
+    const evidencePath = join(root, "human-observation.txt");
+    await writeFile(evidencePath, "Person observed the retained Lab");
     const shared = {
       host,
       ports: { http: 18080, database: 13307 },
@@ -549,7 +608,6 @@ describe("handoff verification through the real transport and observer (#525)", 
       const presented = new Promise<void>((resolve) => (ready = resolve));
       let context!: HoldContext;
       let session!: HeldVerificationLabSession;
-      let ownerAlive = true;
       const run = verifyThroughHandoff(
         {
           caseId,
@@ -588,7 +646,6 @@ describe("handoff verification through the real transport and observer (#525)", 
             labId: context.held.lab.id,
             lab: context.lab,
           });
-        ownerAlive = false;
         return result;
       });
       return {
@@ -599,17 +656,6 @@ describe("handoff verification through the real transport and observer (#525)", 
         },
         get session() {
           return session;
-        },
-        async down() {
-          return wordPressReviewLabDown({
-            stateDirectory: root,
-            lab: context.lab,
-            labId: session.labId,
-            ownerOf: async (id) =>
-              id === session.labId && ownerAlive ? process.pid : null,
-            signal: () => signals.emit("SIGTERM"),
-            waitMs: 10_000,
-          });
         },
         release() {
           signals.emit("SIGTERM");
@@ -630,29 +676,38 @@ describe("handoff verification through the real transport and observer (#525)", 
         ).toBe("ready");
         expect(second.session.labId).not.toBe(first.session.labId);
         for (const held of [first, second]) {
-          const admitted = await observedReviewLabPackage({
-            ledger,
-            store,
-            ref: held.context.held.ref,
-          });
-          expect(admitted).not.toBeNull();
-          const recorded = await recordManualObservation({
-            ledger,
-            store,
-            ref: held.context.held.ref,
-            packageDigest: admitted!.packageDigest,
-            sessionReceiptDigest: held.session.receipt.digest,
-            evidence: new TextEncoder().encode("person saw the result"),
-            result: "match",
-            recordedBy: "owner",
-          });
-          expect(recorded).toMatchObject({
-            type: "manual-observation-recorded",
-            result: "match",
-          });
+          const observed = await command(
+            "review",
+            "observe",
+            "--campaign",
+            held.context.held.ref.campaignId,
+            "--finding",
+            held.context.held.ref.findingId,
+            "--receipt",
+            held.session.receipt.digest,
+            "--result",
+            "match",
+            "--evidence",
+            evidencePath,
+            "--by",
+            "owner",
+          );
+          expect(observed).toMatchObject({ code: 0, stderr: [] });
+          expect(observed.stdout.join("\n")).toContain(
+            "manual observation match recorded",
+          );
         }
-        const downFirst = await first.down();
-        expect(downFirst?.labId).toBe(first.session.labId);
+        expect(
+          ledger.readAll({ type: "manual-observation-recorded" }),
+        ).toHaveLength(2);
+        const downFirst = await command(
+          "lab",
+          "down",
+          "--lab",
+          first.session.labId,
+        );
+        expect(downFirst).toMatchObject({ code: 0, stderr: [] });
+        expect(downFirst.stdout[0]).toBe(`lab ${first.session.labId} down`);
         expect(
           await readFile(
             join(root, "review-labs", `${second.session.labId}.json`),
@@ -663,8 +718,14 @@ describe("handoff verification through the real transport and observer (#525)", 
             name.includes(second.session.labId),
           ),
         ).toBe(true);
-        const downSecond = await second.down();
-        expect(downSecond?.labId).toBe(second.session.labId);
+        const downSecond = await command(
+          "lab",
+          "down",
+          "--lab",
+          second.session.labId,
+        );
+        expect(downSecond).toMatchObject({ code: 0, stderr: [] });
+        expect(downSecond.stdout[0]).toBe(`lab ${second.session.labId} down`);
         expect([...host.containers, ...host.networks, ...host.volumes]).toEqual(
           [],
         );

@@ -639,6 +639,22 @@ export async function createWordPressHostProfile(options: {
       source: openMaterializedSources({
         rootDirectory: directories.sources,
       }),
+      ...(options.runDocker === undefined
+        ? {}
+        : {
+            runner: {
+              run: async (request) => {
+                const result = await runDocker(
+                  request.args,
+                  request.stdin,
+                  request.timeoutMs,
+                );
+                return result.kind === "exited"
+                  ? result
+                  : { exitCode: -1, stdout: "", stderr: result.stderr };
+              },
+            },
+          }),
     });
 
   const profile = createWordPressCliProfile({
