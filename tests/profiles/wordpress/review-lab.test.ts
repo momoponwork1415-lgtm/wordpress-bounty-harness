@@ -1,5 +1,12 @@
 import { EventEmitter } from "node:events";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -356,9 +363,21 @@ describe("WordPress review Lab", () => {
     expect(lines).toContain(
       "review Lab ready on http://wordpress (network wbh-lab-1-net, recorder 172.20.0.4)",
     );
-    expect(lines).toContain(
-      'attacker accounts: {"subscriber":{"username":"attacker","password":"attacker-pass"}}',
+    expect(lines).toContain("lab id: lab-2; stop with lab down --lab lab-2");
+    const accessLine = lines.find((line) =>
+      line.startsWith("attacker accounts: private Lab access file "),
     );
+    expect(accessLine).toBeDefined();
+    const accessPath = accessLine!.slice(
+      "attacker accounts: private Lab access file ".length,
+    );
+    expect(JSON.parse(await readFile(accessPath, "utf8"))).toMatchObject({
+      attackerAccounts: { subscriber: { password: "attacker-pass" } },
+      administrator: { password: "admin-pass" },
+    });
+    expect((await stat(accessPath)).mode & 0o777).toBe(0o600);
+    expect(lines.join("\n")).not.toContain("attacker-pass");
+    expect(lines.join("\n")).not.toContain("admin-pass");
     expect(lines).toContain(
       "host loopback: http://127.0.0.1:80 (Host header: wordpress)",
     );
@@ -659,7 +678,10 @@ describe("WordPress review Lab", () => {
     const session = await open();
     expect(
       JSON.parse(
-        await readFile(join(stateDirectory, "review-lab.json"), "utf8"),
+        await readFile(
+          join(stateDirectory, "review-labs", `${labId}.json`),
+          "utf8",
+        ),
       ),
     ).toEqual({
       schemaVersion: 1,
@@ -669,9 +691,16 @@ describe("WordPress review Lab", () => {
       httpPort: 80,
       startedAt: "2026-10-26T00:00:00.000Z",
     });
-    // One review Lab per state directory, so lab down always names the live one.
-    await expect(open()).rejects.toThrow("run lab down first");
-    expect(calls).toEqual(["provision", "expose"]);
+    // The provisioner returned the same Lab id; an existing record cannot be replaced.
+    await expect(open()).rejects.toThrow("already recorded");
+    expect(calls).toEqual([
+      "provision",
+      "expose",
+      "provision",
+      "expose",
+      "withdraw",
+      "teardown",
+    ]);
 
     let owner: number | null = 4242;
     const signalled: number[] = [];
@@ -694,7 +723,16 @@ describe("WordPress review Lab", () => {
       },
     });
     expect(signalled).toEqual([4242]);
-    expect(calls).toEqual(["provision", "expose", "withdraw", "teardown"]);
+    expect(calls).toEqual([
+      "provision",
+      "expose",
+      "provision",
+      "expose",
+      "withdraw",
+      "teardown",
+      "withdraw",
+      "teardown",
+    ]);
     expect(summary).toEqual({
       labId,
       ownerStopped: 4242,
@@ -706,7 +744,7 @@ describe("WordPress review Lab", () => {
       { remove: false, labId },
     ]);
     await expect(
-      readFile(join(stateDirectory, "review-lab.json")),
+      readFile(join(stateDirectory, "review-labs", `${labId}.json`)),
     ).rejects.toThrow();
     expect(
       await wordPressReviewLabDown({

@@ -639,6 +639,22 @@ export async function createWordPressHostProfile(options: {
       source: openMaterializedSources({
         rootDirectory: directories.sources,
       }),
+      ...(options.runDocker === undefined
+        ? {}
+        : {
+            runner: {
+              run: async (request) => {
+                const result = await runDocker(
+                  request.args,
+                  request.stdin,
+                  request.timeoutMs,
+                );
+                return result.kind === "exited"
+                  ? result
+                  : { exitCode: -1, stdout: "", stderr: result.stderr };
+              },
+            },
+          }),
     });
 
   const profile = createWordPressCliProfile({
@@ -672,12 +688,15 @@ export async function createWordPressHostProfile(options: {
       }),
     /** A review Lab recorded by `lab up --for-review` first, then an earlier `lab up` (#592). */
     async labDown(state, input) {
-      return (
-        (await wordPressReviewLabDown({
-          stateDirectory: state.stateDirectory,
-          lab: reviewLabs(),
-        })) ?? profile.labDown(state, input)
-      );
+      const recorded = await wordPressReviewLabDown({
+        stateDirectory: state.stateDirectory,
+        lab: reviewLabs(),
+        ...(input.labId === undefined ? {} : { labId: input.labId }),
+      });
+      if (recorded !== null) return recorded;
+      if (input.labId !== undefined)
+        throw new Error(`Lab ${input.labId} is not recorded`);
+      return profile.labDown(state, input);
     },
     reviewLabPackage: (state, ref) =>
       observedReviewLabPackage({

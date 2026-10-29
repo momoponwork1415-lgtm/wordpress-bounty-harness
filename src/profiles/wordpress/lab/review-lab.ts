@@ -1,4 +1,4 @@
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { z } from "zod";
@@ -165,19 +165,59 @@ const reviewLabRecordSchema = z.strictObject({
   /** Absent for a review Lab. */
   labKind: z.literal("verification").optional(),
 });
-const reviewLabRecordPath = (stateDirectory: string) =>
+const labIdSchema = z.string().regex(/^[0-9a-f-]{36}$/);
+const reviewLabRecordDirectory = (stateDirectory: string) =>
+  join(stateDirectory, "review-labs");
+const reviewLabRecordPath = (stateDirectory: string, labId: string) =>
+  join(
+    reviewLabRecordDirectory(stateDirectory),
+    `${labIdSchema.parse(labId)}.json`,
+  );
+const legacyReviewLabRecordPath = (stateDirectory: string) =>
   join(stateDirectory, "review-lab.json");
 
-async function readReviewLabRecord(stateDirectory: string) {
+async function readReviewLabRecord(path: string) {
   try {
     return reviewLabRecordSchema.parse(
-      JSON.parse(
-        await readFile(reviewLabRecordPath(stateDirectory), "utf8"),
-      ) as unknown,
+      JSON.parse(await readFile(path, "utf8")) as unknown,
     );
   } catch {
     return null;
   }
+}
+
+async function recordedReviewLab(stateDirectory: string, labId?: string) {
+  if (labId !== undefined) {
+    const path = reviewLabRecordPath(stateDirectory, labId);
+    const record = await readReviewLabRecord(path);
+    if (record?.labId === labId) return { path, record };
+    const legacyPath = legacyReviewLabRecordPath(stateDirectory);
+    const legacy = await readReviewLabRecord(legacyPath);
+    return legacy?.labId === labId
+      ? { path: legacyPath, record: legacy }
+      : null;
+  }
+  const names = await readdir(reviewLabRecordDirectory(stateDirectory)).catch(
+    () => [] as string[],
+  );
+  const records = await Promise.all(
+    names
+      .filter((name) => /^[0-9a-f-]{36}\.json$/.test(name))
+      .map(async (name) => {
+        const path = join(reviewLabRecordDirectory(stateDirectory), name);
+        const record = await readReviewLabRecord(path);
+        return record?.labId === name.slice(0, -5) ? { path, record } : null;
+      }),
+  );
+  const legacyPath = legacyReviewLabRecordPath(stateDirectory);
+  const legacy = await readReviewLabRecord(legacyPath);
+  const found = [
+    ...records.filter((entry) => entry !== null),
+    ...(legacy === null ? [] : [{ path: legacyPath, record: legacy }]),
+  ];
+  if (found.length > 1)
+    throw new Error("Multiple Labs are recorded; pass --lab <id> to lab down");
+  return found[0] ?? null;
 }
 
 /** Opens a review Lab and records it in the state directory until it is closed. */
@@ -187,13 +227,13 @@ export async function openRecordedWordPressReviewLab(
     readonly clock: () => Date;
   },
 ): Promise<WordPressReviewLabSession> {
-  const path = reviewLabRecordPath(input.stateDirectory);
-  if ((await readFile(path).catch(() => null)) !== null)
-    throw new Error(
-      "A review Lab is already recorded in this state directory; run lab down first",
-    );
   const session = await openWordPressReviewLab(input);
+  const path = reviewLabRecordPath(input.stateDirectory, session.labId);
   try {
+    await mkdir(reviewLabRecordDirectory(input.stateDirectory), {
+      recursive: true,
+      mode: 0o700,
+    });
     await writeFile(
       path,
       JSON.stringify(
@@ -210,6 +250,8 @@ export async function openRecordedWordPressReviewLab(
     );
   } catch (error) {
     await session.close();
+    if ((error as NodeJS.ErrnoException).code === "EEXIST")
+      throw new Error(`Lab ${session.labId} is already recorded`);
     throw error;
   }
   return {
@@ -228,13 +270,15 @@ export async function openRecordedWordPressReviewLab(
  */
 export async function wordPressReviewLabDown(input: {
   readonly stateDirectory: string;
+  readonly labId?: string;
   readonly lab: Pick<WordPressLab, "cleanupLeftovers">;
   readonly ownerOf?: (labId: string) => Promise<number | null>;
   readonly signal?: (pid: number) => void;
   readonly waitMs?: number;
 }) {
-  const record = await readReviewLabRecord(input.stateDirectory);
-  if (record === null) return null;
+  const found = await recordedReviewLab(input.stateDirectory, input.labId);
+  if (found === null) return null;
+  const { record, path } = found;
   const ownerOf = input.ownerOf ?? ((labId) => liveLabOwner(labId));
   const owner = await ownerOf(record.labId);
   if (owner !== null) {
@@ -242,7 +286,7 @@ export async function wordPressReviewLabDown(input: {
     const deadline = Date.now() + (input.waitMs ?? 180_000);
     while (
       Date.now() < deadline &&
-      (await readReviewLabRecord(input.stateDirectory)) !== null &&
+      (await readReviewLabRecord(path)) !== null &&
       (await ownerOf(record.labId)) !== null
     )
       await new Promise((resolve) => setTimeout(resolve, 500));
@@ -260,7 +304,7 @@ export async function wordPressReviewLabDown(input: {
     remaining.networks.length === 0 &&
     remaining.volumes.length === 0
   )
-    await rm(reviewLabRecordPath(input.stateDirectory), { force: true });
+    await rm(path, { force: true });
   return {
     labId: record.labId,
     ...(owner === null ? {} : { ownerStopped: owner }),
@@ -332,10 +376,10 @@ export async function holdWordPressVerificationLab(input: {
   const administrator = lab.reviewAdministrator(handle);
   if (administrator === null)
     return notHeld("the Lab administrator is unavailable");
-  const path = reviewLabRecordPath(input.stateDirectory);
+  const path = reviewLabRecordPath(input.stateDirectory, handle.id);
   if ((await readFile(path).catch(() => null)) !== null)
     return notHeld(
-      "another Lab is held for a person in this state directory; run lab down first",
+      "this Lab is already held for a person in this state directory",
     );
   const exposed = await exposeForBrowser(lab, handle);
   if (exposed.status !== "exposed")
@@ -344,6 +388,10 @@ export async function holdWordPressVerificationLab(input: {
     );
   try {
     const startedAt = input.clock();
+    await mkdir(reviewLabRecordDirectory(input.stateDirectory), {
+      recursive: true,
+      mode: 0o700,
+    });
     await writeFile(
       path,
       JSON.stringify(
@@ -402,8 +450,8 @@ export async function releaseHeldLabRecord(input: {
   readonly labId: string;
   readonly lab: Pick<WordPressLab, "cleanupLeftovers">;
 }): Promise<void> {
-  const record = await readReviewLabRecord(input.stateDirectory);
-  if (record?.labId !== input.labId) return;
+  const found = await recordedReviewLab(input.stateDirectory, input.labId);
+  if (found === null) return;
   const remaining = await input.lab.cleanupLeftovers({
     remove: false,
     labId: input.labId,
@@ -413,5 +461,5 @@ export async function releaseHeldLabRecord(input: {
     remaining.networks.length === 0 &&
     remaining.volumes.length === 0
   )
-    await rm(reviewLabRecordPath(input.stateDirectory), { force: true });
+    await rm(found.path, { force: true });
 }

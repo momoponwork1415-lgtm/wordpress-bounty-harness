@@ -94,7 +94,6 @@ import {
   holdWordPressVerificationLab,
   releaseHeldLabRecord,
 } from "../profiles/wordpress/lab/review-lab.js";
-import { HANDOFF_WALL_MS } from "../profiles/wordpress/verification/handoff-verifier.js";
 import type { HeldVerificationLab } from "../verification/index.js";
 import { createWordPressStateDiffReader } from "../profiles/wordpress/verification/lab-state-diff.js";
 import { createWordPressVerifierRecordReader } from "../profiles/wordpress/verification/verifier-record.js";
@@ -2148,7 +2147,7 @@ export function createWordPressCliProfile(
                     store: state.store,
                     stateDirectory: state.stateDirectory,
                     clock: state.clock,
-                    wallMs: HANDOFF_WALL_MS,
+                    wallMs: observation.wallMs,
                     present: (held) => observation.present(held),
                   });
                   if (kept.status === "not-held")

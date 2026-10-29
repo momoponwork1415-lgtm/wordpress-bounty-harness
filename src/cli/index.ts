@@ -149,6 +149,7 @@ export interface CliProfile {
     readonly attackerAccounts: unknown;
     readonly administrator: unknown;
     readonly browserImage: string;
+    readonly labId?: string;
     /** Host loopback for a human's browser and curl; absent when the profile publishes none (#586). */
     readonly host?: {
       readonly url: string;
@@ -266,6 +267,8 @@ export interface CliProfile {
        * and resolves when it should go; `skipped` says why none was kept.
        */
       readonly observation?: {
+        /** The time a person's Lab stays available after the attempt is recorded. */
+        readonly wallMs: number;
         present(session: HeldObservationLab): Promise<void>;
         skipped(reason: string): void;
       };
@@ -350,7 +353,7 @@ export interface CliProfile {
   /** Removes the Lab `lab up --for-review` (or an earlier `lab up`) recorded; containers, networks and volumes. */
   labDown(
     state: CliState,
-    input: { readonly configPath: string | null },
+    input: { readonly configPath: string | null; readonly labId?: string },
   ): Promise<LabDownSummary>;
 }
 
@@ -762,6 +765,23 @@ function hostLines(host: {
   ];
 }
 
+/** The human's credentials stay in Git-outside Private Evidence, never CLI output. */
+async function privateLabAccessFile(
+  state: CliState,
+  session: {
+    readonly attackerAccounts: unknown;
+    readonly administrator: unknown;
+  },
+): Promise<string> {
+  const digest = await state.store.putFiles({
+    "lab-access.json": JSON.stringify({
+      attackerAccounts: session.attackerAccounts,
+      administrator: session.administrator,
+    }),
+  });
+  return `${state.store.contentPath(digest)}/lab-access.json`;
+}
+
 /**
  * #600: shows a person the verification Lab `verify next --handoff` kept
  * after recording the attempt, then waits for SIGINT/SIGTERM (`lab down`
@@ -772,6 +792,7 @@ export async function presentHeldVerificationLab(
   io: CliIo,
   signals: ReviewSignalSource = process,
   now: () => number = Date.now,
+  accessPath?: string,
 ): Promise<void> {
   let release!: () => void;
   const released = new Promise<void>((resolve) => (release = resolve));
@@ -790,8 +811,12 @@ export async function presentHeldVerificationLab(
       `verification Lab ${session.labId} kept for a person's observation on ${session.endpoint} until ${session.expiresAt}`,
     );
     for (const line of hostLines(session.host)) io.stdout(line);
-    io.stdout(`attacker accounts: ${JSON.stringify(session.attackerAccounts)}`);
-    io.stdout(`review administrator: ${JSON.stringify(session.administrator)}`);
+    io.stdout(
+      `attacker accounts: private Lab access file ${accessPath ?? "unavailable"}`,
+    );
+    io.stdout(
+      `review administrator: private Lab access file ${accessPath ?? "unavailable"}`,
+    );
     io.stdout(
       `manual observation receipt: ${session.receipt.digest} (${session.receipt.path})`,
     );
@@ -799,7 +824,7 @@ export async function presentHeldVerificationLab(
       `record: review observe --campaign ${ref.campaignId} --finding ${ref.findingId} --receipt ${session.receipt.digest} --result match|mismatch|unavailable --evidence <path> --by <human>`,
     );
     io.stdout(
-      "Run lab down (or interrupt this command) to remove the Lab once the observation is recorded.",
+      `Run lab down --lab ${session.labId} (or interrupt this command) to remove the Lab once the observation is recorded.`,
     );
     await released;
   } finally {
@@ -819,7 +844,7 @@ export async function runForegroundReviewLab(
   launch: () => Promise<ReviewLabSession>,
   io: CliIo,
   signals: ReviewSignalSource = process,
-  onReady?: (session: ReviewLabSession) => Promise<void>,
+  onReady?: (session: ReviewLabSession) => Promise<string | void>,
 ): Promise<void> {
   let interrupted = false;
   let release: (() => void) | undefined;
@@ -842,16 +867,20 @@ export async function runForegroundReviewLab(
   try {
     const session = await launch();
     try {
-      if (!interrupted) await onReady?.(session);
+      const accessPath = !interrupted ? await onReady?.(session) : undefined;
       if (!interrupted) {
         io.stdout(
           `review Lab ready on ${session.endpoint} (network ${session.networkName}, recorder ${session.recorderIp})`,
         );
+        if (session.labId !== undefined)
+          io.stdout(
+            `lab id: ${session.labId}; stop with lab down --lab ${session.labId}`,
+          );
         io.stdout(
-          `attacker accounts: ${JSON.stringify(session.attackerAccounts)}`,
+          `attacker accounts: private Lab access file ${accessPath ?? "unavailable"}`,
         );
         io.stdout(
-          `review administrator: ${JSON.stringify(session.administrator)}`,
+          `review administrator: private Lab access file ${accessPath ?? "unavailable"}`,
         );
         if (session.host !== undefined)
           for (const line of hostLines(session.host)) io.stdout(line);
@@ -1723,7 +1752,7 @@ const COMMANDS: readonly Command[] = [
     name: "verify next",
     required: ["config"],
     usage: [
-      "verify next --config <path> --handoff <dir> [--campaign <id> [--finding <id>]] [--port <n>] [--db-port <n>]",
+      "verify next --config <path> --handoff <dir> [--campaign <id> [--finding <id>]] [--port <n>] [--db-port <n>] [--hold-minutes <n>]",
     ],
     options: {
       campaign: STR,
@@ -1731,6 +1760,7 @@ const COMMANDS: readonly Command[] = [
       "db-port": STR,
       finding: STR,
       handoff: STR,
+      "hold-minutes": STR,
       port: STR,
     },
     validate: (values) => {
@@ -1743,6 +1773,8 @@ const COMMANDS: readonly Command[] = [
         throw new UsageError("--finding needs --campaign");
       integerOption(values.port, "port", 0, 65535);
       integerOption(values["db-port"], "db-port", 0, 65535);
+      if (integerOption(values["hold-minutes"], "hold-minutes", 30, 1440) < 1)
+        throw new UsageError("--hold-minutes must be at least 1");
     },
     handler: async ({ values, state, environment, io }) => {
       if (environment.profile.verifyNext === undefined)
@@ -1760,7 +1792,17 @@ const COMMANDS: readonly Command[] = [
         ...(values.finding === undefined ? {} : { findingId: values.finding }),
         // #600: a person observes in this Lab; it stays until lab down or its wall.
         observation: {
-          present: (session) => presentHeldVerificationLab(session, io),
+          wallMs:
+            integerOption(values["hold-minutes"], "hold-minutes", 30, 1440) *
+            60_000,
+          present: async (session) =>
+            presentHeldVerificationLab(
+              session,
+              io,
+              process,
+              Date.now,
+              await privateLabAccessFile(state, session),
+            ),
           skipped: (reason) =>
             io.stdout(`verification Lab not kept for observation: ${reason}`),
         },
@@ -2157,32 +2199,39 @@ const COMMANDS: readonly Command[] = [
         () => launch(state, { packageDigest }),
         io,
         process,
-        manual === null || manual === undefined
-          ? undefined
-          : async (session) => {
-              const receipt = await recordManualObservationLabReady({
-                ledger: state.ledger,
-                store: state.store,
-                ref: item.ref,
-                packageDigest: manual.packageDigest,
-                sessionLabel: session.networkName,
-                clock: state.clock,
-              });
-              io.stdout(
-                `manual observation receipt: ${receipt} (${state.store.contentPath(receipt)}/${MANUAL_LAB_RECEIPT_FILE})`,
-              );
-            },
+        async (session) => {
+          const accessPath = await privateLabAccessFile(state, session);
+          if (manual !== null && manual !== undefined) {
+            const receipt = await recordManualObservationLabReady({
+              ledger: state.ledger,
+              store: state.store,
+              ref: item.ref,
+              packageDigest: manual.packageDigest,
+              sessionLabel: session.networkName,
+              clock: state.clock,
+            });
+            io.stdout(
+              `manual observation receipt: ${receipt} (${state.store.contentPath(receipt)}/${MANUAL_LAB_RECEIPT_FILE})`,
+            );
+          }
+          return accessPath;
+        },
       );
       return 0;
     },
   }),
   command({
     name: "lab down",
-    usage: ["lab down [--config <path>]"],
-    options: { config: STR },
+    usage: ["lab down [--lab <id>] [--config <path>]"],
+    options: { config: STR, lab: STR },
+    validate: (values) => {
+      if (values.lab !== undefined && !/^[0-9a-f-]{36}$/.test(values.lab))
+        throw new UsageError("--lab must be a Lab id");
+    },
     handler: async ({ values, state, environment, print }) => {
       const summary = await environment.profile.labDown(state, {
         configPath: values.config === undefined ? null : resolve(values.config),
+        ...(values.lab === undefined ? {} : { labId: values.lab }),
       });
       print(formatLabDown(summary));
       const remaining =

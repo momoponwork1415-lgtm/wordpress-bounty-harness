@@ -341,7 +341,7 @@ describe("verification public interface", () => {
     expect(result).toEqual({
       ...AWAITING,
       nextStep:
-        "Open a fresh review Lab, read the Harness capture and browser record, and record the human observation",
+        "Read the Harness capture and browser record, observe the held verification Lab if available, otherwise open a fresh review Lab, and record the human observation",
       evidenceDigest: observationDigest,
     });
     expect(calls).toEqual({
