@@ -51,7 +51,7 @@ export const WORDPRESS_ENUMERATION_TOOLS = [
     id: "core-fixed-list-v2",
     file: "core-fixed-list-v2.md",
     digest:
-      "sha256:a58a1282e8b3a06245e892f74c1c2d2a92c83e2d6b41e7e7ee34bfc9c9905c53",
+      "sha256:8e0c120604a571499995e1debdc097683f4b210aa4db378543c681a22c062093",
     status: "archived",
   },
 ] as const satisfies readonly WordPressEnumerationToolRecord[];

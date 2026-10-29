@@ -183,9 +183,21 @@ describe("planWordPressPartitionedDiscovery (ADR 0042)", () => {
       ).toEqual(selectedTool.bytes);
     }
     expect(selectedTool.bytes).not.toEqual(oldTool.bytes);
-    expect(new TextDecoder().decode(selectedTool.bytes)).not.toMatch(
+    const v2Text = new TextDecoder().decode(selectedTool.bytes);
+    expect(v2Text).not.toMatch(
       /2026-10-27|19,114|\| Records \||\| Unauthenticated \|/,
     );
+    for (const heading of ["Effects", "Dispatch"]) {
+      const section = v2Text.split(`## ${heading}:`)[1]!.split("\n## ")[0]!;
+      const featureNames = section
+        .split("\n")
+        .filter((line) => line.startsWith("|") && !line.startsWith("|---"))
+        .slice(1)
+        .map((line) => line.split("|")[1]!.trim());
+      expect(featureNames).toEqual(
+        [...featureNames].sort((a, b) => a.localeCompare(b, "en")),
+      );
+    }
     const expectedDigest = wordPressEnumerationToolsDigest(
       selected.discovery.enumerator!.tools,
     );
