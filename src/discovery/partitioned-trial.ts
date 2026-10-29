@@ -156,11 +156,12 @@ function readJson(text: string | undefined): {
   }
 }
 
-function issueDetail(error: z.ZodError): string {
-  const issue = error.issues[0];
-  return issue === undefined
-    ? "invalid"
-    : `${issue.path.map(String).join(".")}: ${issue.message}`.slice(0, 200);
+function issueDetails(error: z.ZodError): string[] {
+  return error.issues.length === 0
+    ? ["invalid"]
+    : error.issues.map((issue) =>
+        `${issue.path.map(String).join(".")}: ${issue.message}`.slice(0, 200),
+      );
 }
 
 /** Reads the enumerator's two files; every shape problem is listed, not the first. */
@@ -180,10 +181,8 @@ export function readEnumerationOutput(
     const parsed = inventorySchema.safeParse(inventory.value);
     if (parsed.success) parsedInventory = parsed.data;
     else
-      rejections.push({
-        reason: "inventory-invalid",
-        detail: issueDetail(parsed.error),
-      });
+      for (const detail of issueDetails(parsed.error))
+        rejections.push({ reason: "inventory-invalid", detail });
   }
   if (partitions.state !== "read")
     rejections.push({ reason: `proposal-${partitions.state}` });
@@ -191,10 +190,8 @@ export function readEnumerationOutput(
     const parsed = partitionProposalSchema.safeParse(partitions.value);
     if (parsed.success) parsedProposal = parsed.data;
     else
-      rejections.push({
-        reason: "proposal-invalid",
-        detail: issueDetail(parsed.error),
-      });
+      for (const detail of issueDetails(parsed.error))
+        rejections.push({ reason: "proposal-invalid", detail });
   }
   return {
     inventory: inventory.value,

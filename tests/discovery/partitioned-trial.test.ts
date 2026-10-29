@@ -1036,6 +1036,71 @@ describe("partitioned Trial executor (ADR 0042)", () => {
     );
   });
 
+  it("sends every inventory and proposal schema error back before accepting corrections", async () => {
+    const longInventory = {
+      rows: [
+        row("a1", "agent", "x".repeat(401)),
+        row("a2", "agent", "y".repeat(401)),
+      ],
+    };
+    const correctedInventory = {
+      rows: longInventory.rows.map((entry) => ({
+        ...entry,
+        text: entry.text.slice(0, 400),
+      })),
+    };
+    const proposed = {
+      partitions: [
+        { id: "p1", label: "First", rowIds: ["a1"] },
+        { id: "p2", label: "Second", rowIds: ["a2"] },
+      ],
+    };
+    const invalidProposal = {
+      partitions: proposed.partitions.map((partition) => ({
+        ...partition,
+        label: "L".repeat(121),
+      })),
+    };
+    const { calls, events } = await fixture({
+      script: (run, _attempt, helpers) =>
+        run.output === "files"
+          ? helpers.files(run, {
+              [ENUMERATION_OUTPUT_FILES.inventory]:
+                run.inputFiles.length === 0
+                  ? longInventory
+                  : correctedInventory,
+              [ENUMERATION_OUTPUT_FILES.partitions]:
+                run.inputFiles.length === 0 ? invalidProposal : proposed,
+            })
+          : helpers.report(run, `claim of ${run.runId}`),
+    });
+    const sentBack = JSON.parse(calls[1]!.inputFiles[1]!.content) as {
+      rejections: { reason: string; detail?: string }[];
+    };
+    expect(sentBack.rejections).toHaveLength(4);
+    expect(sentBack.rejections).toEqual([
+      expect.objectContaining({
+        reason: "inventory-invalid",
+        detail: expect.stringContaining("rows.0.text"),
+      }),
+      expect.objectContaining({
+        reason: "inventory-invalid",
+        detail: expect.stringContaining("rows.1.text"),
+      }),
+      expect.objectContaining({
+        reason: "proposal-invalid",
+        detail: expect.stringContaining("partitions.0.label"),
+      }),
+      expect.objectContaining({
+        reason: "proposal-invalid",
+        detail: expect.stringContaining("partitions.1.label"),
+      }),
+    ]);
+    expect(
+      events.find((event) => event.type === "enumeration-recorded"),
+    ).toMatchObject({ accepted: true, resubmits: 1 });
+  });
+
   it("retains every enumerator send-back's complete JSON output through its finish event", async () => {
     const firstNotes = '{"round":"first"}';
     const secondNotes = '{"round":"second"}';
