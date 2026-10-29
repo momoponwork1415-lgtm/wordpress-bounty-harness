@@ -23,7 +23,6 @@ import {
   sealNativeRunReceipt,
   type NativeRunReceipt,
 } from "./native-run-receipts.js";
-import type { OneShotExecutor } from "./one-shot-run.js";
 import type { ProviderAttachmentStore } from "./provider-research-report.js";
 import { recordReadPaths } from "./read-paths.js";
 import { dependencyMountPathsOf } from "./sandbox-layout.js";
@@ -65,10 +64,6 @@ export type TrialContext = {
      */
     release?(runId: string): Promise<void>;
   };
-  /** The one-shot transport of a partitioned Trial's roles (ADR 0042); absent on cooperative campaigns. */
-  readonly oneShotExecutor?: OneShotExecutor;
-  /** Host-only one-shot owner markers; tests may use an isolated directory. */
-  readonly oneShotOwnerDirectory?: string;
   readonly attachments: ProviderAttachmentStore;
   readonly evidence: PrivateArtifactStore;
   readonly ledger: Ledger;
@@ -101,11 +96,7 @@ export type TrialOutcome = {
   readonly findingsRecorded: number;
   /** What the Harness observed in the Trial's exploration Lab, when one was attached. */
   readonly lab?: TrialLabRecord;
-  /**
-   * A usage limit any run of the Trial met, even one that did not end the
-   * Trial (a tracer of a partial partitioned Trial, ADR 0042): the campaign
-   * backs off after the Trial either way.
-   */
+  /** A usage limit the Trial met; the campaign backs off after it. */
   readonly providerLimit?: "rate-limit" | "quota";
 };
 
@@ -184,8 +175,7 @@ export type Cancellation<Result = DiscoveryTransportResult> = {
 /**
  * The wall and the operator cancel the transport through one signal. A
  * transport that ignores its cancellation is answered after a grace period so
- * the ledger still receives a finish. The partitioned executor arms one per
- * role run with its own result shape.
+ * the ledger still receives a finish.
  */
 export function armCancellation<
   Result extends { readonly receipt: NativeRunReceipt },

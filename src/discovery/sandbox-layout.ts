@@ -10,21 +10,10 @@ export const SANDBOX_WORKSPACE_ROOT = "/workspace";
 export const SANDBOX_SOURCE_MOUNT_PATH = "/workspace/main";
 /** The Trial-local writable notes directory of a cooperative run. */
 export const SANDBOX_RESEARCH_MOUNT_PATH = "/workspace/research";
-/**
- * A one-shot role run (ADR 0042): the Harness's input files, read-only; the
- * tool files the agent runs itself, read-only; and the writable directory the
- * run's output files are read from.
- */
-export const SANDBOX_INPUT_MOUNT_PATH = "/workspace/input";
-export const SANDBOX_TOOLS_MOUNT_PATH = "/workspace/tools";
-export const SANDBOX_OUTPUT_MOUNT_PATH = "/workspace/output";
 /** Every path the sandbox itself owns; no dependency mount may use or contain one. */
 const FIXED_MOUNT_PATHS = [
   SANDBOX_SOURCE_MOUNT_PATH,
   SANDBOX_RESEARCH_MOUNT_PATH,
-  SANDBOX_INPUT_MOUNT_PATH,
-  SANDBOX_TOOLS_MOUNT_PATH,
-  SANDBOX_OUTPUT_MOUNT_PATH,
 ] as const;
 
 /** One or two lower-case segments directly under the workspace root. */

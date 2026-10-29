@@ -19,13 +19,10 @@ const archivedFindingClaimSchema = wordpressFindingClaimSchema.omit({
 
 /**
  * The claim schemas own keys, required fields, types, and enum values.
- * `solo` (ADR 0042) renders the same text without the paragraph addressed to
- * a Root and without the sentences about a child's report and Root's final
- * report, for an agent that starts no children; its id carries the suffix.
  */
 function renderWordPressDiscoveryOutputContract<
   Version extends "v1" | "v2" | "v4" | "v5",
->(version: Version, solo = false) {
+>(version: Version) {
   const finding = z.toJSONSchema(
     version === "v5" ? wordpressFindingClaimSchema : archivedFindingClaimSchema,
     { io: "output" },
@@ -33,14 +30,12 @@ function renderWordPressDiscoveryOutputContract<
   const lead = z.toJSONSchema(wordpressLeadClaimSchema, { io: "output" });
   const text = [
     `## Finding and Lead output contract (wordpress-discovery-contract-${version})`,
-    ...((version === "v2" || version === "v4" || version === "v5") && !solo
+    ...(version === "v2" || version === "v4" || version === "v5"
       ? [
           "As Root, include this complete contract in every child spawn assignment. In every follow-up to a child, require that child's latest final message to be one JSON object with exactly `findings`, `leads`, `examined`, and `unexamined`, even when there are no claims. Use empty arrays and the two strings for an empty report. A later prose reply must not replace the child's report.",
         ]
       : []),
-    solo
-      ? "Return `findings`, `leads`, `examined`, and `unexamined`. The last two are strings."
-      : "Return `findings`, `leads`, `examined`, and `unexamined`. The last two are strings. A child reports direct Finding and Lead objects. In Root's final report, encode each Finding and Lead object as one JSON string in its array, as required by the transport schema.",
+    "Return `findings`, `leads`, `examined`, and `unexamined`. The last two are strings. A child reports direct Finding and Lead objects. In Root's final report, encode each Finding and Lead object as one JSON string in its array, as required by the transport schema.",
     version === "v4" || version === "v5"
       ? "Each claim object must follow its schema below. Fields of type string are single strings, not arrays. `sourceTrace` is an array of objects with `file`, `function`, and positive integer `line`. Use target-relative paths; prefix WordPress core paths with `@wordpress/`, PHP paths with `@php/`, and supplied plugin dependency paths with `@dependencies/<id>/`."
       : "Each claim object must follow its schema below. Fields of type string are single strings, not arrays. `sourceTrace` is an array of objects with `file`, `function`, and positive integer `line`. Use target-relative paths; prefix WordPress core paths with `@wordpress/`.",
@@ -48,7 +43,7 @@ function renderWordPressDiscoveryOutputContract<
     `Lead schema: ${canonicalJson(lead)}`,
   ].join("\n\n");
   return {
-    id: `wordpress-discovery-contract-${version}${solo ? "-solo" : ""}` as const,
+    id: `wordpress-discovery-contract-${version}` as const,
     text,
     digest: `sha256:${createHash("sha256").update(text).digest("hex")}`,
   };
@@ -71,15 +66,6 @@ export function wordPressDiscoveryOutputContractV2() {
  */
 export function wordPressDiscoveryOutputContractV4() {
   return renderWordPressDiscoveryOutputContract("v4");
-}
-
-/**
- * The v4 contract for a tracer of a partitioned Trial (ADR 0042): the same
- * schemas and rules, without the paragraph that tells a Root what to relay
- * and without the two sentences about children and Root's final report.
- */
-export function wordPressDiscoveryOutputContractV4Solo() {
-  return renderWordPressDiscoveryOutputContract("v4", true);
 }
 
 /**

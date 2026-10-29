@@ -66,15 +66,6 @@ PR の「測った数字」に貼る列は固定する。
 - 子の Finding が Root と独立に保存されたかを 1 行書く（ADR 0029 の配線確認）。
 - `runtime-confirmed` が出ても、公開記録との経路一致は人間の照合。表には `unassessed` と書く。
 
-## 5a. 区画分配型の腕（ADR 0042、段階 1）
-
-`discovery.mode: "partitioned"` の Trial は Root を持たず、1 対象につき列挙役の run 1 つと区画ごとの追跡役の run を同じ `trialId` で記録する。表の列は上と同じで、次を足す。
-
-- Trial の数は `runKind: "enumerate"` の run で数える。追跡役の run は Trial に数えない（funnel も同じ）。
-- 列挙の品質は `enumeration-recorded` の `scriptRowCount` / `agentRowCount` / `duplicateRowCount` / `resubmits` と、Finding / Lead の `sourceTrace` の先頭（file と line）が inventory のどの行に当たるかで出す。script の行と AI の行それぞれの「使われた割合」を書く。Harness は列挙の正しさを判定しない。
-- 比べる相手は同じ対象の v14-wide（契約 v4）。数えるものは群の数、段 1b を通った数、Lab で観測できた数、1 対象あたりの時間と token。
-- 段階 1 の PR 1（形）は数字を持たない。PR 2（runtime）で dev set 3 Trial、PR 3 で `rowSource: "script-only"` の腕を足して同じ 20 対象 k=2。
-
 ## 5b. 探索スキルの腕（ADR 0043）
 
 `discovery.skills` を書いた campaign は、目的文も契約も変えずに、名指しした `SKILL.md` を sandbox の CLI home に置く。台帳の `discovery-run-started.configuration.skills [{id, digest}]` で腕を分ける。

@@ -203,52 +203,6 @@ describe("provider credential egress", () => {
     }
   });
 
-  it("uses an explicitly selected compact broker cgroup cap", async () => {
-    const root = await mkdtemp(join(tmpdir(), "provider-egress-compact-"));
-    try {
-      const credentialFilePath = join(root, "credential");
-      const proxyBundleDirectory = join(root, "bundle");
-      await writeFile(credentialFilePath, randomBytes(32).toString("hex"), {
-        mode: 0o600,
-      });
-      await mkdir(proxyBundleDirectory);
-      await writeFile(
-        join(proxyBundleDirectory, "provider-credential-proxy-cli.js"),
-        "// fixture",
-      );
-      const calls: (readonly string[])[] = [];
-      const broker = createProviderCredentialEgressBroker({
-        dockerExecutablePath: "/usr/bin/docker",
-        brokerImage: `node@${digest}`,
-        credentialFilePath,
-        scratchRootDirectory: root,
-        proxyBundleDirectory,
-        memoryMiB: 256,
-        clock,
-        resolveProviderAddresses: async () => ["203.0.113.10"],
-        runDocker: async (args) => {
-          calls.push(args);
-          return {
-            exitCode: 0,
-            stdout: args[0] === "inspect" ? "172.28.0.2\n" : "",
-            stderr: "",
-          };
-        },
-      });
-      expect(
-        (await broker.withGrant(request, async () => "done")).operation,
-      ).toEqual({
-        status: "completed",
-        value: "done",
-      });
-      expect(calls.find((args) => args[0] === "create")).toContain(
-        "--memory=256m",
-      );
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
   it("keeps provider credentials outside the agent grant and emits a bounded runsc receipt", async () => {
     const root = await mkdtemp(join(tmpdir(), "provider-egress-"));
     try {

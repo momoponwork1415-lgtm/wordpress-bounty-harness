@@ -4,10 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { wordpressCampaignConfigSchema } from "../../src/cli/wordpress.js";
-import {
-  readWordPressCampaignConfig,
-  readWordPressCampaignPolicy,
-} from "../../src/cli/wordpress-session.js";
+import { readWordPressCampaignPolicy } from "../../src/cli/wordpress-session.js";
 import { wordPressSelectionPolicySchema } from "../../src/profiles/wordpress/selection/index.js";
 import { wordfenceProgrammeTranscriptionSchema } from "../../src/profiles/wordpress/wordfence-programme/index.js";
 
@@ -86,6 +83,42 @@ it("starts the checked-in wide v14 campaign with one concurrent target on WordPr
         resources: { ...config.resources, maxConcurrentTargets },
       }).success,
     ).toBe(accepted);
+});
+
+it("rejects every removed partitioned campaign setting at parse time", () => {
+  const base = {
+    schemaVersion: 1,
+    programmeBoundary: { version: "v", text: "t" },
+    wordpressVersion: "6.8",
+    lab: { siteTitle: "s", initialPosts: [], customerRole: false },
+  };
+  const cases = [
+    ["discovery.mode", { discovery: { mode: "partitioned" } }],
+    ["discovery.enumerator", { discovery: { enumerator: {} } }],
+    ["discovery.partition", { discovery: { partition: {} } }],
+    ["discovery.tracer", { discovery: { tracer: {} } }],
+    [
+      "resources.partitionedRoleMemoryProfile",
+      {
+        resources: {
+          memoryBudgetMiB: 10752,
+          partitionedRoleMemoryProfile: "compact-768-256",
+        },
+      },
+    ],
+  ] as const;
+  for (const [path, fields] of cases) {
+    const result = wordpressCampaignConfigSchema.safeParse({
+      ...base,
+      ...fields,
+    });
+    expect(result.success, path).toBe(false);
+    expect(
+      result.error?.issues.find((issue) => issue.path.join(".") === path)
+        ?.message ?? "",
+      path,
+    ).toContain("Partitioned mode was removed in #685");
+  }
 });
 
 it("runs the wide example as a 20-minute v14-wide Trial on the production selection policy (ADR 0039)", async () => {
@@ -225,288 +258,5 @@ describe("historical TranslatePress development fixtures", () => {
       transcription.pages.find((page) => page.sourceKind === "programme")
         ?.assertions.eligibility?.limits,
     ).toBeUndefined();
-  });
-});
-
-describe("partitioned example (ADR 0042 stage 1, shape only)", () => {
-  const partitioned = async () =>
-    JSON.parse(
-      await readFile(
-        join(
-          import.meta.dirname,
-          "..",
-          "..",
-          "examples",
-          "campaign-partitioned.json",
-        ),
-        "utf8",
-      ),
-    ) as Record<string, unknown>;
-
-  it("admits five Codex targets with eight tracers only under the opt-in compact role memory profile", async () => {
-    const source = await partitioned();
-    const role = { runtime: "codex", model: "gpt-6-sol", effort: "ultra" };
-    const discovery = {
-      mode: "partitioned",
-      enumerator: { ...role, wallMinutes: 20 },
-      partition: { maxEntriesPerPartition: 300, maxPartitions: 8 },
-      tracer: { ...role, wallMinutes: 45, maxParallel: 8 },
-    };
-    const resources = {
-      maxConcurrentRuns: 1,
-      maxConcurrentTargets: 5,
-      maxConcurrentTargetsByRuntime: { codex: 5, claude: 0 },
-      memoryBudgetMiB: 40 * (768 + 256),
-      partitionedRoleMemoryProfile: "compact-768-256",
-    };
-    const compact = wordpressCampaignConfigSchema.safeParse({
-      ...source,
-      discovery,
-      resources,
-    });
-    expect(compact.success).toBe(true);
-    expect(compact.data?.resources.partitionedRoleMemoryProfile).toBe(
-      "compact-768-256",
-    );
-    expect(
-      wordpressCampaignConfigSchema.safeParse({
-        ...source,
-        discovery,
-        resources: { ...resources, partitionedRoleMemoryProfile: undefined },
-      }).success,
-    ).toBe(false);
-    expect(
-      wordpressCampaignConfigSchema.safeParse({
-        ...source,
-        discovery: {
-          ...discovery,
-          tracer: { runtime: "claude", maxParallel: 8 },
-        },
-        resources,
-      }).success,
-    ).toBe(false);
-    expect(
-      wordpressCampaignConfigSchema.safeParse({
-        ...source,
-        discovery: { mode: "wide" },
-        promptId: "wp2shell-bounty-v14-wide",
-        resources,
-      }).success,
-    ).toBe(false);
-  });
-
-  it("admits Codex roles with the existing Codex model and effort schema", async () => {
-    const source = await partitioned();
-    const role = { runtime: "codex", model: "gpt-6-sol", effort: "ultra" };
-    const config = wordpressCampaignConfigSchema.parse({
-      ...source,
-      discovery: { mode: "partitioned", enumerator: role, tracer: role },
-    });
-    expect(config.discovery.enumerator).toMatchObject(role);
-    expect(config.discovery.tracer).toMatchObject(role);
-    expect(
-      wordpressCampaignConfigSchema.safeParse({
-        ...source,
-        discovery: {
-          mode: "partitioned",
-          enumerator: { ...role, model: "claude-opus-5-5" },
-        },
-      }).success,
-    ).toBe(false);
-  });
-
-  it("rejects a tool pack whose sink versions would claim the same mounted filename", async () => {
-    const source = await partitioned();
-    const result = wordpressCampaignConfigSchema.safeParse({
-      ...source,
-      discovery: {
-        mode: "partitioned",
-        enumerator: { tools: ["enumerate-sinks-v1", "enumerate-sinks-v2"] },
-      },
-    });
-    expect(result.success).toBe(false);
-    expect(result.error?.issues.map((issue) => issue.path.join("."))).toEqual([
-      "discovery.enumerator.tools",
-    ]);
-  });
-
-  it("parses the example with its roles, limits and the partition objective", async () => {
-    const config = wordpressCampaignConfigSchema.parse(await partitioned());
-    expect(config).toMatchObject({
-      promptId: "objective-partition-v1",
-      runWallTimeMinutes: 120,
-      discovery: {
-        mode: "partitioned",
-        minimumActiveMinutes: 0,
-        enumerator: {
-          runtime: "claude",
-          model: "claude-opus-5-5",
-          effort: "high",
-          wallMinutes: 20,
-          tools: [
-            "enumerate-hooks-v1",
-            "enumerate-sinks-v2",
-            "core-fixed-list-v1",
-          ],
-          rowSource: "agent",
-        },
-        partition: {
-          maxEntriesPerPartition: 300,
-          maxPartitions: 8,
-          maxResubmits: 2,
-        },
-        tracer: { runtime: "claude", wallMinutes: 45, maxParallel: 2 },
-      },
-    });
-  });
-
-  it("fills the roles with defaults in the partitioned mode and refuses them in the others", async () => {
-    const source = await partitioned();
-    const bare = wordpressCampaignConfigSchema.parse({
-      ...source,
-      discovery: { lab: "none", mode: "partitioned" },
-      promptId: undefined,
-    });
-    expect(bare.promptId).toBe("objective-partition-v1");
-    expect(bare.discovery).toMatchObject({
-      enumerator: {
-        runtime: "claude",
-        wallMinutes: 20,
-        rowSource: "agent",
-        tools: [
-          "enumerate-hooks-v1",
-          "enumerate-sinks-v2",
-          "core-fixed-list-v1",
-        ],
-      },
-      partition: {
-        maxEntriesPerPartition: 300,
-        maxPartitions: 8,
-        maxResubmits: 2,
-      },
-      tracer: { runtime: "claude", wallMinutes: 45, maxParallel: 2 },
-    });
-    const wide = wordpressCampaignConfigSchema.safeParse({
-      ...source,
-      discovery: { lab: "none", mode: "wide", tracer: { maxParallel: 1 } },
-      promptId: "wp2shell-bounty-v14-wide",
-    });
-    expect(wide.success).toBe(false);
-    expect(wide.error?.issues.map((issue) => issue.path.join("."))).toEqual([
-      "discovery.tracer",
-    ]);
-    // The partition objective belongs to the partitioned mode only.
-    expect(
-      wordpressCampaignConfigSchema.safeParse({
-        ...source,
-        discovery: { lab: "none", mode: "wide" },
-      }).success,
-    ).toBe(false);
-    expect(
-      wordpressCampaignConfigSchema.safeParse({
-        ...source,
-        promptId: "wp2shell-bounty-v14-wide",
-      }).success,
-    ).toBe(false);
-  });
-
-  it.each(["claude", "codex"])("bounds %s roles", async (runtime) => {
-    const source = await partitioned();
-    const original = source.discovery as Record<string, unknown>;
-    const discovery = {
-      ...original,
-      enumerator: {
-        ...(original.enumerator as object),
-        runtime,
-        model: runtime === "codex" ? "gpt-6-sol" : "claude-opus-5-5",
-      },
-      tracer: {
-        ...(original.tracer as object),
-        runtime,
-        model: runtime === "codex" ? "gpt-6-sol" : "claude-opus-5-5",
-      },
-    };
-    source.discovery = discovery;
-    const paths = (candidate: unknown) =>
-      wordpressCampaignConfigSchema
-        .safeParse(candidate)
-        .error?.issues.map((issue) => issue.path.join("."));
-    // 20 × 3 + 8 × 25 = 260 > 240.
-    expect(
-      paths({
-        ...source,
-        discovery: {
-          ...discovery,
-          tracer: { runtime, wallMinutes: 25, maxParallel: 1 },
-        },
-      }),
-    ).toEqual(["discovery.tracer.wallMinutes"]);
-    // A tracer run is 4,096 + 512 MiB; the 10,752 MiB budget holds two, not
-    // three, per target and across the one target.
-    expect(
-      paths({
-        ...source,
-        discovery: {
-          ...discovery,
-          tracer: { runtime, wallMinutes: 20, maxParallel: 3 },
-        },
-      }),
-    ).toEqual([
-      "discovery.tracer.maxParallel",
-      "resources.maxConcurrentTargets",
-    ]);
-    // Two targets side by side double the tracers in flight.
-    expect(
-      paths({
-        ...source,
-        resources: {
-          ...(source.resources as object),
-          maxConcurrentTargets: 2,
-        },
-      }),
-    ).toEqual(["resources.maxConcurrentTargets"]);
-    expect(
-      paths({
-        ...source,
-        resources: {
-          ...(source.resources as object),
-          maxConcurrentTargets: 2,
-          memoryBudgetMiB: 4 * (4096 + 512),
-        },
-      }),
-    ).toBeUndefined();
-    expect(
-      paths({
-        ...source,
-        discovery: {
-          ...discovery,
-          tracer: { runtime, wallMinutes: 20, maxParallel: 3 },
-        },
-        resources: {
-          ...(source.resources as object),
-          memoryBudgetMiB: 3 * (4096 + 512),
-        },
-      }),
-    ).toBeUndefined();
-    expect(
-      paths({
-        ...source,
-        discovery: { ...discovery, enumerator: { runtime: "unknown" } },
-      }),
-    ).toEqual(["discovery.enumerator"]);
-  });
-
-  it("is read by a session now that the role runtime exists (ADR 0042, PR 2)", async () => {
-    const config = await readWordPressCampaignConfig(
-      join(
-        import.meta.dirname,
-        "..",
-        "..",
-        "examples",
-        "campaign-partitioned.json",
-      ),
-    );
-    expect(config.discovery.mode).toBe("partitioned");
-    expect(config.promptId).toBe("objective-partition-v1");
   });
 });

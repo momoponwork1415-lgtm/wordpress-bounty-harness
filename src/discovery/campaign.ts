@@ -19,12 +19,6 @@ import {
   type TrialContext,
   type TrialOutcome,
 } from "./execute-trial.js";
-import type { OneShotExecutor } from "./one-shot-run.js";
-import {
-  executePartitionedTrial,
-  sealDeadOneShotRuns,
-  type PartitionedTrialPlan,
-} from "./partitioned-trial.js";
 import type { ProviderAttachmentStore } from "./provider-research-report.js";
 import type { ReportRecorder } from "./record-discovery-report.js";
 
@@ -87,16 +81,8 @@ export type PlannedDiscoveryRun = {
     readonly sourcePack?: { readonly dependency: "mounted" | "none" };
     readonly labAccess?: { readonly database: "read-only" | "none" };
     readonly runtime?: "codex-native/v1" | "claude-code/v1";
-    /** The launch mode the campaign config fixed for this Trial (ADR 0039, 0042). */
-    readonly mode?: "deep" | "wide" | "partitioned";
-    /** ADR 0042: the role of a partitioned Trial's run; the executor adds `partitionId` / `resubmit`. */
-    readonly role?: {
-      readonly kind: string;
-      readonly definitionDigest: string;
-      readonly toolsDigest?: string;
-      readonly partitionId?: string;
-      readonly resubmit?: number;
-    };
+    /** The launch mode the campaign config fixed for this Trial (ADR 0039). */
+    readonly mode?: "deep" | "wide";
     /** What the Harness enforced, as the Run parameters section states it. */
     readonly wallMinutes?: number;
     readonly minimumActiveMinutes?: number;
@@ -114,13 +100,8 @@ export type PlannedDiscoveryRun = {
 export type PlannedTrial = {
   readonly trialId: string;
   readonly trialOrdinal: number;
-  /**
-   * The Trial's attempt: the cooperative Root run, or in a partitioned Trial
-   * (ADR 0042) the enumerator's first run, whose id is the Trial's.
-   */
+  /** The Trial's cooperative Root run. */
   readonly explore: PlannedDiscoveryRun;
-  /** ADR 0042: the roles and limits of a partitioned Trial; the one-shot executor runs it. */
-  readonly partitioned?: PartitionedTrialPlan;
   /** Set only by an operator-triggered resume (ADR 0036): the refused run this segment continues. */
   readonly resumes?: { readonly runId: string; readonly segment: number };
   /**
@@ -180,10 +161,6 @@ export async function runDiscoveryCampaign(options: {
     /** Called once a run's finish is appended (#512). */
     release?(runId: string): Promise<void>;
   };
-  /** Runs the roles of partitioned Trials (ADR 0042); required when any planned Trial is one. */
-  readonly oneShotExecutor?: OneShotExecutor;
-  /** Host-only one-shot owner markers; tests may use an isolated directory. */
-  readonly oneShotOwnerDirectory?: string;
   readonly attachments: ProviderAttachmentStore;
   readonly evidence: PrivateArtifactStore;
   readonly ledger: Ledger;
@@ -254,16 +231,6 @@ export async function runDiscoveryCampaign(options: {
     campaignId: options.campaignId,
     snapshotDigest: input.snapshotDigest,
   };
-  if (options.oneShotExecutor !== undefined)
-    await sealDeadOneShotRuns({
-      ledger: options.ledger,
-      campaignId: options.campaignId,
-      snapshotDigest: input.snapshotDigest,
-      clock,
-      ...(options.oneShotOwnerDirectory === undefined
-        ? {}
-        : { ownerDirectory: options.oneShotOwnerDirectory }),
-    });
   // A concluded target is done; otherwise continue after the runs already spent.
   const progress = readResumeProgress(target);
   if (progress.concluded !== undefined)
@@ -279,12 +246,6 @@ export async function runDiscoveryCampaign(options: {
       : { runWallTimeMs: options.runWallTimeMs }),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
     executor: options.executor,
-    ...(options.oneShotExecutor === undefined
-      ? {}
-      : { oneShotExecutor: options.oneShotExecutor }),
-    ...(options.oneShotOwnerDirectory === undefined
-      ? {}
-      : { oneShotOwnerDirectory: options.oneShotOwnerDirectory }),
     attachments: options.attachments,
     evidence: options.evidence,
     ledger: options.ledger,
@@ -331,11 +292,7 @@ export async function runDiscoveryCampaign(options: {
       );
     startedExplorations.add(trial.explore.run.runId);
     tally.runCount++;
-    account(
-      await (trial.partitioned === undefined
-        ? executeTrial(context, trial)
-        : executePartitionedTrial(context, trial)),
-    );
+    account(await executeTrial(context, trial));
   };
   const account = (explore: TrialOutcome) => {
     tally.findingsRecorded += explore.findingsRecorded;

@@ -10,7 +10,6 @@ import {
   wordPressDiscoveryOutputContract,
   wordPressDiscoveryOutputContractV2,
   wordPressDiscoveryOutputContractV4,
-  wordPressDiscoveryOutputContractV4Solo,
   wordPressDiscoveryOutputContractV5,
 } from "../../../src/profiles/wordpress/discovery/output-contract.js";
 
@@ -72,7 +71,7 @@ describe("WordPress prompt table", () => {
   it("derives the id lists and the current versions from the table", () => {
     const ids = WORDPRESS_DISCOVERY_PROMPTS.map((row) => row.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(32);
+    expect(ids).toHaveLength(31);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual(ids);
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       ...ids,
@@ -97,7 +96,6 @@ describe("WordPress prompt table", () => {
     expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS).toEqual({
       deep: "wp2shell-bounty-v11",
       wide: "wp2shell-bounty-v14-wide",
-      partitioned: "objective-partition-v1",
     });
     expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID).toBe("wp2shell-bounty-v11");
     // Archived rows carry no mode, so only a current row launches (ADR 0039).
@@ -112,7 +110,6 @@ describe("WordPress prompt table", () => {
       "wp2shell-bounty-v11",
       "wp2shell-bounty-v14-wide",
       "wp2shell-bounty-v15-wide",
-      "objective-partition-v1",
     ]);
     expect(
       WORDPRESS_VERIFIER_PROMPTS.filter((row) => row.status === "current"),
@@ -155,7 +152,6 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
       "wp2shell-bounty-v16-wide",
       "wp2shell-bounty-v17-wide",
       "wp2shell-bounty-v18-wide",
-      "objective-partition-v1",
     ]);
     for (const row of WORDPRESS_DISCOVERY_PROMPTS.filter(
       (entry) => entry.status !== "archived",
@@ -184,8 +180,6 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
       // The v16-wide body on the v4 contract (ADR 0039 addendum 13); same digest.
       "wp2shell-bounty-v18-wide":
         "sha256:1ffb15f4f3f7ad6de70e330e10fd24c31513e41d250c8e0d6885b760a0a5c1f3",
-      "objective-partition-v1":
-        "sha256:0d0ab26416115827de2f6fb066531164d51955ea773f12c631cd74cbe5772916",
     } as const;
     for (const row of composed) {
       const bytes = (await promptBytes(row.id)).toString("utf8");
@@ -213,7 +207,6 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
             .filter((fragment) => fragment.section === section)
             .map(({ file }) => fragmentText(section, file)),
         );
-        // A section the row leaves out has no digest (objective-partition-v1, ADR 0042).
         if (texts.length === 0) continue;
         expected[section] = sha256(
           `${texts.map((text) => text.slice(0, -1)).join("\n\n")}\n`,
@@ -251,30 +244,6 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
       expect(WORDPRESS_PROMPT_SECTIONS).toContain(path.split("/")[0]);
   });
 
-  it("composes the partition objective from paragraphs the current objectives already carry (ADR 0042)", async () => {
-    const row = composed.find(
-      (entry) => entry.id === "objective-partition-v1",
-    )!;
-    expect(row).toMatchObject({
-      status: "current",
-      mode: "partitioned",
-      outputContract: "v4",
-    });
-    expect(
-      row.fragments.map(({ section, file }) => `${section}/${file}`),
-    ).toEqual([
-      "objective/task-v15",
-      "objective/first-principles-v11",
-      "objective/sources-v8",
-    ]);
-    const { text, sectionDigests } = await loadWordPressDiscoveryAsset(row.id);
-    // No strategy, coordination or persistence paragraph: no sink list, no agent count, no registry.
-    expect(Object.keys(sectionDigests!)).toEqual(["objective"]);
-    expect(text).not.toMatch(/specialist|root agent|registry|REGISTRY\.md/i);
-    expect(text).toContain("A vulnerability is not assumed.");
-    expect(text).toContain("named human's recorded observation");
-  });
-
   it("pins the generated v4 contract the composed objectives receive and keeps v5 for the archived rows", () => {
     expect(wordPressDiscoveryOutputContractV5().digest).toBe(
       "sha256:4ead63b056590be4cbdd7f474bd79c7e301550454a7e4644d943a17bb0bd6ec4",
@@ -282,29 +251,6 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
     // Launchable rows since 2026-10-27 (ADR 0038 addendum 15); v5 stays for the archived v16-wide and v17-wide.
     expect(wordPressDiscoveryOutputContractV4().digest).toBe(
       "sha256:5acd5157fc82cb76c35490af607513a1558477c4eb03acaa046fdf0a64c99883",
-    );
-  });
-
-  it("renders the solo v4 contract for a tracer as v4 without the Root paragraph and the child/Root sentences (ADR 0042, owner 2026-10-28)", () => {
-    const v4 = wordPressDiscoveryOutputContractV4();
-    const solo = wordPressDiscoveryOutputContractV4Solo();
-    expect(solo.id).toBe("wordpress-discovery-contract-v4-solo");
-    const paragraphs = v4.text.split("\n\n");
-    expect(paragraphs[1]).toMatch(/^As Root, include this complete contract/);
-    expect(paragraphs[2]).toMatch(/strings\. A child reports direct Finding/);
-    expect(solo.text).toBe(
-      [
-        paragraphs[0],
-        "Return `findings`, `leads`, `examined`, and `unexamined`. The last two are strings.",
-        ...paragraphs.slice(3),
-      ].join("\n\n"),
-    );
-    expect(solo.text).not.toContain("Root");
-    expect(solo.text).not.toContain("child");
-    expect(solo.text).toContain("Finding schema:");
-    expect(solo.text).toContain("Lead schema:");
-    expect(solo.digest).toBe(
-      "sha256:620d4a05037fc42ac532b6a38e37579f7e8c1febaba571e0ed2d1e586a50bfd8",
     );
   });
 });
@@ -538,9 +484,6 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v18-wide"
       )
         expect(text).toContain("one specialist agent per sink class");
-      // ADR 0042: the tracer's role definition names Findings and Leads; its objective is the task alone.
-      else if (id === "objective-partition-v1")
-        expect(text).toContain("A vulnerability is not assumed.");
       else expect(text).toMatch(/Lead|Finding/);
       expect(text).not.toMatch(
         /sourceTrace|labObservations|JSON string|Each Finding is an object/,
@@ -1236,8 +1179,7 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v15-wide" ||
         id === "wp2shell-bounty-v16-wide" ||
         id === "wp2shell-bounty-v17-wide" ||
-        id === "wp2shell-bounty-v18-wide" ||
-        id === "objective-partition-v1"
+        id === "wp2shell-bounty-v18-wide"
       ) {
         // v5 leaves attacker positions and in-scope effects to the supplied
         // trust boundary and Programme Boundary sections (owner decision, 2026-10-16).

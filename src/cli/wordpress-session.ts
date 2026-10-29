@@ -4,11 +4,6 @@ import { z } from "zod";
 
 import {
   assignDiscoveryRuntime,
-  agentRuntimeProfileDefinitionSchema,
-  claudeEffortSchema,
-  claudeModelSchema,
-  ONE_SHOT_SANDBOX_MEMORY_MIB,
-  PARTITIONED_ROLE_MEMORY_PROFILES,
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB,
   DEFAULT_MAX_CHILDREN,
   MAX_CHILDREN_LIMIT,
@@ -20,7 +15,6 @@ import type {
   DiscoveryTransportResult,
   InterruptedRunRecovery,
   DiscoveryTransportRun,
-  OneShotExecutor,
   ProviderAttachmentStore,
 } from "../discovery/index.js";
 import { MAX_STAGED_SKILLS } from "../discovery/skill-definition.js";
@@ -32,10 +26,6 @@ import {
   readWordPressFinding,
   type WordPressFinding,
 } from "../profiles/wordpress/discovery/finding.js";
-import {
-  WORDPRESS_CURRENT_ENUMERATION_TOOL_IDS,
-  WORDPRESS_ENUMERATION_TOOL_IDS,
-} from "../profiles/wordpress/discovery/tools.js";
 import type {
   WordPressLab,
   WordPressLabHandle,
@@ -43,7 +33,6 @@ import type {
 } from "../profiles/wordpress/lab/index.js";
 import {
   WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS,
-  WORDPRESS_DISCOVERY_MODES,
   WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS,
   WORDPRESS_VERIFIER_PROMPT_ID,
   wordPressDiscoveryModeOf,
@@ -93,64 +82,7 @@ const WORDPRESS_DEFAULT_WALL_MINUTES = 120;
 const WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES = {
   deep: 60,
   wide: 0,
-  partitioned: 0,
 } as const;
-
-/**
- * ADR 0042: partitioned roles run on Claude or Codex, without children.
- * Both use the same one-shot memory and wall ceilings.
- */
-const PARTITIONED_TARGET_CEILING_MINUTES = 240;
-/** One tracer run: the one-shot sandbox plus its broker (design 2026-10-28 §6 Q2). */
-export const PARTITIONED_TRACER_RUN_MEMORY_MIB =
-  ONE_SHOT_SANDBOX_MEMORY_MIB + EGRESS_BROKER_MEMORY_MIB;
-const roleSchema = <T extends z.ZodRawShape>(fields: T) =>
-  z.union([
-    z.strictObject({
-      runtime: z.literal("claude").default("claude"),
-      model: claudeModelSchema.optional(),
-      effort: claudeEffortSchema.optional(),
-      ...fields,
-    }),
-    z.strictObject({
-      runtime: z.literal("codex"),
-      model:
-        agentRuntimeProfileDefinitionSchema.shape.requestedModelId.optional(),
-      effort:
-        agentRuntimeProfileDefinitionSchema.shape.requestedEffort.optional(),
-      ...fields,
-    }),
-  ]);
-const enumeratorSchema = roleSchema({
-  wallMinutes: z.number().int().min(5).max(60).default(20),
-  /** The tool files mounted read-only at /workspace/tools; the enumerator runs them itself. */
-  tools: z
-    .array(z.enum(WORDPRESS_ENUMERATION_TOOL_IDS))
-    .refine(
-      (ids) =>
-        !(
-          ids.includes("enumerate-sinks-v1") &&
-          ids.includes("enumerate-sinks-v2")
-        ),
-      "Enumeration sink versions have a conflicting tool filename",
-    )
-    .default([...WORDPRESS_CURRENT_ENUMERATION_TOOL_IDS]),
-  /**
-   * `agent`: the enumerator lists the rows. `script-only` is the measurement
-   * arm of stage 3: the Harness runs the tools first and the enumerator only
-   * proposes partitions over their rows.
-   */
-  rowSource: z.enum(["agent", "script-only"]).default("agent"),
-});
-const partitionSchema = z.strictObject({
-  maxEntriesPerPartition: z.number().int().min(1).max(300).default(300),
-  maxPartitions: z.number().int().min(1).max(16).default(8),
-  maxResubmits: z.number().int().min(0).max(5).default(2),
-});
-const tracerSchema = roleSchema({
-  wallMinutes: z.number().int().min(5).max(120).default(45),
-  maxParallel: z.number().int().min(1).max(8).default(2),
-});
 
 /**
  * Whether a discovery Lab is attached and how often the Root may reset it
@@ -190,7 +122,13 @@ const commonCampaignFields = {
       /** Opt-in split of targets between Codex and Claude; absent, all run on Codex. */
       runtimeShare: runtimeShareSchema.optional(),
       /** The launch mode of every Trial this campaign starts (ADR 0039). */
-      mode: z.enum(WORDPRESS_DISCOVERY_MODES).default("deep"),
+      mode: z
+        .enum(["deep", "wide", "partitioned"])
+        .refine((mode) => mode !== "partitioned", {
+          message: "Partitioned mode was removed in #685",
+        })
+        .transform((mode) => mode as "deep" | "wide")
+        .default("deep"),
       /** Ceiling on live children; the Root decides how many it uses. */
       maxChildren: z
         .number()
@@ -198,12 +136,11 @@ const commonCampaignFields = {
         .min(1)
         .max(MAX_CHILDREN_LIMIT)
         .default(DEFAULT_MAX_CHILDREN),
-      /** Defaults by mode: 60 for `deep`, 0 for `wide` and `partitioned` (ADR 0039, 0042). */
+      /** Defaults by mode: 60 for `deep`, 0 for `wide` (ADR 0039). */
       minimumActiveMinutes: z.number().int().min(0).max(119).optional(),
-      /** ADR 0042: the roles of a `partitioned` campaign; refused in the other modes. */
-      enumerator: enumeratorSchema.optional(),
-      partition: partitionSchema.optional(),
-      tracer: tracerSchema.optional(),
+      enumerator: z.unknown().optional(),
+      partition: z.unknown().optional(),
+      tracer: z.unknown().optional(),
       /**
        * ADR 0043: exploration skills staged into the agent CLI's home for a
        * `deep` or `wide` Trial; absent, none. Ids name pinned versions.
@@ -222,8 +159,7 @@ const commonCampaignFields = {
       maxConcurrentRuns: z.number().int().min(1).max(4).default(1),
       maxConcurrentTargets: z.number().int().min(1).max(10).default(1),
       memoryBudgetMiB: z.number().int().positive(),
-      /** Explicitly opt in to the smaller cgroup caps for Codex partitioned roles. */
-      partitionedRoleMemoryProfile: z.literal("compact-768-256").optional(),
+      partitionedRoleMemoryProfile: z.unknown().optional(),
       /**
        * Opt-in caps per discovery runtime under maxConcurrentTargets (2026-10-19).
        * Absent, only the total applies.
@@ -276,12 +212,6 @@ export const wordpressCampaignConfigSchema = z
         message: `The ${mode} mode runs ${WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS.filter((id) => wordPressDiscoveryModeOf(id) === mode).join(" or ")} only`,
       });
     if (config.discovery.skills !== undefined) {
-      if (mode === "partitioned")
-        context.addIssue({
-          code: "custom",
-          path: ["discovery", "skills"],
-          message: "discovery.skills applies to the deep and wide modes only",
-        });
       const names = config.discovery.skills.map(
         (id) => wordPressDiscoverySkillRecord(id)!.name,
       );
@@ -293,73 +223,18 @@ export const wordpressCampaignConfigSchema = z
         });
     }
     for (const role of ["enumerator", "partition", "tracer"] as const)
-      if (mode !== "partitioned" && config.discovery[role] !== undefined)
+      if (config.discovery[role] !== undefined)
         context.addIssue({
           code: "custom",
           path: ["discovery", role],
-          message: `discovery.${role} applies to the partitioned mode only`,
+          message: "Partitioned mode was removed in #685",
         });
-    if (
-      mode !== "partitioned" &&
-      config.resources.partitionedRoleMemoryProfile !== undefined
-    )
+    if (config.resources.partitionedRoleMemoryProfile !== undefined)
       context.addIssue({
         code: "custom",
         path: ["resources", "partitionedRoleMemoryProfile"],
-        message:
-          "The compact role memory profile applies to partitioned mode only",
+        message: "Partitioned mode was removed in #685",
       });
-    if (mode === "partitioned") {
-      const enumerator =
-        config.discovery.enumerator ?? enumeratorSchema.parse({});
-      const partition = config.discovery.partition ?? partitionSchema.parse({});
-      const tracer = config.discovery.tracer ?? tracerSchema.parse({});
-      if (
-        config.resources.partitionedRoleMemoryProfile !== undefined &&
-        (enumerator.runtime !== "codex" || tracer.runtime !== "codex")
-      )
-        context.addIssue({
-          code: "custom",
-          path: ["resources", "partitionedRoleMemoryProfile"],
-          message: "The compact role memory profile requires Codex roles",
-        });
-      // One target's worst case: every send-back used, every partition filled.
-      const minutes =
-        enumerator.wallMinutes * (1 + partition.maxResubmits) +
-        Math.ceil(partition.maxPartitions / tracer.maxParallel) *
-          tracer.wallMinutes;
-      if (minutes > PARTITIONED_TARGET_CEILING_MINUTES)
-        context.addIssue({
-          code: "custom",
-          path: ["discovery", "tracer", "wallMinutes"],
-          message: `One target may take ${minutes} minutes; the ceiling is ${PARTITIONED_TARGET_CEILING_MINUTES}`,
-        });
-      // A tracer starts no children. The selected cgroup caps are the budget unit.
-      const roleMemory =
-        PARTITIONED_ROLE_MEMORY_PROFILES[
-          config.resources.partitionedRoleMemoryProfile ?? "standard"
-        ];
-      const roleMemoryMiB = roleMemory.sandboxMiB + roleMemory.brokerMiB;
-      const sandboxes = Math.max(
-        1,
-        Math.floor(config.resources.memoryBudgetMiB / roleMemoryMiB),
-      );
-      if (tracer.maxParallel > sandboxes)
-        context.addIssue({
-          code: "custom",
-          path: ["discovery", "tracer", "maxParallel"],
-          message: `The memory budget holds ${sandboxes} tracer run(s) at once`,
-        });
-      // Targets run side by side, each with its own tracers in flight.
-      const concurrent =
-        config.resources.maxConcurrentTargets * tracer.maxParallel;
-      if (concurrent > sandboxes)
-        context.addIssue({
-          code: "custom",
-          path: ["resources", "maxConcurrentTargets"],
-          message: `${config.resources.maxConcurrentTargets} target(s) × ${tracer.maxParallel} tracer(s) need ${concurrent * roleMemoryMiB} MiB; the budget holds ${sandboxes} tracer run(s)`,
-        });
-    }
     const floor =
       config.discovery.minimumActiveMinutes ??
       WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES[mode];
@@ -374,14 +249,7 @@ export const wordpressCampaignConfigSchema = z
       });
     const caps = config.resources.maxConcurrentTargetsByRuntime;
     if (caps !== undefined) {
-      const roleRuntime = config.discovery.enumerator?.runtime ?? "claude";
-      const share =
-        mode === "partitioned"
-          ? {
-              codex: Number(roleRuntime === "codex"),
-              claude: Number(roleRuntime === "claude"),
-            }
-          : (config.discovery.runtimeShare ?? { codex: 1, claude: 0 });
+      const share = config.discovery.runtimeShare ?? { codex: 1, claude: 0 };
       for (const runtime of ["codex", "claude"] as const) {
         const cap = caps[runtime];
         if (cap !== undefined && cap > config.resources.maxConcurrentTargets)
@@ -424,14 +292,6 @@ export const wordpressCampaignConfigSchema = z
       minimumActiveMinutes:
         config.discovery.minimumActiveMinutes ??
         WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES[config.discovery.mode],
-      ...(config.discovery.mode === "partitioned"
-        ? {
-            enumerator:
-              config.discovery.enumerator ?? enumeratorSchema.parse({}),
-            partition: config.discovery.partition ?? partitionSchema.parse({}),
-            tracer: config.discovery.tracer ?? tracerSchema.parse({}),
-          }
-        : {}),
     },
     promptId:
       config.promptId ??
@@ -479,18 +339,11 @@ export interface WordPressCampaignBoundaries {
     /** Removes a run's marker and directories once its finish is appended (#512). */
     release?(runId: string): Promise<void>;
   };
-  /**
-   * The Claude discovery runtime, present when the host configures it and the
-   * campaign's share or partitioned roles use it. `oneShot` runs the
-   * roles of a partitioned Trial (ADR 0042).
-   */
+  /** The Claude discovery runtime, present when the host configures it. */
   readonly claude?: {
     readonly runtimeProfile: AgentRuntimeProfile;
     readonly executor: WordPressCampaignBoundaries["executor"];
-    readonly oneShot?: OneShotExecutor;
   };
-  /** The host Codex transport for partitioned roles (ADR 0042). */
-  readonly oneShot?: OneShotExecutor;
   readonly attachments: ProviderAttachmentStore;
   /** Legacy injected adapters may provide one; the real host no longer does. */
   readonly verifier?: Verifier<WordPressFinding, WordPressLabHandle>;
@@ -544,14 +397,9 @@ export async function readWordPressCampaignConfig(
   const config = wordpressCampaignConfigSchema.parse(
     JSON.parse(await readFile(configPath, "utf8")) as unknown,
   );
-  const minimumMemoryMiB =
-    config.resources.partitionedRoleMemoryProfile === undefined
-      ? DISCOVERY_RUN_MEMORY_MIB
-      : PARTITIONED_ROLE_MEMORY_PROFILES["compact-768-256"].sandboxMiB +
-        PARTITIONED_ROLE_MEMORY_PROFILES["compact-768-256"].brokerMiB;
-  if (config.resources.memoryBudgetMiB < minimumMemoryMiB)
+  if (config.resources.memoryBudgetMiB < DISCOVERY_RUN_MEMORY_MIB)
     throw new Error(
-      `The memory budget is below one discovery run (${minimumMemoryMiB} MiB)`,
+      `The memory budget is below one discovery run (${DISCOVERY_RUN_MEMORY_MIB} MiB)`,
     );
   return config;
 }
@@ -580,17 +428,10 @@ export function wordPressRuntimeCaps(
   if (config.resources.maxConcurrentTargetsByRuntime === undefined && !share)
     return undefined;
   return {
-    // Roles choose the runtime directly; cooperative runs use the target share.
-    runtimeOf: (target) =>
-      config.discovery.mode === "partitioned"
-        ? config.discovery.enumerator!.runtime
-        : assignDiscoveryRuntime(target.targetId, share),
+    runtimeOf: (target) => assignDiscoveryRuntime(target.targetId, share),
     ceilings: wordPressRuntimeCeilings(config),
     providerLimitPerRuntime:
-      config.discovery.mode !== "partitioned" &&
-      share !== undefined &&
-      share.codex > 0 &&
-      share.claude > 0,
+      share !== undefined && share.codex > 0 && share.claude > 0,
   };
 }
 

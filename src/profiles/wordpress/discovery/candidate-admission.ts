@@ -129,9 +129,6 @@ async function recordFinding(
     ...(finding.historyRecordId === undefined
       ? {}
       : { historyRecordId: finding.historyRecordId }),
-    ...(options.partition === undefined
-      ? {}
-      : { partition: options.partition }),
     // #424: 同じ Snapshot で plugin 側の file:function が重なる Finding の群。表示と順序だけに使う。
     group: admitFindingGroup(options.ledger, {
       campaignId: options.base.campaignId,
@@ -188,9 +185,6 @@ async function recordLead(
     missingEdge: lead.missingEdge,
     primitive: lead.primitive,
     storageKind: lead.storage?.kind ?? "none",
-    ...(options.partition === undefined
-      ? {}
-      : { partition: options.partition }),
   });
   return {
     kind: "lead",

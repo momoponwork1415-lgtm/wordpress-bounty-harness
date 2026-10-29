@@ -1665,7 +1665,7 @@ describe("harness CLI vertical slice", () => {
     // Reading recorded results, decisions and the funnel is in review-operations.test.ts (#495).
   });
 
-  it("rejects partitioned assignment for new campaigns", () => {
+  it("rejects legacy assignment for new campaigns", () => {
     const base = {
       schemaVersion: 1 as const,
       programmeBoundary: { version: "v1", text: "Synthetic" },

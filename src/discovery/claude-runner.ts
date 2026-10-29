@@ -19,10 +19,7 @@ export const claudeRunnerChildLimitDenial = (maxChildren: number): string =>
  * reach stdout; full transcripts stay in the mounted Claude config directory.
  * With `resumeSessionId`, the first turn resumes that restored session with
  * the pinned directive instead of sending the objective again (ADR 0036).
- * With `oneShot`, it runs one turn of one agent (ADR 0042): `maxChildren`
- * is 0, the Agent tool is not offered, and `outputSchema` may be absent for
- * a role that writes files instead of a report. With `skills`, the Skill
- * tool is offered and the SDK lists exactly those names from the staged
+ * With `skills`, the Skill tool is offered and the SDK lists exactly those names from the staged
  * config directory (ADR 0043).
  */
 export const CLAUDE_RUNNER_SOURCE = String.raw`
@@ -40,19 +37,12 @@ const now = () => new Date().toISOString();
 let raw = "";
 for await (const chunk of process.stdin) raw += chunk.toString();
 const config = JSON.parse(raw);
-// A one-shot role run (ADR 0042): one turn, no children, no resume, and a
-// report schema only when the role answers under one.
-const ONE_SHOT = config.oneShot === true;
 if (
   typeof config.prompt !== "string" || config.prompt.length === 0 ||
-  (ONE_SHOT
-    ? config.resumePrompt !== undefined || config.minimumActiveMs !== 0 ||
-      config.maxChildren !== 0 || config.resumeSessionId !== undefined ||
-      config.resumeNotice !== undefined
-    : typeof config.resumePrompt !== "string" || config.resumePrompt.length === 0 ||
-      !Number.isSafeInteger(config.minimumActiveMs) || config.minimumActiveMs < 0 ||
-      !Number.isSafeInteger(config.maxChildren) || config.maxChildren < 1 ||
-      typeof config.outputSchema !== "object" || config.outputSchema === null) ||
+  typeof config.resumePrompt !== "string" || config.resumePrompt.length === 0 ||
+  !Number.isSafeInteger(config.minimumActiveMs) || config.minimumActiveMs < 0 ||
+  !Number.isSafeInteger(config.maxChildren) || config.maxChildren < 1 ||
+  typeof config.outputSchema !== "object" || config.outputSchema === null ||
   typeof config.model !== "string" || typeof config.effort !== "string" ||
   (config.outputSchema !== undefined &&
     (typeof config.outputSchema !== "object" || config.outputSchema === null)) ||
@@ -67,9 +57,8 @@ const MAX_CHILDREN = config.maxChildren;
 // lists only these names, reads them only with the user setting source (the
 // staged, otherwise empty home), and needs the Skill tool on the surface.
 const SKILLS = config.skills ?? [];
-// Without children the Agent tool is not offered at all; the hook still denies it.
 const TOOLS = [
-  ...(MAX_CHILDREN === 0 ? ALL_TOOLS.filter((tool) => tool !== "Agent") : ALL_TOOLS),
+  ...ALL_TOOLS,
   ...(SKILLS.length === 0 ? [] : ["Skill"]),
 ];
 const CHILD_LIMIT = DENIALS.childLimit.replace("{n}", String(MAX_CHILDREN));
