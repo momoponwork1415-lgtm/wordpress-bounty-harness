@@ -881,6 +881,16 @@ export async function planWordPressPartitionedDiscovery(
       );
     toolFiles.push({ name: "enumerate-sinks-v1.sh", content: sinksV2.content });
   }
+  // The frozen enumerator-v1 body names this path; an opt-in v2 pack supplies
+  // the selected bytes under that name without changing the historical v1.
+  const coreV2 = toolFiles.find(
+    (tool) => tool.name === "core-fixed-list-v2.md",
+  );
+  if (coreV2 !== undefined) {
+    if (toolFiles.some((tool) => tool.name === "core-fixed-list-v1.md"))
+      throw new Error("Core list versions have a conflicting tool filename");
+    toolFiles.push({ name: "core-fixed-list-v1.md", content: coreV2.content });
+  }
   const toolsDigest = wordPressEnumerationToolsDigest(toolIds);
   const limits = discovery.partition;
   const runtime = {

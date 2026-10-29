@@ -250,6 +250,7 @@ describe("WordPress enumeration tools", () => {
       "enumerate-sinks-v1",
       "enumerate-sinks-v2",
       "core-fixed-list-v1",
+      "core-fixed-list-v2",
     ]);
     expect(WORDPRESS_CURRENT_ENUMERATION_TOOL_IDS).toEqual([
       "enumerate-hooks-v1",

@@ -20,6 +20,7 @@ import { wordPressDiscoveryOutputContractV4Solo } from "../../src/profiles/wordp
 import {
   loadWordPressEnumerationTool,
   WORDPRESS_ENUMERATION_TOOLS,
+  wordPressEnumerationToolsDigest,
 } from "../../src/profiles/wordpress/discovery/tools.js";
 import {
   loadWordPressDiscoveryAsset,
@@ -140,6 +141,75 @@ const input = {
 } as unknown as Parameters<typeof planWordPressPartitionedDiscovery>[0];
 
 describe("planWordPressPartitionedDiscovery (ADR 0042)", () => {
+  it("mounts an explicitly selected cutoff-safe core list for both roles without changing the default", async () => {
+    const defaultConfig = await exampleConfig();
+    expect(defaultConfig.discovery.enumerator!.tools).toContain(
+      "core-fixed-list-v1",
+    );
+    expect(defaultConfig.discovery.enumerator!.tools).not.toContain(
+      "core-fixed-list-v2",
+    );
+
+    const selected = await exampleConfig({
+      discovery: {
+        ...defaultConfig.discovery,
+        enumerator: {
+          ...defaultConfig.discovery.enumerator,
+          tools: [
+            "enumerate-hooks-v1",
+            "enumerate-sinks-v2",
+            "core-fixed-list-v2",
+          ],
+        },
+      },
+    });
+    const plan = await planWordPressPartitionedDiscovery(
+      input,
+      await context(selected),
+    );
+    const selectedTool =
+      await loadWordPressEnumerationTool("core-fixed-list-v2");
+    const oldTool = await loadWordPressEnumerationTool("core-fixed-list-v1");
+    const partitioned = plan.plannedTrials[0]!.partitioned!;
+    for (const files of [
+      partitioned.enumerate.run.toolFiles,
+      partitioned.trace.run.toolFiles,
+    ]) {
+      expect(
+        files.find((file) => file.name === "core-fixed-list-v2.md")?.content,
+      ).toEqual(selectedTool.bytes);
+      expect(
+        files.find((file) => file.name === "core-fixed-list-v1.md")?.content,
+      ).toEqual(selectedTool.bytes);
+    }
+    expect(selectedTool.bytes).not.toEqual(oldTool.bytes);
+    expect(new TextDecoder().decode(selectedTool.bytes)).not.toMatch(
+      /2026-10-27|19,114|\| Records \||\| Unauthenticated \|/,
+    );
+    const expectedDigest = wordPressEnumerationToolsDigest(
+      selected.discovery.enumerator!.tools,
+    );
+    expect(partitioned.enumerate.configuration.role?.toolsDigest).toBe(
+      expectedDigest,
+    );
+    expect(partitioned.trace.configuration.role?.toolsDigest).toBe(
+      expectedDigest,
+    );
+
+    expect(() =>
+      wordpressCampaignConfigSchema.parse({
+        ...selected,
+        discovery: {
+          ...selected.discovery,
+          enumerator: {
+            ...selected.discovery.enumerator,
+            tools: ["core-fixed-list-v1", "core-fixed-list-v2"],
+          },
+        },
+      }),
+    ).toThrow(/conflicting tool filename/);
+  });
+
   it("runs the selected v2 bytes at the filename named by the unchanged role and keeps an explicit v1 pack intact", async () => {
     const config = await exampleConfig();
     const plan = await planWordPressPartitionedDiscovery(

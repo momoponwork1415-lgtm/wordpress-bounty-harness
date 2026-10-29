@@ -128,6 +128,14 @@ const enumeratorSchema = roleSchema({
         ),
       "Enumeration sink versions have a conflicting tool filename",
     )
+    .refine(
+      (ids) =>
+        !(
+          ids.includes("core-fixed-list-v1") &&
+          ids.includes("core-fixed-list-v2")
+        ),
+      "Core list versions have a conflicting tool filename",
+    )
     .default([...WORDPRESS_CURRENT_ENUMERATION_TOOL_IDS]),
   /**
    * `agent`: the enumerator lists the rows. `script-only` is the measurement
