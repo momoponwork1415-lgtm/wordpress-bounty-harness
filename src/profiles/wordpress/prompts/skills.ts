@@ -41,6 +41,30 @@ export const WORDPRESS_DISCOVERY_SKILLS = [
       "sha256:ef7658be5403ac69e5ae76c8a41c5d157f65f4b453507e4ed36416856798a52e",
     status: "current",
   },
+  {
+    id: "wbh-tools-v1",
+    name: "wbh-tools",
+    digest:
+      "sha256:a22658fb3a800d68fab3749fa3ca72155422b8cc70880dc05b03e04c0b9213b0",
+    files: [
+      {
+        name: "core-fixed-list-v1.md",
+        digest:
+          "sha256:b76388a3f6cb93e1beb2dae0e1ac84f09ed479373128b6ef6adf237ef815d82c",
+      },
+      {
+        name: "enumerate-hooks-v1.sh",
+        digest:
+          "sha256:dd208c53a31fb8c6d35759e4f651dcfc174ebfdc1273d7172f6bfe4acf2f5362",
+      },
+      {
+        name: "enumerate-sinks-v2.sh",
+        digest:
+          "sha256:2c28a56be45a909380f692d839c6850ee679a2741e57e0432928e3cebef203fd",
+      },
+    ],
+    status: "current",
+  },
 ] as const satisfies readonly WordPressDiscoverySkillRecord[];
 
 export type WordPressDiscoverySkillId =
@@ -60,7 +84,10 @@ export type WordPressDiscoverySkill = SkillDefinition & {
   readonly id: WordPressDiscoverySkillId;
   readonly sourceUrl: URL;
   /** The supporting files as read from the skill's directory, digest-checked. */
-  readonly files: readonly { readonly name: string; readonly content: Buffer }[];
+  readonly files: readonly {
+    readonly name: string;
+    readonly content: Buffer;
+  }[];
 };
 
 export function wordPressDiscoverySkillRecord(

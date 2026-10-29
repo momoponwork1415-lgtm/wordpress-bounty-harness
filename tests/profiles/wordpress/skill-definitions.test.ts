@@ -36,9 +36,9 @@ describe("WordPress discovery skills", () => {
       expect(skill.body.length).toBeGreaterThan(500);
       expect(Buffer.byteLength(skill.text, "utf8")).toBeLessThan(16_000);
       // Supporting files (#687): every file in the directory is pinned, by name and digest.
-      const pinnedFiles = (
-        row as { files?: readonly { name: string; digest: string }[] }
-      ).files ?? [];
+      const pinnedFiles =
+        (row as { files?: readonly { name: string; digest: string }[] })
+          .files ?? [];
       const inDirectory = (
         await readdir(new URL(`${row.id}/`, skillsUrl))
       ).sort();
@@ -57,7 +57,13 @@ describe("WordPress discovery skills", () => {
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name);
     expect(onDisk.sort()).toEqual([...WORDPRESS_DISCOVERY_SKILL_IDS].sort());
-    expect(WORDPRESS_LAUNCHABLE_DISCOVERY_SKILL_IDS).toEqual(["wbh-recon-v1"]);
+    expect(WORDPRESS_LAUNCHABLE_DISCOVERY_SKILL_IDS).toEqual([
+      "wbh-recon-v1",
+      "wbh-tools-v1",
+    ]);
+    const tools = wordPressDiscoverySkillRecord("wbh-tools-v1") as
+      { files?: readonly unknown[] } | undefined;
+    expect(tools?.files?.length).toBe(3);
     expect(wordPressDiscoverySkillRecord("wbh-recon-v1")?.name).toBe(
       "wbh-recon",
     );
