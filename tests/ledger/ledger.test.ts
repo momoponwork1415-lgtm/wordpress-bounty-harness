@@ -1447,6 +1447,16 @@ describe("Ledger public interface", () => {
         },
       },
       rewardUsd: 0,
+      externalOutcomes: {
+        byOutcome: {
+          accepted: 0,
+          rejected: 0,
+          duplicate: 0,
+          "out-of-scope": 0,
+          none: 0,
+        },
+        byReason: {},
+      },
       ownerMinutesPerSubmission: null,
       openedFindingsPerSubmission: null,
       manualReproductionAgreement: null,

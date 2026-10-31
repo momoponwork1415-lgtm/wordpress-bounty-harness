@@ -489,6 +489,8 @@ describe("review operations on recorded history", () => {
       "2026-10-07",
       "--by",
       "operator",
+      "--latest-version",
+      "3.3.1",
     ];
     const recorded = await run(...args);
     expect(recorded).toEqual({
@@ -509,6 +511,7 @@ describe("review operations on recorded history", () => {
       submittedOn: "2026-10-07",
       recordedBy: "operator",
       artifacts: [],
+      latestVersionAtSubmission: { version: "3.3.1", source: "operator" },
     });
     const queue = await run("review", "--campaign", "campaign-1");
     expect(queue.stdout).not.toContain(findingId);
@@ -531,6 +534,279 @@ describe("review operations on recorded history", () => {
       ],
       latestDraft: null,
     });
+  });
+
+  it("records a programme's outcome of an external submission and counts it in the funnel (#698)", async () => {
+    const { run, ledger, findings } = await recordedReviewState({
+      verified: false,
+      askMinutes: async () => {
+        throw new Error("Recording an outcome must not prompt for effort");
+      },
+    });
+    const findingId = findings.accountTakeover.findingId;
+    const target = ["--campaign", "campaign-1", "--finding", findingId];
+    const outcome = [
+      "review",
+      "outcome",
+      "--external",
+      ...target,
+      "--to",
+      "wordfence",
+      "--ticket",
+      "WF-2026-1234",
+      "--outcome",
+      "duplicate",
+      "--reason",
+      "same-root-ticket",
+      "--on",
+      "2026-10-20",
+      "--by",
+      "operator",
+    ];
+    const events = () => ledger.readAll({ campaignId: "campaign-1" }).length;
+    const before = events();
+    const early = await run(...outcome);
+    expect(early.code).not.toBe(0);
+    expect(early.stderr).toContain("Record the submission before its outcome");
+    expect(events()).toBe(before);
+    expect(
+      (
+        await run(
+          "review",
+          "submitted",
+          "--external",
+          ...target,
+          "--to",
+          "wordfence",
+          "--on",
+          "2026-10-07",
+          "--by",
+          "operator",
+          "--latest-version",
+          "3.3.1",
+        )
+      ).code,
+    ).toBe(0);
+    const beforeOutcome = events();
+    expect(await run(...outcome)).toEqual({
+      code: 0,
+      stdout: "external outcome duplicate recorded; Harness sends nothing",
+      stderr: "",
+    });
+    // The outcome adds itself only: no verification, scope or review event (invariant 3).
+    expect(events()).toBe(beforeOutcome + 1);
+    const recorded = ledger
+      .readAll({ campaignId: "campaign-1" })
+      .filter(({ event }) => event.type === "submission-outcome-recorded");
+    expect(recorded).toHaveLength(1);
+    // Ids, enum values, dates and digests only (invariant 8).
+    expect(Object.keys(recorded[0]!.event).sort()).toEqual(
+      [
+        "artifacts",
+        "campaignId",
+        "decidedOn",
+        "destination",
+        "findingId",
+        "identity",
+        "occurredAt",
+        "outcome",
+        "reasonCode",
+        "recordedBy",
+        "schemaVersion",
+        "snapshotDigest",
+        "ticket",
+        "type",
+      ].sort(),
+    );
+    expect(recorded[0]!.event).toMatchObject({
+      findingId,
+      destination: "wordfence",
+      ticket: "WF-2026-1234",
+      outcome: "duplicate",
+      reasonCode: "same-root-ticket",
+      decidedOn: "2026-10-20",
+      recordedBy: "operator",
+      artifacts: [],
+    });
+    const funnel = await run("ledger", "funnel", "--campaign", "campaign-1");
+    expect(funnel.stdout).toContain(
+      "external outcomes: accepted 0, rejected 0, duplicate 1, out-of-scope 0, none 0  reasons: same-root-ticket 1",
+    );
+  });
+
+  it("records the observed latest version and same-root keys with an external submission, or stops without one (#698)", async () => {
+    let observation: { version: string; observedAt: string } | null = null;
+    const { run, ledger, findings } = await recordedReviewState({
+      verified: false,
+      latestVersion: async () => observation,
+    });
+    const recorded = ledger
+      .readAll({ campaignId: "campaign-1", type: "finding-recorded" })
+      .map(({ event }) => event)
+      .find(
+        (event) =>
+          event.type === "finding-recorded" &&
+          event.findingId === findings.accountTakeover.findingId,
+      );
+    if (recorded?.type !== "finding-recorded") throw new Error("no finding");
+    // The same Finding as a current run records it, with its group keys.
+    const finding = {
+      ...recorded,
+      identity: "grouped-finding",
+      findingId: "grouped-finding",
+      group: { id: "group-1", keys: [`sha256:${"a".repeat(64)}`] },
+    };
+    await ledger.append(finding);
+    const args = [
+      "review",
+      "submitted",
+      "--external",
+      "--campaign",
+      "campaign-1",
+      "--finding",
+      finding.findingId,
+      "--to",
+      "wordfence",
+      "--on",
+      "2026-10-07",
+      "--by",
+      "operator",
+    ];
+    const receipts = () =>
+      ledger
+        .readAll({ campaignId: "campaign-1" })
+        .filter(({ event }) => event.type === "submission-recorded-externally");
+    const failed = await run(...args);
+    expect(failed.code).not.toBe(0);
+    expect(failed.stderr).toContain("pass --latest-version <version>");
+    expect(receipts()).toHaveLength(0);
+    observation = { version: "3.4.0", observedAt: "2026-10-07T01:00:00.000Z" };
+    expect((await run(...args)).code).toBe(0);
+    expect(receipts()).toHaveLength(1);
+    expect(receipts()[0]!.event).toMatchObject({
+      latestVersionAtSubmission: {
+        version: "3.4.0",
+        observedAt: "2026-10-07T01:00:00.000Z",
+        source: "wordpress-org",
+      },
+      sameRootKeys: [`sha256:${"a".repeat(64)}`],
+    });
+    const exported = await run(
+      "review",
+      "export",
+      "--campaign",
+      "campaign-1",
+      "--finding",
+      finding.findingId,
+    );
+    expect(
+      reviewExportV1Schema.parse(JSON.parse(exported.stdout)).review
+        .externalSubmissions,
+    ).toMatchObject([
+      {
+        ticket: null,
+        outcome: null,
+        reasonCode: null,
+        latestVersionAtSubmission: {
+          version: "3.4.0",
+          source: "wordpress-org",
+        },
+        sameRootKeys: [`sha256:${"a".repeat(64)}`],
+      },
+    ]);
+  });
+
+  it("reads a recorded ledger without the #698 fields as before", async () => {
+    const { run, ledger, findings, snapshotDigest } = await recordedReviewState(
+      { verified: false },
+    );
+    const findingId = findings.accountTakeover.findingId;
+    // Events as `review submitted --external` and the Harness path wrote them before #698.
+    for (const event of [
+      {
+        identity: "legacy-external",
+        type: "submission-recorded-externally",
+        findingId,
+        destination: "wordfence",
+        submittedOn: "2026-10-07",
+        recordedBy: "operator",
+      },
+      {
+        identity: "legacy-submission",
+        type: "submission-recorded",
+        findingId: findings.sqli.findingId,
+        candidateId: "candidate-legacy",
+      },
+      {
+        identity: "legacy-outcome",
+        type: "submission-outcome",
+        candidateId: "candidate-legacy",
+        outcome: "duplicate",
+      },
+    ] as const)
+      await ledger.append({
+        schemaVersion: 1,
+        campaignId: "campaign-1",
+        snapshotDigest,
+        occurredAt: "2026-10-09T00:00:00Z",
+        ...event,
+      });
+    const funnel = await run("ledger", "funnel", "--campaign", "campaign-1");
+    expect(funnel.stdout).not.toContain("external outcomes");
+    expect(funnel.stdout).toMatchInlineSnapshot(`
+      "campaign campaign-1
+      agent runs 1 (discovery attempts 1)  cost unavailable  summed agent time 2.0s
+      attempts: completed 1 (without candidate 0)  incomplete 0  provider-limited 0  unfinished 0
+      verification Lab failed 0
+      最終JSON到達 2 → 受理 2 / 保留 0 / parked 0 → raw 2 → verifier通過 0 → confirmed 0 / reproduced 0 / contradicted 0 / incomplete 0 → reviewed 0 → in-scope 0 → submitted 1 (external 1) → outcome 0
+      unkeyed findings 2
+      noncache input 900 token(s) (0 run(s) unavailable)  confirmed / 1M tokens 0.00  confirmed / agent wall hour 0.00
+      owner minutes / submission unavailable  opened findings / submission unavailable  manual reproduction agreement unavailable
+      outcomes: duplicate 1  reward $0.00
+      by category:
+        account-takeover: 最終JSON到達 1 → 受理 1 / 保留 0 / parked 0 → raw 1 → verifier通過 0 → confirmed 0 / reproduced 0 / contradicted 0 / incomplete 0 → reviewed 0 → in-scope 0 → submitted 1 (external 1) → outcome 0
+          owner minutes / submission unavailable  opened findings / submission unavailable  manual reproduction agreement unavailable
+        sqli: 最終JSON到達 1 → 受理 1 / 保留 0 / parked 0 → raw 1 → verifier通過 0 → confirmed 0 / reproduced 0 / contradicted 0 / incomplete 0 → reviewed 0 → in-scope 0 → submitted 0 → outcome 0
+          owner minutes / submission unavailable  opened findings / submission unavailable  manual reproduction agreement unavailable
+      by objective version:
+        wp2shell-bounty-v11: runs 1  最終JSON到達 2 → 受理 2 / 保留 0 / parked 0 → raw 2 → verifier通過 0 → confirmed 0 / reproduced 0 / contradicted 0 / incomplete 0 → reviewed 0 → in-scope 0 → submitted 1 (external 1) → outcome 0  noncache input 900 (0 run(s) unavailable)  confirmed / 1M tokens 0.00  confirmed / agent wall hour 0.00"
+    `);
+    expect((await run("review", "--campaign", "campaign-1")).stdout)
+      .toMatchInlineSnapshot(`
+        "not-verified  campaign-1  finding sha256:2e904700837603d50955d6486a636ab65fdbb3caaecc4a983ddfcc9e258cac66  sqli
+          verification none  snapshot sha256:5555555555555555555555555555555555555555555555555555555555555555
+          group sha256:ce43e4d7011b2598c583a221aea80b413926b64021a1291742e2200c2465c2a4  1 finding(s)  representative
+          decision: none
+          duplicate: none
+        incomplete by reason: none
+        precondition class: admin-configuration 0, common-usage 0, default 1, unknown 0
+        retry candidates by reason: none
+        contradicted: 0  unverified: 1"
+      `);
+    const exported = await run(
+      "review",
+      "export",
+      "--campaign",
+      "campaign-1",
+      "--finding",
+      findingId,
+    );
+    expect(
+      reviewExportV1Schema.parse(JSON.parse(exported.stdout)).review
+        .externalSubmissions,
+    ).toEqual([
+      {
+        destination: "wordfence",
+        submittedOn: "2026-10-07",
+        recordedBy: "operator",
+        recordedAt: "2026-10-09T00:00:00Z",
+        ticket: null,
+        outcome: null,
+        reasonCode: null,
+        latestVersionAtSubmission: null,
+        sameRootKeys: [],
+      },
+    ]);
   });
 
   it("records scope, a draft, its authorization, the human submission and the outcome as ledger events", async () => {
