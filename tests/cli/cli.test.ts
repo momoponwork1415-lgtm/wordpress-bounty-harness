@@ -468,6 +468,8 @@ async function harness(
         }
         if (request.args.includes("eval"))
           return { exitCode: 0, stdout: "\n", stderr: "" };
+        if (request.args.includes("--field=ID"))
+          return { exitCode: 0, stdout: "1\n", stderr: "" };
         if (request.args.includes("--porcelain"))
           return { exitCode: 0, stdout: "7", stderr: "" };
         return { exitCode: 0, stdout: "ok", stderr: "" };
