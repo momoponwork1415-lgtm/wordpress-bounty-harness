@@ -65,6 +65,13 @@ export const WORDPRESS_DISCOVERY_SKILLS = [
     ],
     status: "current",
   },
+  {
+    id: "wbh-trace-v1",
+    name: "wbh-trace",
+    digest:
+      "sha256:5f2e2eaf166b7a2f01270cff3982e1e6629a4a42396186bb1af7f0e117500597",
+    status: "current",
+  },
 ] as const satisfies readonly WordPressDiscoverySkillRecord[];
 
 export type WordPressDiscoverySkillId =

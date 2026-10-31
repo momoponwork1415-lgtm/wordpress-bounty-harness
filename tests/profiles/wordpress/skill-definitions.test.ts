@@ -60,12 +60,16 @@ describe("WordPress discovery skills", () => {
     expect(WORDPRESS_LAUNCHABLE_DISCOVERY_SKILL_IDS).toEqual([
       "wbh-recon-v1",
       "wbh-tools-v1",
+      "wbh-trace-v1",
     ]);
     const tools = wordPressDiscoverySkillRecord("wbh-tools-v1") as
       { files?: readonly unknown[] } | undefined;
     expect(tools?.files?.length).toBe(3);
     expect(wordPressDiscoverySkillRecord("wbh-recon-v1")?.name).toBe(
       "wbh-recon",
+    );
+    expect(wordPressDiscoverySkillRecord("wbh-trace-v1")?.name).toBe(
+      "wbh-trace",
     );
     expect(wordPressDiscoverySkillRecord("wbh-other-v1")).toBeUndefined();
   });
