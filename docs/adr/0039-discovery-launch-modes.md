@@ -262,3 +262,20 @@ Lead は v14-wide の水準に戻ったが、Finding は戻らなかった。10-
 - 本番 runner の `promptId` / `promptVariant` は v14-wide に戻す（runner の操作は Codex。#639）。ベンダー由来の層は目的文ではなく段 1b で落とす。
 - 測った数字: 上の表。採否の判断は所有者委任の AI が行った（ADR 0032 の 2026-10-18 節）。
 - 消し方: v18-wide の行を `candidate`・`mode: "wide"` に戻し、campaign 設定の `promptId` で名指しする（追記 13 の手順）。
+
+## 2026-10-31 追記 15: v18-wide を `candidate` に戻し、段 1 を通る Finding で測り直す（#639）
+
+追記 14 で v18-wide を `archived` にした根拠は、Finding の総数（0.20 対 0.76 / Trial）だった。ベンダー由来の Finding は段 1b で落とせるので、目的文で絞る必要はないと読んだ。2026-10-31 の本番再開の数字は、この読みを支えない。
+
+- 2026-10-28 の 20 Trial 計測（追記 14）: v18-wide は Finding 4 件（ベンダー feed 前提 0 / 4）、v14-wide は 16 件（13 / 16 がベンダー feed 前提）。ベンダー feed 以外の Finding は同数（2〜4 対 3）。Lead は 4.5 / Trial 対 3.0 / Trial。
+- 2026-10-31 の本番再開（Codex 5 並列、v14-wide と探索スキル recon / tools）: 最初の 14 Trial で Finding 15 件、Lead 52 件。段 1（`wbh-screen` v5、ADR 0038 追記 16）は 15 件すべてを `external-not-writable`（ベンダーが供給する内容を攻撃者が置ける、という前提）で除外した。要検証は 0 件。
+- 所有者は 2026-10-31 に、検証側は無人で Lab まで進め、人間は観測と提出だけを受け持つと決めた。段 1 で全件落ちる Finding を出し続けると、探索の計算資源と段 1 の手間を無駄に使う。比べるべきは Finding の総数ではなく、段 1 を通った Finding の数である。
+
+決定:
+
+- `wp2shell-bounty-v18-wide` を `wide` の `candidate`（`mode: "wide"`）に戻す。campaign 設定の `promptId` で名指ししたときだけ走る。
+- `wide` の `current` は v14-wide のまま変えない。`src/profiles/wordpress/policy/campaign.json` と `examples/campaign-wide-20.json` も変えない。比較候補の v15-wide は `candidate` のまま、`deep` の v11 も変えない。
+- 変えないもの: v18-wide の本文、fragment、digest（`sha256:1ffb15f4f3f7ad6de70e330e10fd24c31513e41d250c8e0d6885b760a0a5c1f3`）、契約 v4。v14-wide の行。追記 14 の 20 Trial の記録は消さず、照合に使い続ける。
+- 測り方: 現行の v14-wide と探索スキルの腕が 20 Trial に達した後、runner の campaign 設定の `promptId`（selection 設定の `promptVariant`）を v18-wide に替え、同じ選定帯・同じ子の上限・同じ契約 v4・同じ探索スキルで 20 Trial を回す。台帳の `configuration.promptVariant` で分け、段 1 を通った Finding の数（Trial あたりと、1 件以上出た Trial の割合）と Lead / Trial で比べる。runner の操作は Codex が行う。採否はその数字で決め、採る版を `current`、もう一方を `archived` にして `candidate` の行を残さない（追記 8）。
+- 測った数字: 上の 2 つ。採否の判断は所有者委任の AI が行う（ADR 0032 の 2026-10-18 節）。
+- 消し方: v18-wide の行を `archived` に戻し、`mode` を外す（追記 14 の状態）。

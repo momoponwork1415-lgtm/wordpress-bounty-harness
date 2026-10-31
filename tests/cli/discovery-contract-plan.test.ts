@@ -49,7 +49,7 @@ const MAIN_PLANS: Record<string, Plan> = {
   "wp2shell-bounty-v15-wide": inline("v4"),
   "wp2shell-bounty-v16-wide": inline("v5"),
   "wp2shell-bounty-v17-wide": inline("v5"),
-  // ADR 0039 addendum 13/14: the v16-wide body on v4, archived after its 20 Trials (Issue #639).
+  // ADR 0039 addendum 13-15: the v16-wide body on v4, a candidate again since 2026-10-31 (Issue #639).
   "wp2shell-bounty-v18-wide": inline("v4"),
   "wp2shell-whitebox-v1.7": inline("v2"),
 };

@@ -65,6 +65,8 @@ v18-wide / 契約 v4 の 20 Codex Trial（`prod-20261028-4`〜`7`、5 並列、�
 
 判定: 採らない。v18-wide は `archived` にし、本番は v14-wide / v4 に戻す（ADR 0039 の 2026-10-28 追記 14、#639）。
 
+2026-10-31 追記: v14-wide と探索スキルの最初の 14 Trial で Finding 15 件が出たが、段 1（`wbh-screen` v5）は 15 件すべてを `external-not-writable` で除外した。段 1 を通る Finding の数で測り直すため、v18-wide を名指しでだけ走る `candidate` に戻した。本文、digest、契約 v4 は変えない（ADR 0039 の 2026-10-31 追記 15）。
+
 ## 消し方
 
 v18-wide の行と `wp2shell-bounty-v18-wide.md` を消す。Trial が走った後なら `archived` にして残す。採る版が決まったら、採る版を `current`、もう一方を `archived` にし、`candidate` の行を残さない。
