@@ -338,7 +338,9 @@ else
 /**
  * verify next の一括（batch.json）は、Finding ごとの verificationId を先に決める。
  * Lab は一括で 1 台で、lab-provisioned は一括のどれかの verificationId に付く。
- * Lab が生きていて、自分の verificationId に結果がまだ無い Finding は検証中である。
+ * Lab が生きていて、まだ結果の無い構成員が残る一括は検証中である。観測待ちの準備
+ * （manual-observation-lab-ready）は一括の最後にまとめて出るので、先に結果の出た
+ * 構成員も一括が終わるまで検証中に数える。
  */
 const inflight = new Map<string, string>(); // findingId → labId
 function batchFiles(): string[] {
@@ -374,9 +376,11 @@ for (const path of batchFiles()) {
     .map((member) => labByVerification.get(member.verificationId))
     .find((id) => id !== undefined);
   if (labId === undefined || runningLabs?.has(labId) !== true) continue;
-  for (const member of members)
-    if (!finishedVerifications.has(member.verificationId))
-      inflight.set(member.findingId, labId);
+  if (
+    members.every((member) => finishedVerifications.has(member.verificationId))
+  )
+    continue;
+  for (const member of members) inflight.set(member.findingId, labId);
 }
 
 // ---------------------------------------------------------------- 振り分け

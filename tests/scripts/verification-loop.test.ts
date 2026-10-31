@@ -353,17 +353,12 @@ test("a Finding in a running verify next batch is verifying: its Lab takes one s
       }),
     );
   };
-  // 一括 1: 1 件目は観測待ち、2 件目はまだ検証中。Lab は同じ 1 台。
+  // 一括 1: 1 件目は観測待ちで終わり、2 件目は検証中。1 件目の準備は一括の最後に出る
+  // ので、一括が終わるまでは 1 件目も検証中に数える。Lab は同じ 1 台。
   recorded(id("1"));
   verified(id("1"), "b1", {
     status: "incomplete",
     reason: "awaiting-human-observation",
-  });
-  events.push({
-    type: "manual-observation-lab-ready",
-    findingId: id("1"),
-    verificationId: "b1",
-    occurredAt: at(10),
   });
   recorded(id("2"));
   decided(id("2"), "defer", "source-check-pass");
@@ -371,6 +366,19 @@ test("a Finding in a running verify next batch is verifying: its Lab takes one s
     [id("1"), "b1"],
     [id("2"), "b2"],
   ]);
+  // 一括 0: 全員に結果が出て準備も出た。観測待ちで、Lab は保持中として数える。
+  recorded(id("5"));
+  verified(id("5"), "b5", {
+    status: "incomplete",
+    reason: "awaiting-human-observation",
+  });
+  events.push({
+    type: "manual-observation-lab-ready",
+    findingId: id("5"),
+    verificationId: "b5",
+    occurredAt: at(10),
+  });
+  batch("zero", [[id("5"), "b5"]]);
   // 一括 2: Lab が立ち、結果はまだ無い。同じ単位の 4 には Lab を立てない。
   recorded(id("3"));
   decided(id("3"), "defer", "source-check-pass");
@@ -390,14 +398,14 @@ test("a Finding in a running verify next batch is verifying: its Lab takes one s
       { groupId: "u3", representative: "33333333", members: ["44444444"] },
     ]),
   );
-  const result = run(["--running-labs", "lab-b1,lab-b3"]);
-  expect(ids(result.next.awaitingHuman)).toEqual([id("1")]);
-  expect(ids(result.next.verifying)).toEqual([id("2"), id("3")]);
+  const result = run(["--running-labs", "lab-b1,lab-b3,lab-b5"]);
+  expect(ids(result.next.awaitingHuman)).toEqual([id("5")]);
+  expect(ids(result.next.verifying)).toEqual([id("1"), id("2"), id("3")]);
   expect(ids(result.next.labCovered)).toEqual([id("4")]);
   expect(result.next.lab).toEqual([]);
   expect(result.labs).toMatchObject({
-    held: ["lab-b1"],
-    active: ["lab-b3"],
-    free: 2,
+    held: ["lab-b5"],
+    active: ["lab-b1", "lab-b3"],
+    free: 1,
   });
 });
