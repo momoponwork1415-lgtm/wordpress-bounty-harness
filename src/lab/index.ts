@@ -7,7 +7,16 @@ export interface LabHandle {
   readonly snapshotDigest: string;
   readonly setupDigest: string;
   readonly endpoint: string;
+  /**
+   * The versioned base environment the profile applied before handing the Lab
+   * over (#699); its id and digest go to `lab-provisioned`, the values stay in
+   * the profile. Absent when the Lab has none (discovery Labs, older setups).
+   */
+  readonly baseline?: LabBaselineRef;
 }
+
+/** A profile's versioned base environment, by id and canonical digest (#699). */
+export type LabBaselineRef = { readonly id: string; readonly digest: string };
 
 /** The exception a Lab setup failed with, bounded before it enters Private Evidence (#284). */
 export type LabFailureException = {
@@ -36,6 +45,14 @@ export type ProvisionIncomplete = {
   readonly diagnostic?: string;
   /** Private, like `diagnostic`. */
   readonly exception?: LabFailureException;
+  /**
+   * `seed`: the Lab started but its base environment did not read back as
+   * applied (#699). Absent for a failure before or while starting the Lab.
+   */
+  readonly stage?: "seed";
+  /** The started Lab's id when `stage` is `seed`. */
+  readonly labId?: string;
+  readonly baseline?: LabBaselineRef;
 };
 
 export type ProvisionResult<Handle extends LabHandle> =
@@ -60,7 +77,7 @@ export async function storeLabDiagnostic(
   failureStage: "provision" | "seed" | "probe",
   failed: ProvisionIncomplete,
 ): Promise<string> {
-  const { status: _status, diagnostic, ...summary } = failed;
+  const { status: _status, stage: _stage, diagnostic, ...summary } = failed;
   return store.putFiles({
     "lab-diagnostic.json": canonicalJson({ failureStage, ...summary }),
     ...(diagnostic === undefined ? {} : { "stderr.txt": diagnostic }),

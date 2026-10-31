@@ -1,3 +1,7 @@
+import {
+  CURRENT_WORDPRESS_LAB_BASELINE_ID,
+  loadWordPressLabBaseline,
+} from "../profiles/wordpress/lab/baseline.js";
 import { readFile } from "node:fs/promises";
 
 import { z } from "zod";
@@ -537,6 +541,12 @@ export interface WordPressCampaignSession {
   readonly policy: () => Promise<WordPressSelectionPolicy>;
   readonly boundaries: WordPressCampaignBoundaries;
   readonly setupFor: (snapshot: Snapshot) => WordPressLabSetup;
+  /**
+   * #699: the setup of a verification Lab: the campaign's setup on the
+   * profile's current base environment. Review Labs rebuild it from the
+   * package; discovery Labs keep `setupFor`.
+   */
+  readonly verificationSetupFor: (snapshot: Snapshot) => WordPressLabSetup;
   /** Built once on use; administration and history access require no Verifier. */
   readonly verification: WordPressVerification;
 }
@@ -558,6 +568,9 @@ export async function openWordPressCampaignSession(
       ? parsed
       : { ...parsed, selectionPolicyPath: input.selectionPolicyPath };
   const boundaries = await options.boundaries(config, state);
+  const baseline = (
+    await loadWordPressLabBaseline(CURRENT_WORDPRESS_LAB_BASELINE_ID)
+  ).ref;
   let policy: Promise<WordPressSelectionPolicy> | undefined;
   let verification: WordPressVerification | undefined;
   return {
@@ -565,6 +578,10 @@ export async function openWordPressCampaignSession(
     policy: () => (policy ??= readWordPressCampaignPolicy(config)),
     boundaries,
     setupFor: setupFor(config),
+    verificationSetupFor: (snapshot) => ({
+      ...setupFor(config)(snapshot),
+      baseline: { id: baseline.id, digest: baseline.digest },
+    }),
     get verification() {
       return (verification ??= verificationFor(
         state,

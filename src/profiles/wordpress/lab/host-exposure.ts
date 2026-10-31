@@ -1,3 +1,8 @@
+import {
+  deniedToAttacker,
+  requestPath,
+  type WordPressDeniedPath,
+} from "./baseline.js";
 import type { WordPressLabSession } from "./lab-session.js";
 
 /**
@@ -20,6 +25,46 @@ const forward = (listenPort, host, port) =>
   }).listen(listenPort, "0.0.0.0");
 forward(80, process.env.WBH_WP_IP, 80);
 if (process.env.WBH_DB_IP) forward(3306, process.env.WBH_DB_IP, 3306);`;
+
+/**
+ * #699: the same gateway as the attacker position's host entrance. HTTP is
+ * parsed so a request whose path a baseline denies to a foreign origin gets
+ * 403 before it reaches the Lab; every other request goes on unchanged.
+ */
+export const FILTERING_HOST_GATEWAY_SCRIPT = `const net = require("net");
+const http = require("http");
+const rules = JSON.parse(process.env.WBH_DENIED_PATHS);
+const denied = ${deniedToAttacker.toString()};
+const requestPath = ${requestPath.toString()};
+http.createServer((request, response) => {
+  const path = requestPath(request.url);
+  if (path === null || denied(rules, path)) {
+    request.resume();
+    response.writeHead(403, { "content-type": "text/plain", connection: "close" });
+    response.end("Forbidden\\n");
+    return;
+  }
+  const upstream = http.request(
+    { host: process.env.WBH_WP_IP, port: 80, method: request.method, path: request.url, headers: request.headers },
+    (answer) => {
+      response.writeHead(answer.statusCode, answer.statusMessage, answer.headers);
+      answer.pipe(response);
+    },
+  );
+  upstream.on("error", () => {
+    if (!response.headersSent) response.writeHead(502);
+    response.end();
+  });
+  request.pipe(upstream);
+}).listen(80, "0.0.0.0");
+if (process.env.WBH_DB_IP) net.createServer((client) => {
+  const upstream = net.connect(3306, process.env.WBH_DB_IP);
+  const close = () => { client.destroy(); upstream.destroy(); };
+  client.on("error", close);
+  upstream.on("error", close);
+  client.pipe(upstream);
+  upstream.pipe(client);
+}).listen(3306, "0.0.0.0");`;
 
 export type HostExposure =
   | {
@@ -70,6 +115,8 @@ export async function exposeWordPressLabToHost(
     readonly databasePort?: number;
     /** `recorder` routes host HTTP through the Lab recorder so it is captured (#352). */
     readonly via?: "wordpress" | "recorder";
+    /** #699: paths the gateway answers with 403 (a foreign attacker origin). */
+    readonly deniedPaths?: readonly WordPressDeniedPath[];
   },
 ): Promise<HostExposure> {
   if (
@@ -106,10 +153,15 @@ export async function exposeWordPressLabToHost(
       "--env",
       `WBH_WP_IP=${input.via === "recorder" ? handle.recorderIp : handle.internalIp}`,
       ...(database === null ? [] : ["--env", `WBH_DB_IP=${database.ip}`]),
+      ...(input.deniedPaths === undefined
+        ? []
+        : ["--env", `WBH_DENIED_PATHS=${JSON.stringify(input.deniedPaths)}`]),
       "--entrypoint=node",
       input.image,
       "-e",
-      HOST_GATEWAY_SCRIPT,
+      input.deniedPaths === undefined
+        ? HOST_GATEWAY_SCRIPT
+        : FILTERING_HOST_GATEWAY_SCRIPT,
     ]);
     await lab.requireDocker(["network", "connect", lab.network, container]);
     await lab.requireDocker(["start", container]);

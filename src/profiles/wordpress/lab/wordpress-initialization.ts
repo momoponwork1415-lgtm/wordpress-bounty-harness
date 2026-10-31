@@ -4,6 +4,12 @@ import {
   type WordPressLabSession,
 } from "./lab-session.js";
 import type { PreparedWordPressLab } from "./provision-input.js";
+import {
+  applyWordPressLabBaseline,
+  readBackWordPressLabBaseline,
+  removeBundledPlugins,
+  WordPressLabBaselineMismatch,
+} from "./baseline.js";
 
 /** Profile-owned TranslatePress locale setup (`lab.translatePress`). Lab setup data, never discovery input. */
 function translatePressLocaleSetupScript(locale: string): string {
@@ -149,6 +155,21 @@ async function seedInitialPosts({
   }
 }
 
+/** Any failure while applying or reading back the baseline is the Lab's seed stage. */
+async function asBaselineFailure(step: () => Promise<void>): Promise<void> {
+  try {
+    await step();
+  } catch (error) {
+    if (error instanceof WordPressLabBaselineMismatch) throw error;
+    throw new WordPressLabBaselineMismatch([
+      `apply:${error instanceof Error ? error.message : String(error)}`.slice(
+        0,
+        200,
+      ),
+    ]);
+  }
+}
+
 /** Initialize the isolated WordPress site after all containers are healthy. */
 export async function initializeWordPress(
   lab: WordPressLabSession,
@@ -156,7 +177,19 @@ export async function initializeWordPress(
 ): Promise<void> {
   const input: WordPressInitialization = { lab, prepared };
   await installCore(input);
+  const { baseline } = prepared;
+  if (baseline !== undefined)
+    await asBaselineFailure(() => removeBundledPlugins(lab, baseline));
   await installPlugins(input);
+  // #699: the base environment goes on after the plugins and must read back.
+  if (baseline !== undefined)
+    await asBaselineFailure(async () => {
+      await applyWordPressLabBaseline(lab, baseline);
+      await readBackWordPressLabBaseline(lab, baseline, [
+        ...prepared.dependencies.map((source) => source.slug),
+        prepared.target.slug,
+      ]);
+    });
   await configureSecondaryLocale(input);
   await createAccounts(input);
   await seedInitialPosts(input);

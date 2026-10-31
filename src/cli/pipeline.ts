@@ -24,6 +24,7 @@ import type { Snapshot } from "../snapshot/index.js";
 import { storeTargetSkipDiagnostic } from "./skip-diagnostic.js";
 import {
   countAttemptsForReason,
+  MAX_FINDINGS_PER_LAB,
   shouldAutomaticallyRetryVerification,
   type HeldVerificationLab,
   type VerifiableFinding,
@@ -754,6 +755,15 @@ export type VerifyNextSummary = {
   readonly findingId: string;
   readonly verificationId: string;
   readonly status: VerificationResultV1["status"];
+  /**
+   * #699: every named Finding of a shared-Lab run, in order. `not-attempted`
+   * left nothing in the ledger and stays in the queue.
+   */
+  readonly batch?: readonly {
+    readonly findingId: string;
+    readonly verificationId: string;
+    readonly status: VerificationResultV1["status"] | "not-attempted";
+  }[];
 };
 
 /**
@@ -771,10 +781,18 @@ export async function verifyNextFinding<
 >(options: {
   readonly campaignId?: string;
   /**
-   * The one Finding an operator or skill named. They supply what the queue
-   * rules could not, so parking, a `reject` and the retry budget do not apply.
+   * The Findings an operator or skill named, in order. They supply what the
+   * queue rules could not, so parking, a `reject` and the retry budget do not
+   * apply. Two to five of one campaign and one Snapshot share one Lab (#699).
    */
-  readonly only?: { readonly findingId: string };
+  readonly only?: { readonly findingIds: readonly string[] };
+  /** #699: called once the named Findings passed their checks, before any Lab. */
+  readonly beforeBatch?: (
+    findings: readonly {
+      readonly findingId: string;
+      readonly verificationId: string;
+    }[],
+  ) => Promise<void>;
   readonly ledger: Ledger;
   readonly newId: () => string;
   readonly loadSnapshot: (digest: string) => Promise<Snapshot>;
@@ -807,23 +825,19 @@ export async function verifyNextFinding<
   }))
     if (event.type === "review-decided")
       decisions.set(`${event.campaignId}\0${event.findingId}`, event.decision);
-  for (const { event } of findings) {
-    if (
-      event.type !== "finding-recorded" ||
-      event.derivationKind === "fixed-version-control"
-    )
-      continue;
-    if (
-      options.only !== undefined &&
-      event.findingId !== options.only.findingId
-    )
-      continue;
-    if (
-      options.only === undefined &&
-      (parked.has(`${event.campaignId}\0${event.findingId}`) ||
-        decisions.get(`${event.campaignId}\0${event.findingId}`) === "reject")
-    )
-      continue;
+  const named = options.only?.findingIds;
+  if (named !== undefined) {
+    if (named.length < 1 || named.length > MAX_FINDINGS_PER_LAB)
+      throw new Error(
+        `verify next names at most ${MAX_FINDINGS_PER_LAB} Findings for one Lab`,
+      );
+    if (new Set(named).size !== named.length)
+      throw new Error("A Finding is named twice");
+  }
+  /** The next attempt's lineage from the Finding's own history. */
+  const lineage = (
+    event: Extract<LedgerEventV1, { type: "finding-recorded" }>,
+  ) => {
     const history = histories.filter(
       (record): record is VerificationRecord =>
         record.event.type === "verification-finished" &&
@@ -831,7 +845,92 @@ export async function verifyNextFinding<
         record.event.findingId === event.findingId &&
         record.event.basis === undefined,
     );
-    const latest = history.at(-1);
+    return { history, latest: history.at(-1) };
+  };
+  if (named !== undefined && named.length > 1) {
+    // #699: one Lab for the named Findings; every check comes before the Lab.
+    const recorded = named.map(
+      (findingId) =>
+        findings.find(
+          ({ event }) =>
+            event.type === "finding-recorded" &&
+            event.findingId === findingId &&
+            event.derivationKind !== "fixed-version-control",
+        )?.event,
+    );
+    const events = recorded.filter(
+      (event): event is Extract<LedgerEventV1, { type: "finding-recorded" }> =>
+        event?.type === "finding-recorded",
+    );
+    if (events.length !== named.length)
+      throw new Error("Every named Finding must be recorded");
+    const [first] = events;
+    if (
+      events.some(
+        (event) =>
+          event.campaignId !== first!.campaignId ||
+          event.snapshotDigest !== first!.snapshotDigest,
+      )
+    )
+      throw new Error(
+        "One Lab verifies only Findings of one campaign and the same Snapshot",
+      );
+    const items = events.map((event) => {
+      const { history, latest } = lineage(event);
+      return {
+        findingId: event.findingId,
+        verificationId: options.newId(),
+        attempt: Math.max(history.length + 1, (latest?.event.attempt ?? 0) + 1),
+        ...(latest === undefined
+          ? {}
+          : { retryOf: latest.event.verificationId }),
+      };
+    });
+    const snapshot = await options.loadSnapshot(first!.snapshotDigest);
+    const setup = options.setupFor(snapshot);
+    await options.beforeBatch?.(
+      items.map(({ findingId, verificationId }) => ({
+        findingId,
+        verificationId,
+      })),
+    );
+    const outcomes = await options.verification.verifyBatch({
+      campaignId: first!.campaignId,
+      items,
+      snapshot,
+      setup,
+      campaignLabSetupDigest: canonicalDigest(setup),
+      ...(options.hold === undefined ? {} : { hold: options.hold }),
+    });
+    const batch = outcomes.map((outcome) => ({
+      findingId: outcome.findingId,
+      verificationId: outcome.verificationId,
+      status:
+        outcome.status === "recorded" ? outcome.result.status : outcome.status,
+    }));
+    return {
+      campaignId: first!.campaignId,
+      findingId: batch[0]!.findingId,
+      verificationId: batch[0]!.verificationId,
+      status:
+        batch[0]!.status === "not-attempted" ? "incomplete" : batch[0]!.status,
+      batch,
+    };
+  }
+  for (const { event } of findings) {
+    if (
+      event.type !== "finding-recorded" ||
+      event.derivationKind === "fixed-version-control"
+    )
+      continue;
+    if (named !== undefined && event.findingId !== named[0]) continue;
+    if (
+      options.only === undefined &&
+      (parked.has(`${event.campaignId}\0${event.findingId}`) ||
+        decisions.get(`${event.campaignId}\0${event.findingId}`) === "reject")
+    )
+      continue;
+    const { history, latest } = lineage(event);
     // This version's latest attempt; its budget decides a retry.
     const previous = history
       .filter(

@@ -164,6 +164,8 @@ export const reviewExportV1Schema = z.strictObject({
       occurredAt: z.iso.datetime({ offset: true }),
       labSetupDigest: digest,
       scenario: z.strictObject({ id: z.string(), digest }).nullable(),
+      /** #699: the Lab's versioned base environment; null for a Lab without one. */
+      baseline: z.strictObject({ id: z.string(), digest }).nullable(),
       attempts: z.number().int().positive(),
       verifierRuns: z.array(
         z.strictObject({
@@ -903,6 +905,11 @@ export async function exportReviewBundle(options: {
               labEvent?.type === "lab-provisioned" &&
               labEvent.scenario !== undefined
                 ? labEvent.scenario
+                : null,
+            baseline:
+              labEvent?.type === "lab-provisioned" &&
+              labEvent.baseline !== undefined
+                ? labEvent.baseline
                 : null,
             attempts: verifications.length,
             verifierRuns: verifierRuns.map((event) => ({

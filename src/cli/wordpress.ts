@@ -1,3 +1,4 @@
+import { writeHandoffBatch } from "../profiles/wordpress/verification/handoff-verifier.js";
 import { createHash } from "node:crypto";
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -1826,14 +1827,17 @@ export function createWordPressCliProfile(
           ...(input.campaignId === undefined
             ? {}
             : { campaignId: input.campaignId }),
-          ...(input.findingId === undefined
+          ...(input.findingIds === undefined
             ? {}
-            : { only: { findingId: input.findingId } }),
+            : { only: { findingIds: input.findingIds } }),
           ledger: state.ledger,
           newId: state.newId,
           loadSnapshot: session.boundaries.loadSnapshot,
-          setupFor: session.setupFor,
+          setupFor: session.verificationSetupFor,
           verification: session.verification,
+          // #699: the order and directory of each Finding sharing the Lab.
+          beforeBatch: (findings) =>
+            writeHandoffBatch(input.handoff.directory, findings),
           // #600: a person observes in this Lab, which already holds the setup and the route.
           ...(observation === undefined
             ? {}
@@ -2096,7 +2100,7 @@ export function createWordPressCliProfile(
           },
           freeze: boundaries.freeze,
           loadSnapshot: boundaries.loadSnapshot,
-          setupFor: session.setupFor,
+          setupFor: session.verificationSetupFor,
           verification: session.verification,
         },
       });

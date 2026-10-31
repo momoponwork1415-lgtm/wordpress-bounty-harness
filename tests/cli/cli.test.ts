@@ -1,3 +1,4 @@
+import { baselineDockerAnswers } from "../support/lab-baseline-docker.js";
 import Database from "better-sqlite3";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -267,6 +268,7 @@ async function harness(
       return "wordpress.wp_options\t1\nwordpress.wp_users\t2\nwordpress.wp_usermeta\t3\n";
     return undefined;
   };
+  const baselineAnswers = baselineDockerAnswers();
   const lab = openWordPressLab({
     dockerExecutablePath: "/usr/bin/docker",
     ownerDirectory: join(root, "lab-owners"),
@@ -301,6 +303,8 @@ async function harness(
       async run(request) {
         docker.push(request);
         track(request.args);
+        const baseline = baselineAnswers(request.args);
+        if (baseline !== null) return baseline;
         // The Lab's observer browser (verification and the exploration Lab's /observe).
         if (
           request.args[0] === "run" &&
@@ -1965,6 +1969,23 @@ describe("harness CLI vertical slice", () => {
             event.purpose === "verification",
         ),
     ).toHaveLength(1);
+    // #699: the verification Lab names its base environment and setup digest.
+    expect(
+      ledger()
+        .read({ campaignId, type: "lab-provisioned" })
+        .map(({ event }) => event)
+        .find(
+          (event) =>
+            event.type === "lab-provisioned" &&
+            event.purpose === "verification",
+        ),
+    ).toMatchObject({
+      setupDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      baseline: {
+        id: "hosting-default-v1",
+        digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      },
+    });
     expect(labIdsDuringVerification).toHaveLength(1);
     expect(live.containers.size).toBe(0);
     expect(live.networks.size).toBe(0);

@@ -70,6 +70,10 @@ import {
 } from "./state-capture.js";
 import { closeWordPressSetup } from "./setup-close.js";
 import {
+  WordPressLabBaselineMismatch,
+  type WordPressDeniedPath,
+} from "./baseline.js";
+import {
   grantReadOnlyDatabaseAccess,
   initializeWordPress,
 } from "./wordpress-initialization.js";
@@ -95,6 +99,10 @@ export type {
   ParsedWordPressLabSetup,
 } from "./provision-input.js";
 export { WORDPRESS_CORE_IDENTITY } from "./provision-input.js";
+export {
+  CURRENT_WORDPRESS_LAB_BASELINE_ID,
+  type WordPressDeniedPath,
+} from "./baseline.js";
 export {
   wordpressExplorationObserveSchema,
   wordpressVisitPathSchema,
@@ -170,8 +178,17 @@ export interface WordPressLab extends LabProvisioner<
       readonly databasePort?: number;
       /** `recorder` captures the host's HTTP like a Verifier's (handoff, #352). */
       readonly via?: "wordpress" | "recorder";
+      /** #699: paths the host entrance answers with 403 (a foreign attacker origin). */
+      readonly deniedPaths?: readonly WordPressDeniedPath[];
     },
   ): Promise<HostExposure>;
+  /**
+   * #699: the attacker position's denied paths under the Lab's baseline; null
+   * when the Lab has no baseline or its attacker stands at a domestic origin.
+   */
+  attackerDeniedPaths(
+    handle: WordPressLabHandle,
+  ): readonly WordPressDeniedPath[] | null;
   /**
    * Exploration Labs only: recreates WordPress, its database and the site
    * volume and initializes them from the same setup, so the handle's setup
@@ -247,6 +264,11 @@ function issueHandle(input: {
     id: lab.id,
     snapshotDigest: snapshot.digest,
     setupDigest: canonicalDigest({ setup, images }),
+    ...(setup.baseline === undefined
+      ? {}
+      : {
+          baseline: { id: setup.baseline.id, digest: setup.baseline.digest },
+        }),
     ...(lab.administratorSecondaryLocale === undefined
       ? {}
       : { secondaryLocale: lab.administratorSecondaryLocale }),
@@ -313,6 +335,11 @@ export function openWordPressLab(options: {
   const owners = new Map<string, LabOwnerRecord>();
   /** What an exploration Lab was initialized from; a reset initializes from it again. */
   const preparedLabs = new Map<string, PreparedWordPressLab>();
+  /** #699: the baseline each live Lab was built with. */
+  const baselines = new Map<
+    string,
+    NonNullable<PreparedWordPressLab["baseline"]>
+  >();
   /** The one place a handle is checked: only the exact issued object reaches its Lab. */
   const sessionFor = (
     handle: WordPressLabHandle,
@@ -499,12 +526,37 @@ export function openWordPressLab(options: {
         owners.set(lab.id, owner);
         owner = undefined;
         if (lab.exploration) preparedLabs.set(lab.id, prepared);
+        if (prepared.baseline !== undefined)
+          baselines.set(lab.id, prepared.baseline);
         return { status: "ready", handle };
       } catch (error: unknown) {
         // A Lab that failed to provision is no longer used; whatever remains is a leftover.
         if (lab !== undefined) await lab.cleanup();
         await owner?.release();
+        const baselineFailed = error instanceof WordPressLabBaselineMismatch;
+        const setupBaseline = (
+          candidateSetup as { readonly baseline?: unknown } | undefined
+        )?.baseline;
         return {
+          ...(baselineFailed && lab !== undefined
+            ? {
+                stage: "seed" as const,
+                labId: lab.id,
+                ...(setupBaseline !== null &&
+                typeof setupBaseline === "object" &&
+                "id" in setupBaseline &&
+                "digest" in setupBaseline &&
+                typeof setupBaseline.id === "string" &&
+                typeof setupBaseline.digest === "string"
+                  ? {
+                      baseline: {
+                        id: setupBaseline.id,
+                        digest: setupBaseline.digest,
+                      },
+                    }
+                  : {}),
+              }
+            : {}),
           status: "incomplete",
           reason:
             error instanceof MissingWordPressExtension
@@ -515,7 +567,9 @@ export function openWordPressLab(options: {
             (error instanceof Error &&
               error.message === "The Lab image runs another WordPress version")
               ? error.message
-              : "Check source, pinned images, runsc, and Lab initialization; then provision a fresh Lab",
+              : baselineFailed
+                ? "The Lab baseline did not read back as applied; read the Lab diagnostic, then provision a fresh Lab"
+                : "Check source, pinned images, runsc, and Lab initialization; then provision a fresh Lab",
           ...(error instanceof LabDockerFailure && error.diagnostic
             ? { diagnostic: error.diagnostic }
             : {}),
@@ -559,6 +613,7 @@ export function openWordPressLab(options: {
           };
         active.delete(lab.id);
         preparedLabs.delete(lab.id);
+        baselines.delete(lab.id);
         return { status: "removed" };
       } finally {
         // The owner is done with this Lab; what a failed cleanup left is a leftover.
@@ -651,7 +706,17 @@ export function openWordPressLab(options: {
           ? {}
           : { databasePort: input.databasePort }),
         ...(input.via === undefined ? {} : { via: input.via }),
+        ...(input.deniedPaths === undefined
+          ? {}
+          : { deniedPaths: input.deniedPaths }),
       });
+    },
+    attackerDeniedPaths(handle) {
+      const lab = sessionFor(handle);
+      const baseline = lab === undefined ? undefined : baselines.get(lab.id);
+      return baseline === undefined || baseline.attacker.origin !== "foreign"
+        ? null
+        : baseline.attacker.deniedPaths;
     },
     async withdrawFromHost(handle) {
       const lab = sessionFor(handle);

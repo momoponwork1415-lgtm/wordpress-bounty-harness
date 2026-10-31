@@ -335,6 +335,14 @@ export interface HeldVerificationLabSession {
   };
   /** The digest `review observe --receipt` takes, and where its file is. */
   readonly receipt: { readonly digest: string; readonly path: string };
+  /**
+   * #699: the other attempts this Lab served that wait for a person, each
+   * with its own receipt. Absent when the Lab holds one attempt.
+   */
+  readonly others?: readonly {
+    readonly ref: HeldVerificationLabSession["ref"];
+    readonly receipt: { readonly digest: string; readonly path: string };
+  }[];
   /** The Lab is removed then unless `lab down` or an interrupt comes first. */
   readonly expiresAt: string;
 }
@@ -366,12 +374,21 @@ export async function holdWordPressVerificationLab(input: {
   const { held, lab } = input;
   const handle = held.lab;
   const notHeld = (reason: string) => ({ status: "not-held", reason }) as const;
-  const manual = await observedReviewLabPackage({
-    ledger: input.ledger,
-    store: input.store,
-    ref: held.ref,
-  });
-  if (manual === null)
+  // #699: every attempt of a shared Lab with a captured package gets its own receipt.
+  const packages: {
+    readonly ref: HeldVerificationLab<WordPressLabHandle>["ref"];
+    readonly packageDigest: string;
+  }[] = [];
+  for (const ref of held.batch ?? [held.ref]) {
+    const manual = await observedReviewLabPackage({
+      ledger: input.ledger,
+      store: input.store,
+      ref,
+    });
+    if (manual !== null)
+      packages.push({ ref, packageDigest: manual.packageDigest });
+  }
+  if (packages.length === 0)
     return notHeld("the attempt has no captured observation package");
   const administrator = lab.reviewAdministrator(handle);
   if (administrator === null)
@@ -407,21 +424,32 @@ export async function holdWordPressVerificationLab(input: {
       ),
       { flag: "wx", mode: 0o600 },
     );
-    const receipt = await recordManualObservationLabReady({
-      ledger: input.ledger,
-      store: input.store,
-      ref: held.ref,
-      packageDigest: manual.packageDigest,
-      sessionLabel: handle.networkName,
-      labKind: "verification",
-      clock: input.clock,
-    });
+    const receipts = [];
+    for (const { ref, packageDigest } of packages) {
+      const digest = await recordManualObservationLabReady({
+        ledger: input.ledger,
+        store: input.store,
+        ref,
+        packageDigest,
+        sessionLabel: handle.networkName,
+        labKind: "verification",
+        clock: input.clock,
+      });
+      receipts.push({
+        ref: {
+          campaignId: ref.campaignId,
+          findingId: ref.findingId,
+          verificationId: ref.verificationId,
+        },
+        receipt: {
+          digest,
+          path: `${input.store.contentPath(digest)}/${MANUAL_LAB_RECEIPT_FILE}`,
+        },
+      });
+    }
+    const [first, ...others] = receipts;
     await input.present({
-      ref: {
-        campaignId: held.ref.campaignId,
-        findingId: held.ref.findingId,
-        verificationId: held.ref.verificationId,
-      },
+      ref: first!.ref,
       labId: handle.id,
       endpoint: handle.endpoint,
       attackerAccounts: handle.attackerAccounts,
@@ -431,10 +459,8 @@ export async function holdWordPressVerificationLab(input: {
         hostHeader: new URL(handle.endpoint).host,
         port: exposed.httpPort,
       },
-      receipt: {
-        digest: receipt,
-        path: `${input.store.contentPath(receipt)}/${MANUAL_LAB_RECEIPT_FILE}`,
-      },
+      receipt: first!.receipt,
+      ...(others.length === 0 ? {} : { others }),
       expiresAt: new Date(startedAt.getTime() + input.wallMs).toISOString(),
     });
     return { status: "held" };

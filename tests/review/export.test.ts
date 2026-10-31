@@ -381,6 +381,8 @@ describe("review export", () => {
       evidenceCapture: "harness-captured",
       labSetupDigest: labSetup,
       scenario: { id: "ordinary-blog", digest: scenarioDigest },
+      // #699: a Lab recorded before the baseline has none.
+      baseline: null,
       attempts: 1,
       verifierRuns: [],
     });

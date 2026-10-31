@@ -7,7 +7,10 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { admitWordPressFinding } from "../../../src/profiles/wordpress/discovery/finding.js";
-import type { WordPressLabHandle } from "../../../src/profiles/wordpress/lab/index.js";
+import type {
+  WordPressDeniedPath,
+  WordPressLabHandle,
+} from "../../../src/profiles/wordpress/lab/index.js";
 import {
   HandoffVerifier,
   WBH_VERIFY_SKILL_ID,
@@ -55,6 +58,8 @@ async function fixture(options: {
   readonly wallTimeMs?: number;
   readonly clock?: () => Date;
   readonly restartObservation?: () => Promise<boolean>;
+  /** #699: the baseline's foreign-origin paths; absent, the Lab has none. */
+  readonly deniedPaths?: readonly WordPressDeniedPath[];
 }) {
   const root = await mkdtemp(join(tmpdir(), "wbh-handoff-verifier-"));
   roots.push(root);
@@ -114,6 +119,7 @@ async function fixture(options: {
         options.administrator === null
           ? null
           : { username: "harness-admin", password: "admin-pass" },
+      attackerDeniedPaths: () => options.deniedPaths ?? null,
     },
     ports: { http: 8080, database: 3307 },
     reviewExport: async () => '{"schema":"review-export/v1"}',
@@ -306,6 +312,26 @@ describe("HandoffVerifier (#352)", () => {
     expect(result.receipt.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(f.restarts()).toBe(1);
     expect(f.calls.at(-1)).toEqual(["withdraw"]);
+  });
+
+  it("republishes the Lab on the same port with the foreign origin's denied paths after setup (#699)", async () => {
+    const deniedPaths = [
+      { match: "exact", path: "/wp-login.php" },
+    ] as const satisfies readonly WordPressDeniedPath[];
+    const f = await fixture({ deniedPaths });
+    const pending = f.transport.run(f.run);
+    await until(() => f.exists("lab.json"));
+    // Setup runs as the administrator without the attacker's restrictions.
+    expect(f.calls).toEqual([["expose", { httpPort: 8080, via: "recorder" }]]);
+    await f.place("setup-done");
+    await until(() => f.exists("attack.json"));
+    expect(f.calls).toEqual([
+      ["expose", { httpPort: 8080, via: "recorder" }],
+      ["withdraw"],
+      ["expose", { httpPort: 8080, via: "recorder", deniedPaths }],
+    ]);
+    await f.place("abort", "handoff-interrupted");
+    await pending;
   });
 
   it.each(["subscriber", "customer"] as const)(
