@@ -20,7 +20,7 @@
 | 選定方針 | `~/.config/wordpress-bounty-harness/selection-production-2026-10-19.json`（repo の `selection.json` と同じ内容で `maximumHistoryAgeDays` だけ 14。PR #383） |
 | prompt | `wp2shell-bounty-v10`、Lab なし（`discovery.lab: none`）、wall 120 分、Root ＋ 子最大 4 |
 | 並列 | 対象 4 件まで同時 |
-| mirror | 2026-10-14T01:39Z 時点。更新は cron 19:10 UTC、鍵は `~/.config/wordfence/env`（中身を読まない、表示しない） |
+| mirror | 2026-10-14T01:39Z 時点。更新は cron 19:10 JST（10:10 UTC。crontab はホストの Asia/Tokyo で動く）、鍵は `~/.config/wordfence/env`（中身を読まない、表示しない） |
 | 標準出力 | `~/.local/state/wordpress-bounty-harness/continuous-20261019.out` |
 
 起動時に、前の方針で凍結した未消費の batch（または memo の campaign の batch）が今の方針 digest と合わなければ、runner は `selection-batch-discarded`（reason `policy-changed`）を台帳に書き、ログに `selection-batch-discarded batch=<id>` を 1 行出して、待たずに新しい選定へ進む（#302）。破棄した batch の対象は Trial を始めていないので、次の選定でまた選ばれうる。
