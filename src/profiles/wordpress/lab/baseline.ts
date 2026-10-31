@@ -14,16 +14,24 @@ import type { WordPressLabSession } from "./lab-session.js";
  * recorded digest can still be rebuilt. The Harness never reads a verdict
  * from the baseline: it only applies the values and reads them back.
  */
-export const CURRENT_WORDPRESS_LAB_BASELINE_ID = "hosting-default-v1";
+export const CURRENT_WORDPRESS_LAB_BASELINE_ID = "hosting-default-v2";
 
-const KNOWN_BASELINES = new Set(["hosting-default-v1"]);
+const KNOWN_BASELINES = new Set(["hosting-default-v1", "hosting-default-v2"]);
 
 const setting = z.discriminatedUnion("target", [
-  z.strictObject({
-    target: z.literal("wordpress"),
-    name: z.literal("bundled-plugins"),
-    value: z.literal("absent"),
-  }),
+  z.discriminatedUnion("name", [
+    z.strictObject({
+      target: z.literal("wordpress"),
+      name: z.literal("bundled-plugins"),
+      value: z.literal("absent"),
+    }),
+    /** #706: set once at site creation, as a host's quick install does. */
+    z.strictObject({
+      target: z.literal("wordpress"),
+      name: z.literal("permalink-structure"),
+      value: z.string().regex(/^\/[A-Za-z0-9%_/-]{0,99}$/),
+    }),
+  ]),
   /** `null`: the constant stays undefined, so WordPress keeps its default. */
   z.strictObject({
     target: z.literal("wp-config"),
@@ -45,10 +53,14 @@ const setting = z.discriminatedUnion("target", [
     name: z.enum(["directories", "files"]),
     value: z.string().regex(/^[0-7]{3}$/),
   }),
+  /**
+   * `enabled`: `.htaccess` exists. `wordpress-rewrite` (#706): it also holds
+   * WordPress's standard rewrite block.
+   */
   z.strictObject({
     target: z.literal("web-server"),
     name: z.literal("htaccess"),
-    value: z.literal("enabled"),
+    value: z.enum(["enabled", "wordpress-rewrite"]),
   }),
 ]);
 const pathRule = z.discriminatedUnion("match", [
@@ -152,6 +164,23 @@ export class WordPressLabBaselineMismatch extends Error {
 
 const PHP_INI_FILE = "/usr/local/etc/php/conf.d/zz-wbh-lab-baseline.ini";
 const SITE = "/var/www/html";
+/**
+ * The block WordPress writes for a site at the web root (`WP_Rewrite::
+ * mod_rewrite_rules`), the same lines the WordPress image ships (#706).
+ */
+const WORDPRESS_REWRITE_BLOCK = [
+  "# BEGIN WordPress",
+  "",
+  "RewriteEngine On",
+  "RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]",
+  "RewriteBase /",
+  "RewriteRule ^index\\.php$ - [L]",
+  "RewriteCond %{REQUEST_FILENAME} !-f",
+  "RewriteCond %{REQUEST_FILENAME} !-d",
+  "RewriteRule . /index.php [L]",
+  "",
+  "# END WordPress",
+];
 const iniValue = (value: boolean | string) =>
   typeof value === "boolean" ? (value ? "On" : "Off") : `"${value}"`;
 const settingName = (item: WordPressLabBaseline["settings"][number]) =>
@@ -200,6 +229,28 @@ export async function applyWordPressLabBaseline(
       "graceful",
     ]);
   }
+  for (const item of baseline.settings)
+    if (item.target === "wordpress" && item.name === "permalink-structure")
+      await lab.wp(["rewrite", "structure", item.value]);
+  if (
+    baseline.settings.some(
+      (item) =>
+        item.target === "web-server" && item.value === "wordpress-rewrite",
+    )
+  )
+    // Written only when no block is there, so blocks plugins added stay; the
+    // block travels as an environment variable, never as shell source.
+    await lab.requireDocker([
+      "exec",
+      "--user=root",
+      "--env",
+      `WBH_BASELINE_HTACCESS=${WORDPRESS_REWRITE_BLOCK.join("\n")}\n`,
+      lab.wordpress,
+      "sh",
+      "-c",
+      `grep -q '^# BEGIN WordPress' ${SITE}/.htaccess 2>/dev/null || { printf '%s' "$WBH_BASELINE_HTACCESS" >> ${SITE}/.htaccess && chown www-data:www-data ${SITE}/.htaccess; }`,
+    ]);
+  // File modes go last so a file written above gets them too.
   for (const item of baseline.settings)
     if (item.target === "file-mode")
       await lab.requireDocker([
@@ -274,6 +325,13 @@ export async function readBackWordPressLabBaseline(
   for (const item of baseline.settings) {
     switch (item.target) {
       case "wordpress": {
+        if (item.name === "permalink-structure") {
+          const structure = (
+            await lab.wp(["option", "get", "permalink_structure"])
+          ).stdout.trim();
+          if (structure !== item.value) differs.push(settingName(item));
+          break;
+        }
         const installed = (
           await lab.wp(["plugin", "list", "--field=name"])
         ).stdout
@@ -332,7 +390,30 @@ export async function readBackWordPressLabBaseline(
           "-f",
           `${SITE}/.htaccess`,
         ]);
-        if (present.exitCode !== 0) differs.push(settingName(item));
+        if (present.exitCode !== 0) {
+          differs.push(settingName(item));
+          break;
+        }
+        if (item.value === "wordpress-rewrite") {
+          const missing = z
+            .array(z.string())
+            .parse(
+              JSON.parse(
+                (
+                  await lab.requireDocker([
+                    "exec",
+                    "--env",
+                    `WBH_BASELINE_HTACCESS_LINES=${JSON.stringify(WORDPRESS_REWRITE_BLOCK.filter((line) => line !== ""))}`,
+                    lab.wordpress,
+                    "php",
+                    "-r",
+                    `$lines = @file("${SITE}/.htaccess", FILE_IGNORE_NEW_LINES); echo json_encode(array_values(array_diff(json_decode((string) getenv("WBH_BASELINE_HTACCESS_LINES"), true), array_map("trim", $lines === false ? [] : $lines))));`,
+                  ])
+                ).stdout.trim(),
+              ) as unknown,
+            );
+          if (missing.length > 0) differs.push(`${settingName(item)}:rewrite`);
+        }
         break;
       }
     }

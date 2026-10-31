@@ -1,6 +1,7 @@
 /**
  * #699: answers a fake Docker host gives the Lab baseline's read-back
- * commands, as a WordPress image that holds `hosting-default-v1` would. It
+ * commands, as a WordPress image that holds `hosting-default-v1` or `-v2`
+ * (#706) would. It
  * tracks the plugins WP-CLI activated so the bundled-plugin check reads them
  * back. `drift` names settings that read back wrong.
  */
@@ -19,6 +20,8 @@ export function baselineDockerAnswers(
       if (command[0] === "plugin" && command[1] === "activate")
         plugins.add(command[2] ?? "");
       if (command[0] === "plugin" && command[1] === "delete") plugins.clear();
+      if (command[0] === "option" && command[2] === "permalink_structure")
+        return ok(drift.has("permalink-structure") ? "\n" : "/%postname%/\n");
       if (command[0] === "plugin" && command[1] === "list")
         return ok(
           [...plugins, ...(drift.has("bundled-plugins") ? ["akismet"] : [])]
@@ -51,6 +54,8 @@ export function baselineDockerAnswers(
           ),
         }),
       );
+    if (env(args, "WBH_BASELINE_HTACCESS_LINES") !== undefined)
+      return ok(drift.has("rewrite-block") ? '["# BEGIN WordPress"]' : "[]");
     if (args[0] === "exec" && args.includes("find") && args.includes("!"))
       return ok(drift.has("file-mode") ? "/var/www/html/stray\n" : "");
     if (args[0] === "exec" && args.includes("test"))
