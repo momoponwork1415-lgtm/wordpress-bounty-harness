@@ -12,7 +12,6 @@ import {
   type OwnerRecord,
 } from "../infrastructure/lab-owner-record.js";
 import { claudeModelSchema } from "./agent-runtime-profile.js";
-import { PARTITIONED_ROLE_MEMORY_PROFILES } from "./one-shot-run.js";
 import { createGrantTls } from "./grant-tls.js";
 import type { ProviderApiProtocol } from "./provider-credential-proxy.js";
 import {
@@ -42,8 +41,7 @@ export const DISCOVERY_LEFTOVER_PATTERNS = {
 export const EGRESS_BROKER_LEFTOVER_PATTERNS = DISCOVERY_LEFTOVER_PATTERNS;
 
 /** Memory ceiling of one per-run broker container. */
-export const EGRESS_BROKER_MEMORY_MIB =
-  PARTITIONED_ROLE_MEMORY_PROFILES.standard.brokerMiB;
+export const EGRESS_BROKER_MEMORY_MIB = 512;
 
 const digestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/u);
 const modelSchema = z.enum([
@@ -265,8 +263,6 @@ export interface ProviderCredentialEgressBrokerOptions {
   readonly credentialKind?: "api-key" | "chatgpt-login" | "anthropic-oauth";
   readonly scratchRootDirectory: string;
   readonly proxyBundleDirectory: string;
-  /** Opt-in one-shot role cap; omitted for the historical broker limit. */
-  readonly memoryMiB?: number;
   readonly providerNetworkName?: string;
   readonly clock?: () => Date;
   readonly randomUuid?: () => string;
@@ -365,14 +361,6 @@ function validateBrokerOptions(
   }
   pinnedImageSchema.parse(options.brokerImage);
   dockerNameSchema.parse(options.providerNetworkName ?? "bridge");
-  if (
-    options.memoryMiB !== undefined &&
-    (!Number.isSafeInteger(options.memoryMiB) ||
-      options.memoryMiB <
-        PARTITIONED_ROLE_MEMORY_PROFILES["compact-768-256"].brokerMiB ||
-      options.memoryMiB > EGRESS_BROKER_MEMORY_MIB)
-  )
-    throw new Error("Provider credential broker memory limit is invalid");
 }
 
 function nonRootHostUser(): string {
@@ -737,7 +725,7 @@ export function createProviderCredentialEgressBroker(
               "--cap-drop=ALL",
               "--security-opt=no-new-privileges",
               "--pids-limit=64",
-              `--memory=${options.memoryMiB ?? EGRESS_BROKER_MEMORY_MIB}m`,
+              `--memory=${EGRESS_BROKER_MEMORY_MIB}m`,
               "--cpus=1",
               "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=32m",
               "--volume",

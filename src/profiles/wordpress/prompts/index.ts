@@ -18,19 +18,8 @@ interface WordPressPromptRecord {
   readonly status: "current" | "candidate" | "archived";
 }
 
-/**
- * The launch mode a discovery objective is written for (ADR 0039). `deep` is
- * the single cooperative Trial with the 60-minute active floor; `wide` is the
- * short bounded pass without a floor; `partitioned` (ADR 0042) is the Trial
- * of one enumerator and one tracer per partition, without a Root, whose
- * objective every tracer receives. Archived rows carry no mode.
- */
-export type WordPressDiscoveryMode = "deep" | "wide" | "partitioned";
-export const WORDPRESS_DISCOVERY_MODES = [
-  "deep",
-  "wide",
-  "partitioned",
-] as const;
+export type WordPressDiscoveryMode = "deep" | "wide";
+export const WORDPRESS_DISCOVERY_MODES = ["deep", "wide"] as const;
 
 /** Generated Finding / Lead contract versions the Harness appends (ADR 0019). */
 export type WordPressOutputContractVersion = "v1" | "v2" | "v4" | "v5";
@@ -431,26 +420,6 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     ],
   },
   {
-    id: "objective-partition-v1",
-    digest:
-      "sha256:0d0ab26416115827de2f6fb066531164d51955ea773f12c631cd74cbe5772916",
-    outputContract: "v4",
-    status: "current",
-    mode: "partitioned",
-    // ADR 0042: the objective of every tracer of a partitioned Trial. Only
-    // paragraphs the current objectives already carry: the task statement
-    // with the human-observation sentence (v15-wide), the first-principles
-    // paragraph and the sources paragraph. Strategy, coordination and
-    // persistence are absent: the tracer's partition is its strategy, and it
-    // has nobody to coordinate with. The Root-addressed contract paragraph
-    // is dropped by the solo rendering, not by this row.
-    fragments: [
-      { section: "objective", file: "task-v15" },
-      { section: "objective", file: "first-principles-v11" },
-      SOURCES,
-    ],
-  },
-  {
     id: "wp2shell-whitebox-v1.7",
     digest:
       "sha256:3318ae6a06290ffbf306533f66357eb41401c1c48ccc7de7cc4e991ac3e07afb",
@@ -522,7 +491,6 @@ export const WORDPRESS_DISCOVERY_PROMPT_IDS: readonly WordPressDiscoveryPromptId
 export const WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS = {
   deep: currentOf(WORDPRESS_DISCOVERY_PROMPTS, "deep").id,
   wide: currentOf(WORDPRESS_DISCOVERY_PROMPTS, "wide").id,
-  partitioned: currentOf(WORDPRESS_DISCOVERY_PROMPTS, "partitioned").id,
 } as const satisfies Record<WordPressDiscoveryMode, WordPressDiscoveryPromptId>;
 
 /**

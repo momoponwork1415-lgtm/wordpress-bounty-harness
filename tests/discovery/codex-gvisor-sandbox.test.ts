@@ -6,7 +6,6 @@ import {
   readFile,
   rm,
   stat,
-  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -26,7 +25,7 @@ const digest = `sha256:${"a".repeat(64)}`;
 const sandboxUuid = "0f1e2d3c-4b5a-4987-a654-3210fedcba98";
 
 describe("gVisor Codex sandbox", () => {
-  it.each([false, true])("enforces the wall (%s)", async (oneShot) => {
+  it("enforces the wall", async () => {
     const root = await mkdtemp(join(tmpdir(), "gvisor-wall-"));
     try {
       const source = join(root, "source");
@@ -47,7 +46,7 @@ describe("gVisor Codex sandbox", () => {
         scratchRootDirectory: root,
         ownerDirectory: join(root, "discovery-owners"),
         maxOutputBytes: 1024 * 1024,
-        timeoutMs: oneShot ? 60_000 : 30,
+        timeoutMs: 30,
         randomUuid: () => sandboxUuid,
         runDocker: async (...call) => {
           const [args] = call;
@@ -90,9 +89,6 @@ describe("gVisor Codex sandbox", () => {
         sandbox.execute({
           executable: "codex",
           args: ["exec", "--json", "-c", "features.multi_agent=false"],
-          ...(oneShot
-            ? { oneShot: { inputFiles: [], toolFiles: [], wallMs: 30 } }
-            : {}),
           stdin: "Inspect the source.",
           supportFiles: [
             { path: "/opt/codex-support/report-schema.json", content: "{}" },
@@ -138,139 +134,6 @@ describe("gVisor Codex sandbox", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
-
-  it.each([
-    [false, undefined],
-    [false, 768],
-    [true, undefined],
-    [true, 768],
-  ] as const)(
-    "mounts one-shot files read-only and captures bounded JSON (link: %s, memory: %s)",
-    async (link, oneShotMemoryMiB) => {
-      const root = await mkdtemp(join(tmpdir(), "codex-one-shot-"));
-      try {
-        const source = join(root, "source");
-        await mkdir(source);
-        await writeFile(join(source, "main.txt"), "fixed source");
-        const expectedTree = await measureCanonicalSourceTree(source, {
-          maxEntries: 10,
-          maxBytes: 1024,
-        });
-        const mounts: string[] = [];
-        const sandbox = new GvisorCodexSandbox({
-          dockerExecutablePath: "/usr/bin/docker",
-          image: `node@${digest}`,
-          bundledCatalogPath: "/opt/codex/model-catalog.json",
-          scratchRootDirectory: root,
-          ownerDirectory: join(root, "owners"),
-          maxOutputBytes: 1024 * 1024,
-          memoryMiB: 10240,
-          ...(oneShotMemoryMiB === undefined ? {} : { oneShotMemoryMiB }),
-          timeoutMs: 60_000,
-          runDocker: async (args, _stdin, timeout) => {
-            if (args.includes("--network=internal-run")) {
-              expect(timeout).toBe(1234);
-              expect(args).toContain(`--memory=${oneShotMemoryMiB ?? 4096}m`);
-              expect(args).toContain("--runtime=runsc");
-              expect(
-                args.find((arg) => arg.includes("dst=/workspace/main")),
-              ).toMatch(/,readonly$/);
-              const mounted = (path: string, readonly: boolean) => {
-                const mount = args.find((arg) => arg.includes(`dst=${path}`))!;
-                expect(mount.endsWith(",readonly")).toBe(readonly);
-                const directory = /src=([^,]+)/.exec(mount)![1]!;
-                mounts.push(directory);
-                return directory;
-              };
-              expect(
-                await readFile(
-                  join(mounted("/workspace/input", true), "partition.json"),
-                  "utf8",
-                ),
-              ).toBe("{}");
-              const tools = mounted("/workspace/tools", true);
-              expect(await readFile(join(tools, "tool.sh"), "utf8")).toBe(
-                "exit 0",
-              );
-              expect((await stat(join(tools, "tool.sh"))).mode & 0o777).toBe(
-                0o500,
-              );
-              const output = mounted("/workspace/output", false);
-              const research = mounted("/workspace/research", false);
-              await writeFile(join(research, "note.md"), "isolated note");
-              await writeFile(join(output, "inventory.json"), "[]");
-              await writeFile(join(output, "ignored.txt"), "ignored");
-              if (link)
-                await symlink(
-                  join(source, "main.txt"),
-                  join(output, "linked.json"),
-                );
-            }
-            return {
-              kind: "exited",
-              exitCode: 0,
-              stdout: args.includes("--version")
-                ? "codex-cli 0.161.0\n"
-                : args.includes("--entrypoint=sha256sum")
-                  ? `${"b".repeat(64)}  catalog\n`
-                  : "",
-              stderr: "",
-            };
-          },
-        });
-        const result = await sandbox.execute({
-          executable: "codex",
-          args: ["exec", "--json", "-c", "features.multi_agent=false"],
-          stdin: "fixed role",
-          oneShot: {
-            inputFiles: [{ name: "partition.json", content: "{}" }],
-            toolFiles: [{ name: "tool.sh", content: Buffer.from("exit 0") }],
-            wallMs: 1234,
-          },
-          supportFiles: [
-            { path: "/opt/codex-support/report-schema.json", content: "{}" },
-          ],
-          grant: {
-            baseUrl: "http://172.28.0.2:8080",
-            authorization: `Bearer ${randomBytes(32).toString("hex")}`,
-            dockerNetworkName: "internal-run",
-            model: "gpt-6-sol",
-            protocol: "responses",
-            expiresAt: "2026-10-28T07:30:00Z",
-          },
-          sourceMount: {
-            directory: source,
-            path: "/workspace/main",
-            mode: "ro",
-            expectedTree,
-          },
-          researchMount: { path: "/workspace/research", mode: "rw" },
-        });
-        if (link) expect(result.outputFailure).toBe("capture-failed");
-        else
-          expect(result.outputFiles).toEqual([
-            { name: "inventory.json", content: "[]" },
-          ]);
-        expect(
-          JSON.parse(result.research?.archive.toString() ?? "null"),
-        ).toMatchObject({
-          kind: "research-directory-archive",
-          entries: [
-            {
-              path: "note.md",
-              type: "file",
-              contentBase64: "aXNvbGF0ZWQgbm90ZQ==",
-            },
-          ],
-        });
-        expect(mounts).toHaveLength(4);
-        for (const directory of mounts)
-          await expect(stat(directory)).rejects.toThrow();
-      } finally {
-        await rm(root, { recursive: true, force: true });
-      }
-    },
-  );
 
   it("names, owns and explicitly removes a stopped agent container (#176, #550)", async () => {
     const root = await mkdtemp(join(tmpdir(), "gvisor-codex-"));

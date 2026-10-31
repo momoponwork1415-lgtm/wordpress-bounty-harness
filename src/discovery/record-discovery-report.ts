@@ -33,8 +33,6 @@ export type ReportRecorderContext = {
   readonly trialId: string;
   readonly snapshotDigest: string;
   readonly reportArtifactDigest: string;
-  /** ADR 0042: the partition the reporting tracer was assigned; absent outside partitioned Trials. */
-  readonly partition?: string;
 };
 
 export type RecordedCandidate = {
@@ -80,8 +78,6 @@ export function createReportRecorder(options: RecorderOptions) {
   return async (
     ownerRunId: string,
     attachment: NonNullable<DiscoveryTransportResult["attachment"]>,
-    /** ADR 0042: the partition the reporting tracer was assigned. */
-    partition?: string,
   ): Promise<void> => {
     const stored = await options.attachments.read(attachment);
     if (stored.status !== "resolved")
@@ -106,7 +102,6 @@ export function createReportRecorder(options: RecorderOptions) {
         trialId: options.trialId,
         snapshotDigest: options.snapshotDigest,
         reportArtifactDigest: attachment.digest,
-        ...(partition === undefined ? {} : { partition }),
       },
     );
     for (const candidate of recorded.candidates) {

@@ -44,27 +44,13 @@ import {
 } from "./gvisor-container.js";
 import type { ProviderCredentialEgressGrant } from "./provider-credential-egress-broker.js";
 import {
-  admittedOneShotFiles,
-  collectOutputFiles,
-  stageOneShotFiles,
-  ONE_SHOT_SANDBOX_MEMORY_MIB,
-  ONE_SHOT_MAX_INPUT_BYTES,
-  ONE_SHOT_MAX_TOOL_BYTES,
-  ONE_SHOT_MAX_WALL_MS,
-  type OneShotFile,
-  type OneShotToolFile,
-} from "./one-shot-run.js";
-import {
   admittedStagedSkills,
   stageSkills,
   type StagedSkill,
 } from "./skill-definition.js";
 import {
-  SANDBOX_INPUT_MOUNT_PATH,
-  SANDBOX_OUTPUT_MOUNT_PATH,
   SANDBOX_RESEARCH_MOUNT_PATH,
   SANDBOX_SOURCE_MOUNT_PATH,
-  SANDBOX_TOOLS_MOUNT_PATH,
   dependencyMountPathsAreDisjoint,
   isDependencyMountPath,
 } from "./sandbox-layout.js";
@@ -72,12 +58,6 @@ import {
 /** The same budget as a cooperative Codex Trial, so campaign memory math holds. */
 export const CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB =
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB;
-/**
- * A one-shot role of a partitioned Trial (ADR 0042) starts no children, so
- * its sandbox is sized for one agent; the campaign memory budget admits
- * `budget / (this + broker)` tracers at once. Both roles run at this size.
- */
-export const CLAUDE_ONE_SHOT_SANDBOX_MEMORY_MIB = ONE_SHOT_SANDBOX_MEMORY_MIB;
 /** Two CPUs per Claude container, as before candidate 9; the Codex sandbox keeps one. */
 const CLAUDE_SANDBOX_CPUS = 2;
 const CLAUDE_CONFIG_MOUNT = "/tmp/claude";
@@ -112,17 +92,12 @@ export interface ClaudeSandboxCommand {
   /** What the runner reads on stdin; the prompt texts are the Codex path's, unchanged. */
   readonly input: {
     readonly prompt: string;
-    /** Required for a cooperative run; absent on a one-shot run, which has one turn. */
     readonly resumePrompt?: string;
     readonly minimumActiveMs: number;
-    /** The PreToolUse hook's ceiling on live children; 0 on a one-shot run. */
     readonly maxChildren: number;
     readonly model: string;
     readonly effort: string;
-    /** Absent only on a one-shot run whose role writes files instead of a report. */
     readonly outputSchema?: object;
-    /** ADR 0042: one turn of one agent; `oneShot` below carries its files. */
-    readonly oneShot?: true;
     /** Resume this restored session; the first turn is the pinned directive (ADR 0036). */
     readonly resumeSessionId?: string;
     /** With `resumeSessionId`: Harness-generated facts sent before the directive on the first turn. */
@@ -140,17 +115,6 @@ export interface ClaudeSandboxCommand {
   readonly subagentModel: string;
   /** Present exactly when `input.resumeSessionId` is. */
   readonly resume?: ClaudeSandboxResumeSeed;
-  /**
-   * Present exactly when `input.oneShot` is: the Harness's input files
-   * (read-only at `/workspace/input`), the tool files (read-only at
-   * `/workspace/tools`) and the run's own wall, which replaces the sandbox's
-   * configured timeout for this run.
-   */
-  readonly oneShot?: {
-    readonly inputFiles: readonly OneShotFile[];
-    readonly toolFiles: readonly OneShotToolFile[];
-    readonly wallMs: number;
-  };
   readonly sourceMount: Mount;
   readonly dependencyMounts: readonly (Mount & { readonly path: string })[];
   readonly labHost?: { readonly name: string; readonly ipv4: string };
@@ -179,9 +143,6 @@ export interface ClaudeSandboxResult {
   readonly transcriptFailure?: "capture-failed";
   readonly research?: { readonly archive: Buffer; readonly truncated: boolean };
   readonly researchFailure?: "capture-failed";
-  /** One-shot runs only: every `*.json` directly under `/workspace/output`, by name. */
-  readonly outputFiles?: readonly OneShotFile[];
-  readonly outputFailure?: "capture-failed";
   readonly isolation: {
     readonly backend: "gvisor";
     readonly runtime: "runsc";
@@ -298,7 +259,6 @@ export class ClaudeSandboxNotAdmittedError extends Error {
   }
 }
 
-/** A one-shot command's own shape (ADR 0042); the cooperative shape is the other branch. */
 /** The staged skills and the names the runner enables are the same list (ADR 0043). */
 function admittedSkills(command: ClaudeSandboxCommand): boolean {
   if (command.skills === undefined) return command.input.skills === undefined;
@@ -309,25 +269,6 @@ function admittedSkills(command: ClaudeSandboxCommand): boolean {
     command.input.skills.every(
       (name, index) => command.skills![index]?.name === name,
     )
-  );
-}
-
-function admittedOneShot(command: ClaudeSandboxCommand): boolean {
-  const { input, oneShot } = command;
-  if (oneShot === undefined) return input.oneShot === undefined;
-  return (
-    input.oneShot === true &&
-    input.maxChildren === 0 &&
-    input.minimumActiveMs === 0 &&
-    input.resumePrompt === undefined &&
-    input.resumeSessionId === undefined &&
-    input.resumeNotice === undefined &&
-    command.resume === undefined &&
-    Number.isSafeInteger(oneShot.wallMs) &&
-    oneShot.wallMs > 0 &&
-    oneShot.wallMs <= ONE_SHOT_MAX_WALL_MS &&
-    admittedOneShotFiles(oneShot.inputFiles, ONE_SHOT_MAX_INPUT_BYTES) &&
-    admittedOneShotFiles(oneShot.toolFiles, ONE_SHOT_MAX_TOOL_BYTES)
   );
 }
 
@@ -419,16 +360,13 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
       (command.resume === undefined
         ? command.input.resumeSessionId !== undefined
         : !admittedResumeSeed(command.resume, command.input.resumeSessionId)) ||
-      !admittedOneShot(command) ||
       !admittedSkills(command) ||
-      (command.oneShot === undefined &&
-        (command.input.resumePrompt === undefined ||
-          command.input.outputSchema === undefined ||
-          command.input.maxChildren < 1))
+      command.input.resumePrompt === undefined ||
+      command.input.outputSchema === undefined ||
+      command.input.maxChildren < 1
     )
       throw new ClaudeSandboxNotAdmittedError();
-    const oneShot = command.oneShot;
-    const wallMs = oneShot?.wallMs ?? this.#options.timeoutMs;
+    const wallMs = this.#options.timeoutMs;
     const mountOf = async (mount: Mount): Promise<string> => {
       const directory = await realpath(mount.directory);
       if (
@@ -461,29 +399,13 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
     const containerName = `claude-agent-${randomUUID()}`;
     const created: string[] = [];
     try {
-      for (const prefix of [
-        "claude-run-",
-        "claude-home-",
-        "claude-research-",
-        ...(oneShot === undefined
-          ? []
-          : ["claude-input-", "claude-tools-", "claude-output-"]),
-      ])
+      for (const prefix of ["claude-run-", "claude-home-", "claude-research-"])
         created.push(await mkdtemp(join(scratch, prefix)));
-      const [staging, home, research, input, tools, output] = created as [
-        string,
-        string,
-        string,
-        string | undefined,
-        string | undefined,
-        string | undefined,
-      ];
+      const [staging, home, research] = created as [string, string, string];
       if (command.resume !== undefined)
         await seedResume(home, research, command.resume);
       // ADR 0043: Claude Code lists `skills/<name>/SKILL.md` under its config directory.
       if (command.skills !== undefined) await stageSkills(home, command.skills);
-      if (oneShot !== undefined)
-        await stageOneShotFiles(input!, tools!, oneShot);
       await writeFile(join(staging, "runner.mjs"), CLAUDE_RUNNER_SOURCE, {
         flag: "wx",
         mode: 0o600,
@@ -502,13 +424,6 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
                 containerMount(directory, path, true),
               ),
               containerMount(research, SANDBOX_RESEARCH_MOUNT_PATH, false),
-              ...(oneShot === undefined
-                ? []
-                : [
-                    containerMount(input!, SANDBOX_INPUT_MOUNT_PATH, true),
-                    containerMount(tools!, SANDBOX_TOOLS_MOUNT_PATH, true),
-                    containerMount(output!, SANDBOX_OUTPUT_MOUNT_PATH, false),
-                  ]),
               containerMount(staging, "/opt/claude-support", true),
               containerMount(home, CLAUDE_CONFIG_MOUNT, false),
               { workdir: SANDBOX_SOURCE_MOUNT_PATH },
@@ -543,9 +458,7 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
           entrypoint: "node",
           command: ["/opt/claude-support/runner.mjs"],
         },
-        oneShot === undefined
-          ? CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB
-          : CLAUDE_ONE_SHOT_SANDBOX_MEMORY_MIB,
+        CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB,
       );
       // Before the container exists, so another runner's sweep never names it (#550).
       const owner = await recordDiscoveryOwner({
@@ -612,13 +525,6 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
         (value) => ({ research: value }),
         () => ({ researchFailure: "capture-failed" as const }),
       );
-      const outputs =
-        output === undefined
-          ? {}
-          : await collectOutputFiles(output).then(
-              (value) => ({ outputFiles: value }),
-              () => ({ outputFailure: "capture-failed" as const }),
-            );
       return {
         status: result.kind === "exited" ? "exited" : "failed",
         exitCode: result.kind === "exited" ? result.exitCode : -1,
@@ -631,7 +537,6 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
         cliVersion,
         ...transcripts,
         ...notes,
-        ...outputs,
         isolation: GVISOR_ISOLATION,
       };
     } finally {

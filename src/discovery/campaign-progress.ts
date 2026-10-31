@@ -293,8 +293,6 @@ export function readResumeProgress(target: CampaignTarget): ResumeProgress {
     if (event.runKind !== "enumerate" || event.trialId !== event.runId)
       return false;
     const result = partitioned.get(event.trialId);
-    // A dead one-shot owner is sealed for the ledger, then the ordinal runs
-    // again because the interrupted role has no proved Trial outcome.
     return (
       result?.outcome === "completed" ||
       (result?.outcome === "incomplete" && result.reason !== "interrupted")

@@ -192,63 +192,6 @@ const cases: {
     ],
   },
   {
-    name: "Codex one-shot run over the TLS broker with no Lab",
-    run: async (root, calls) => {
-      const { source } = await trees(root);
-      return new GvisorCodexSandbox({
-        dockerExecutablePath: "/usr/bin/docker",
-        image: `node@${digest}`,
-        bundledCatalogPath: "/opt/codex/model-catalog.json",
-        scratchRootDirectory: root,
-        ownerDirectory: join(root, "owners"),
-        maxOutputBytes: 1024 * 1024,
-        timeoutMs: 60_000,
-        clock: () => new Date("2026-10-08T07:00:00Z"),
-        randomUuid: () => "0f1e2d3c-4b5a-4987-a654-3210fedcba98",
-        runDocker: recorder(root, calls),
-      }).execute({
-        executable: "codex",
-        args: ["exec", "--json"],
-        stdin: "Inspect the source.",
-        supportFiles: [
-          { path: "/opt/codex-support/report-schema.json", content: "{}" },
-        ],
-        grant: {
-          baseUrl: `https://${BROKER_TLS_HOSTNAME}:8080`,
-          tls: { hostname: BROKER_TLS_HOSTNAME, address: "172.28.0.2", caPem },
-          authorization: `Bearer ${token}`,
-          dockerNetworkName: "internal-run",
-          model: "gpt-6-luna",
-          protocol: "responses",
-          expiresAt: "2026-10-08T07:30:00Z",
-        },
-        sourceMount: { ...source, path: "/workspace/main", mode: "ro" },
-      });
-    },
-    expected: [
-      ...codexProbe(2048),
-      [
-        ...runscBase(2048, 1),
-        `--name=${codexName}`,
-        "--interactive",
-        "--network=internal-run",
-        "--mount=type=bind,src=<root>/source,dst=/workspace/main,readonly",
-        "--mount=type=bind,src=<root>/codex-run-*,dst=/opt/codex-support,readonly",
-        "--workdir=/workspace/main",
-        "--env=HOME=/tmp",
-        "--env=CODEX_HOME=/tmp/codex",
-        "--mount=type=bind,src=<root>/codex-home-*,dst=/tmp/codex",
-        `--add-host=${BROKER_TLS_HOSTNAME}:172.28.0.2`,
-        "--env=CODEX_CA_CERTIFICATE=/opt/codex-support/grant-ca.pem",
-        "--entrypoint=codex",
-        `node@${digest}`,
-        "exec",
-        "--json",
-      ],
-      ["rm", "--force", codexName],
-    ],
-  },
-  {
     name: "Claude run with every Lab host and a dependency mount",
     run: async (root, calls) => {
       const { source, core } = await trees(root);

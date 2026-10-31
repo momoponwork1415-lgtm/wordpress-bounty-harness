@@ -907,6 +907,90 @@ describe("Ledger public interface", () => {
     expect(ledger.readAll({ type: "target-selected" })).toHaveLength(1);
   }, 30_000);
 
+  it("reads legacy role events and counts the enumerate run as one Trial", async () => {
+    const { ledger } = await fixture();
+    for (const [runId, runKind, role, resubmit] of [
+      ["trial-1", "enumerate", "enumerator", 0],
+      ["trial-1-r1", "enumerate", "enumerator", 1],
+      ["trial-1-p1", "trace", "tracer", undefined],
+      ["trial-1-p2", "trace", "tracer", undefined],
+    ] as const) {
+      await ledger.append({
+        ...common(`${runId}-started`),
+        type: "discovery-run-started",
+        runId,
+        trialId: "trial-1",
+        runKind,
+        labAttached: false,
+        history: { mode: "none" },
+        configuration: {
+          promptVariant: "objective-partition-v1",
+          mode: "partitioned",
+          role: {
+            kind: role,
+            definitionDigest: snapshot,
+            ...(resubmit === undefined ? {} : { resubmit }),
+          },
+        },
+      });
+      await ledger.append({
+        ...common(`${runId}-finished`),
+        type: "discovery-run-finished",
+        runId,
+        outcome: "completed",
+        costUsd: "unavailable",
+        wallTimeMs: 1,
+      });
+    }
+    await ledger.append({
+      ...common("legacy-enumeration"),
+      type: "enumeration-recorded",
+      trialId: "trial-1",
+      runId: "trial-1-r1",
+      accepted: true,
+      resubmits: 1,
+      inventoryDigest: snapshot,
+      partitionsDigest: otherSnapshot,
+      scriptRan: true,
+      scriptRowCount: 1,
+      agentRowCount: 1,
+      duplicateRowCount: 0,
+      partitionCount: 2,
+      definitionDigest: snapshot,
+      toolsDigest: otherSnapshot,
+      rowSource: "agent",
+    });
+    await ledger.append({
+      ...common("legacy-partition"),
+      type: "partition-assigned",
+      trialId: "trial-1",
+      partitionId: "p1",
+      ordinal: 0,
+      of: 2,
+      rowCount: 1,
+      scriptRowCount: 1,
+      agentRowCount: 0,
+      assignmentDigest: snapshot,
+      runId: "trial-1-p1",
+      definitionDigest: snapshot,
+    });
+    const events = ledger
+      .readAll({ campaignId: "campaign-1" })
+      .map(({ event }) => event);
+    expect(
+      events
+        .filter((event) => event.type === "discovery-run-started")
+        .map((event) => event.runKind),
+    ).toEqual(["enumerate", "enumerate", "trace", "trace"]);
+    expect(events.map((event) => event.type)).toContain("enumeration-recorded");
+    expect(events.map((event) => event.type)).toContain("partition-assigned");
+    expect(ledger.funnel("campaign-1")).toMatchObject({
+      discoveryAttempts: 1,
+      runCount: 4,
+      attemptOutcomes: { completed: 1, completedWithoutCandidate: 1 },
+    });
+  });
+
   it("records a mismatched or ungrounded judgment as incomplete", async () => {
     const { ledger, artifactStore } = await fixture();
     const proof = await evidence(artifactStore);

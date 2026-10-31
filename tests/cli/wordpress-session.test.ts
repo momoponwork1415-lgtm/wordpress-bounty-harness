@@ -273,18 +273,10 @@ describe("discovery skills (ADR 0043)", () => {
     ]);
   });
 
-  it("rejects unknown ids, repeated skills and skills on a partitioned campaign", async () => {
+  it("rejects unknown ids and repeated skills", async () => {
     for (const config of [
       { discovery: { lab: "none", skills: ["wbh-other-v1"] } },
       { discovery: { lab: "none", skills: ["wbh-recon-v1", "wbh-recon-v1"] } },
-      {
-        discovery: {
-          lab: "none",
-          mode: "partitioned",
-          skills: ["wbh-recon-v1"],
-        },
-        promptId: "objective-partition-v1",
-      },
     ]) {
       const { open } = await fixture({ config });
       await expect(open()).rejects.toThrow();

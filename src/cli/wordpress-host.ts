@@ -7,17 +7,14 @@ import { z } from "zod";
 import {
   agentRuntimeProfileDefinitionSchema,
   ClaudeNativeAgentRuntime,
-  ClaudeOneShotRuntime,
   claudeRuntimeProfileDefinitionSchema,
   CodexNativeAgentRuntime,
-  CodexOneShotRuntime,
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB,
   createProviderCredentialEgressBroker,
   defineAgentRuntimeProfile,
   defineClaudeRuntimeProfile,
   GvisorClaudeSandbox,
   GvisorCodexSandbox,
-  PARTITIONED_ROLE_MEMORY_PROFILES,
   ProviderAttachmentStore,
   readPrivateChatgptLogin,
 } from "../discovery/index.js";
@@ -333,13 +330,6 @@ export async function createWordPressHostProfile(options: {
     config: WordPressCampaignConfig,
     state: CliState,
   ): Promise<WordPressCampaignBoundaries> => {
-    const compactRoleMemory =
-      config.discovery.mode === "partitioned" &&
-      config.resources.partitionedRoleMemoryProfile !== undefined
-        ? PARTITIONED_ROLE_MEMORY_PROFILES[
-            config.resources.partitionedRoleMemoryProfile
-          ]
-        : undefined;
     for (const directory of Object.values(directories))
       await mkdir(directory, { recursive: true, mode: 0o700 });
     const sandbox = new GvisorCodexSandbox({
@@ -349,9 +339,6 @@ export async function createWordPressHostProfile(options: {
       scratchRootDirectory: directories.codexScratch,
       maxOutputBytes: 64 * 1024 * 1024,
       timeoutMs: config.runWallTimeMinutes * 60_000,
-      ...(compactRoleMemory === undefined
-        ? {}
-        : { oneShotMemoryMiB: compactRoleMemory.sandboxMiB }),
       ...(runtimeProfile.subagent.modelId === "unavailable"
         ? {}
         : { memoryMiB: CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB }),
@@ -445,7 +432,7 @@ export async function createWordPressHostProfile(options: {
           }),
     });
     const attachments = new ProviderAttachmentStore(directories.attachments);
-    const broker = (memoryMiB?: number) =>
+    const broker = () =>
       createProviderCredentialEgressBroker({
         dockerExecutablePath: host.dockerExecutablePath,
         brokerImage: host.images.broker,
@@ -457,7 +444,6 @@ export async function createWordPressHostProfile(options: {
         scratchRootDirectory: directories.brokerScratch,
         proxyBundleDirectory,
         clock: state.clock,
-        ...(memoryMiB === undefined ? {} : { memoryMiB }),
       });
     const runtime = new CodexNativeAgentRuntime(
       sandbox,
@@ -467,13 +453,7 @@ export async function createWordPressHostProfile(options: {
       wordPressLabCommandRule,
       state.clock,
     );
-    // Partitioned roles choose their runtime directly, independently of the share.
-    const claude = !(config.discovery.mode === "partitioned"
-      ? [
-          config.discovery.enumerator?.runtime,
-          config.discovery.tracer?.runtime,
-        ].includes("claude")
-      : (config.discovery.runtimeShare?.claude ?? 0) > 0)
+    const claude = !((config.discovery.runtimeShare?.claude ?? 0) > 0)
       ? undefined
       : await claudeBoundary({
           host,
@@ -576,16 +556,6 @@ export async function createWordPressHostProfile(options: {
       runtimeProfile,
       probeRuntime: () => sandbox.probe(),
       executor: runtime,
-      oneShot: new CodexOneShotRuntime(
-        sandbox,
-        compactRoleMemory === undefined
-          ? runtime.broker
-          : broker(compactRoleMemory.brokerMiB),
-        attachments,
-        host.images.codex,
-        wordPressLabCommandRule,
-        state.clock,
-      ),
       ...(claude === undefined ? {} : { claude }),
       attachments,
       // The Harness owns the records; the transport hands the Lab to a skill (#352).
@@ -807,7 +777,7 @@ async function claudeBoundary(options: {
   const claude = options.host.claude;
   if (claude === undefined)
     throw new Error(
-      "The campaign uses the Claude runtime (share or partitioned mode), but the host config has no claude section",
+      "The campaign uses the Claude runtime, but the host config has no claude section",
     );
   const scratch = join(options.host.workDirectory, "claude-scratch");
   await mkdir(scratch, { recursive: true, mode: 0o700 });
@@ -868,15 +838,6 @@ async function claudeBoundary(options: {
   return {
     runtimeProfile,
     executor: new ClaudeNativeAgentRuntime(
-      sandbox,
-      broker,
-      options.attachments,
-      claude.image,
-      wordPressLabCommandRule,
-      options.clock,
-    ),
-    // The roles of a partitioned Trial (ADR 0042): one turn, no children, own wall.
-    oneShot: new ClaudeOneShotRuntime(
       sandbox,
       broker,
       options.attachments,

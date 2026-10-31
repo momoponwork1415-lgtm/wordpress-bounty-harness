@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { isAbsolute, posix } from "node:path";
 
-import type { OneShotFile, OneShotRun } from "./one-shot-run.js";
 import {
   MAX_STAGED_SKILL_BYTES,
   MAX_STAGED_SKILL_FILE_BYTES,
@@ -289,10 +288,6 @@ export type CodexSandboxResumeSeed = {
   }[];
 };
 export interface CodexSandboxCommand {
-  readonly oneShot?: Pick<
-    OneShotRun,
-    "inputFiles" | "toolFiles" | "wallMs" | "lab"
-  >;
   readonly executable: "codex";
   readonly args: readonly string[];
   readonly stdin: string;
@@ -350,9 +345,6 @@ export interface CodexSandboxCommand {
   readonly skills?: readonly StagedSkill[];
 }
 export interface CodexSandboxResult {
-  readonly labHandoff?: import("./one-shot-lab.js").OneShotLabHandoff;
-  readonly outputFiles?: readonly OneShotFile[];
-  readonly outputFailure?: "capture-failed";
   readonly status: "exited" | "failed";
   readonly exitCode: number;
   readonly stdout: string;
@@ -1810,7 +1802,6 @@ function sandboxCommand(
   };
 }
 
-/** Shared with a one-shot role: the same provider grant as cooperative discovery. */
 export const CODEX_DISCOVERY_BROKER_LIMITS = {
   maxRequests: 2000,
   maxRequestBytes: 8 * 1024 * 1024,
