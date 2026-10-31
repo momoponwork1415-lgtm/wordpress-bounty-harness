@@ -30,6 +30,8 @@
 | 1b `wbh-source-check` | 不成立 | `--decision reject --reason source-check-input` か `source-check-reach` |
 | 1b `wbh-source-check` | 未決 | `--decision defer --reason source-check-unknown`（所有者の判断待ち） |
 | 検証のやり直し | 2 回目も観測待ちに届かない | `--decision defer --reason loop-retry-exhausted`（所有者の判断待ち） |
+| 検証 | Lab image の欠落で前提を作れない（例 #712） | `--decision defer --reason lab-image-blocked`（Lab の計画から外れる。`next.blocked`） |
+| 検証 | 欠落を直した image が main に入った | 同じ Finding に `--decision defer --reason lab-image-fixed`（最新の印で判断し、止まった検証に戻る） |
 
 理由コードの形は `^[a-z0-9][a-z0-9-]{0,63}$` で、コロンは使えない。
 
@@ -101,6 +103,8 @@ Lab の待ち時間の上限は 30 分である。それを超えたときと `a
 - 判定器の時期の `no-judge` / `runtime-confirmed`: 新しい流れで検証し直す（所有者決定 2026-10-26）。
 
 2 回目も観測待ちに届かなければ、`loop-retry-exhausted` を打って止める。所有者の判断待ちに回る。
+
+操作役が、Lab image の欠落（PHP の設定など、管理者の通常機能では直せないもの）を `abort` の理由に挙げたときは、やり直さない。「動作確認」に欠落を知らせ、`lab-image-blocked` を打つ。image が直ったら `lab-image-fixed` を打ち、やり直しを 1 回行う。
 
 ### 8. 照合と報告書（`next.report`）
 

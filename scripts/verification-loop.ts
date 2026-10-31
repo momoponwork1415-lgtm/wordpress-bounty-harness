@@ -85,6 +85,8 @@ const SOURCE_CHECK_UNKNOWN = "source-check-unknown";
 const AWAITING_HUMAN = "awaiting-human-observation";
 /** 止まった検証を 1 回やり直しても止まったとき、ループが打つ印。所有者の判断待ちになる。 */
 const RETRY_EXHAUSTED = "loop-retry-exhausted";
+/** Lab image の欠落で検証できない印。image が直ったら同じ Finding に lab-image-fixed を足して解く。 */
+const LAB_IMAGE_BLOCKED = "lab-image-blocked";
 
 type Stage =
   | "screen" // 段 1 がまだ
@@ -97,6 +99,7 @@ type Stage =
   | "report" // 人間の観測が match。照合と報告書へ
   | "stalled" // 検証が観測待ち以外の incomplete などで止まった
   | "owner" // 段 1b の未決や人間の mismatch。所有者の判断待ち
+  | "blocked" // Lab image の欠落待ち（lab-image-blocked）
   | "done"; // 除外、提出済み、parked
 
 // ---------------------------------------------------------------- 台帳
@@ -460,6 +463,11 @@ function classify(entry: FindingFacts): { stage: Stage; note: string } {
     if (verification.status === "runtime-confirmed")
       return { stage: "lab", note: "judge-era runtime-confirmed" };
     if (
+      reason === LAB_IMAGE_BLOCKED &&
+      (entry.decision?.at ?? "") >= verification.at
+    )
+      return { stage: "blocked", note: LAB_IMAGE_BLOCKED };
+    if (
       reason === RETRY_EXHAUSTED &&
       (entry.decision?.at ?? "") >= verification.at
     )
@@ -720,6 +728,7 @@ const result = {
       item.stage.startsWith("awaiting-human"),
     ),
     owner: items.filter((item) => item.stage === "owner"),
+    blocked: items.filter((item) => item.stage === "blocked"),
   },
   metric: {
     since,

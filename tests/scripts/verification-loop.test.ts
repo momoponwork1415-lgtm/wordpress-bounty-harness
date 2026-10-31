@@ -409,3 +409,31 @@ test("a Finding in a running verify next batch is verifying: its Lab takes one s
     free: 1,
   });
 });
+
+test("a Lab-image block keeps a stalled Finding out of the Lab plan until a later fixed mark", () => {
+  for (const [digit, minute] of [
+    ["1", 0],
+    ["2", 9],
+  ] as const) {
+    recorded(id(digit));
+    verified(id(digit), `v${digit}`, {
+      status: "incomplete",
+      reason: "precondition",
+    });
+    decided(id(digit), "defer", "lab-image-blocked", 5);
+    if (minute > 0) decided(id(digit), "defer", "lab-image-fixed", minute);
+  }
+  mkdirSync(join(state, "review-notes"));
+  writeFileSync(
+    join(state, "review-notes", "report-units-2026-10-30.json"),
+    JSON.stringify([
+      { groupId: "u", representative: "11111111", members: ["22222222"] },
+    ]),
+  );
+  const result = run();
+  expect(ids(result.next.blocked)).toEqual([id("1")]);
+  expect(ids(result.next.stalled)).toEqual([id("2")]);
+  expect(result.next.lab).toEqual([
+    expect.objectContaining({ unit: "u", findingIds: [id("2")] }),
+  ]);
+});
