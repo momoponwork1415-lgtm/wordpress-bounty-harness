@@ -534,6 +534,15 @@ function classify(entry: FindingFacts): { stage: Stage; note: string } {
     return { stage: "verifying", note: "verify next の一括で検証中" };
   const verification = entry.verification;
   if (verification !== undefined) {
+    // 観測待ちの後に、所有者が観測しないと決めた（例 owner-passed-observation）。
+    if (
+      verification.reason === AWAITING_HUMAN &&
+      entry.decision?.decision === "defer" &&
+      !PROCEED.has(reason) &&
+      reason !== LAB_IMAGE_BLOCKED &&
+      entry.decision.at >= verification.at
+    )
+      return { stage: "owner", note: reason };
     // 観測を記録できるのは、最新の attempt が観測待ちで、Lab の準備がその attempt のときだけ。
     if (
       verification.reason === AWAITING_HUMAN &&

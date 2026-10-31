@@ -624,3 +624,29 @@ test("a fixed-version control is done and does not replace its origin; an unmark
   expect(screen[0]!.note).toContain("screen-v5-chain-fragile");
   expect(result.counts.done).toBe(2);
 });
+
+test("an owner defer after an awaiting-human attempt moves it to the owner list; its live Lab still takes a slot", () => {
+  for (const digit of ["1", "2"]) {
+    recorded(id(digit));
+    verified(id(digit), `v${digit}`, {
+      status: "incomplete",
+      reason: "awaiting-human-observation",
+    });
+    events.push({
+      type: "manual-observation-lab-ready",
+      findingId: id(digit),
+      verificationId: `v${digit}`,
+      occurredAt: at(10),
+    });
+  }
+  decided(id("2"), "defer", "owner-passed-observation", 20);
+  const result = run(["--running-labs", "lab-v1,lab-v2"]);
+  expect(ids(result.next.awaitingHuman)).toEqual([id("1")]);
+  expect(ids(result.next.owner)).toEqual([id("2")]);
+  expect(result.labs).toMatchObject({
+    held: ["lab-v1"],
+    other: ["lab-v2"],
+    teardown: [],
+    free: 2,
+  });
+});
