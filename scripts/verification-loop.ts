@@ -9,14 +9,16 @@
 // Harness の制御には入れない。台帳と Private Evidence は読み取り専用で開き、何も書かない。
 // 段の判定はここでは行わない。各 Finding の最新の記録（判断の理由コード、検証の結果、
 // 人間の観測）から、手順のどの節に回すかを機械的に振り分けるだけである。
-// Lab の枠（--lab-slots、既定 12）はこの道具の既定値で、Harness は強制しない。
+// Lab の枠（--lab-slots、既定 8）はこの道具の既定値で、Harness は強制しない。
 // 空きはさらに host の空きメモリで絞る（/proc/meminfo の MemAvailable、--mem-available-gib で上書き）。
+// 予約を決め直すため、探索の sandbox と Lab の container の実使用（docker stats の合計）も出す。
 //
 // 入力:
 //   台帳         <state>/ledger.sqlite の ledger_events
 //   判断の理由   <state>/private-evidence/<digest>/content/record.json（review-decision）
 //   報告単位     <state>/review-notes/report-units-*.json（既定は名前順で最後のもの、無くてもよい）
 //   生きている Lab  docker ps の wbh-<labId>-wp。--running-labs で与えたらそれを使う。
+//   検証中の Lab   <state>/handoff*/batch.json と <state>/handoff*/*/batch.json（verify next の一括）
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -46,7 +48,7 @@ const { values } = parseArgs({
   options: {
     state: { type: "string" },
     units: { type: "string" },
-    "lab-slots": { type: "string", default: "12" },
+    "lab-slots": { type: "string", default: "8" },
     "mem-available-gib": { type: "string" },
     "running-labs": { type: "string" },
     since: { type: "string" },
@@ -89,6 +91,7 @@ type Stage =
   | "source-check" // 段 1 の要検証。段 1b がまだ
   | "unit" // 段 1b の成立。報告単位がまだ
   | "lab" // 報告単位あり。Lab がまだ
+  | "verifying" // verify next の一括に入り、Lab が生きていて、まだ結果が無い
   | "awaiting-human" // observation-ready の Lab が生きている
   | "awaiting-human-lab-gone" // 観測待ちだが Lab が消えた
   | "report" // 人間の観測が match。照合と報告書へ
@@ -125,6 +128,8 @@ const findings = new Map<string, FindingFacts>();
 const slugBySnapshot = new Map<string, string>();
 /** lab-provisioned の identity `verification-lab-<verificationId>` から labId を引く。 */
 const labByVerification = new Map<string, string>();
+/** verification-finished が出た verificationId。 */
+const finishedVerifications = new Set<string>();
 
 function facts(findingId: string): FindingFacts {
   let value = findings.get(findingId);
@@ -237,6 +242,8 @@ for (const row of rows) {
         at,
       };
       entry.verificationAttempts += 1;
+      if (verificationId !== undefined)
+        finishedVerifications.add(verificationId);
       break;
     }
     case "manual-observation-lab-ready":
@@ -326,6 +333,52 @@ else
     runningLabs = undefined; // docker が読めない。Lab の生死は「不明」と書く。
   }
 
+// ---------------------------------------------------------------- 検証中の一括
+
+/**
+ * verify next の一括（batch.json）は、Finding ごとの verificationId を先に決める。
+ * Lab は一括で 1 台で、lab-provisioned は一括のどれかの verificationId に付く。
+ * Lab が生きていて、自分の verificationId に結果がまだ無い Finding は検証中である。
+ */
+const inflight = new Map<string, string>(); // findingId → labId
+function batchFiles(): string[] {
+  const found: string[] = [];
+  for (const name of readdirSync(stateDirectory)) {
+    if (!name.startsWith("handoff")) continue;
+    const directory = join(stateDirectory, name);
+    const candidates = [join(directory, "batch.json")];
+    try {
+      for (const child of readdirSync(directory))
+        candidates.push(join(directory, child, "batch.json"));
+    } catch {
+      continue; // ファイルだった
+    }
+    found.push(...candidates.filter((path) => existsSync(path)));
+  }
+  return found;
+}
+for (const path of batchFiles()) {
+  let batch: { findings?: { findingId?: unknown; verificationId?: unknown }[] };
+  try {
+    batch = JSON.parse(readFileSync(path, "utf8")) as typeof batch;
+  } catch {
+    continue;
+  }
+  const members = (batch.findings ?? []).flatMap((item) =>
+    typeof item.findingId === "string" &&
+    typeof item.verificationId === "string"
+      ? [{ findingId: item.findingId, verificationId: item.verificationId }]
+      : [],
+  );
+  const labId = members
+    .map((member) => labByVerification.get(member.verificationId))
+    .find((id) => id !== undefined);
+  if (labId === undefined || runningLabs?.has(labId) !== true) continue;
+  for (const member of members)
+    if (!finishedVerifications.has(member.verificationId))
+      inflight.set(member.findingId, labId);
+}
+
 // ---------------------------------------------------------------- 振り分け
 
 interface Item {
@@ -378,6 +431,8 @@ function classify(entry: FindingFacts): { stage: Stage; note: string } {
     return entry.observation.result === "match"
       ? { stage: "report", note: "human match" }
       : { stage: "owner", note: `human ${entry.observation.result}` };
+  if (inflight.has(entry.findingId))
+    return { stage: "verifying", note: "verify next の一括で検証中" };
   const verification = entry.verification;
   if (verification !== undefined) {
     // 観測を記録できるのは、最新の attempt が観測待ちで、Lab の準備がその attempt のときだけ。
@@ -433,7 +488,7 @@ for (const entry of findings.values()) {
   if (excludedCampaign.test(entry.campaignId ?? "")) continue;
   const { stage, note } = classify(entry);
   const unit = unitOf.get(entry.findingId);
-  const labId = labOf(entry);
+  const labId = inflight.get(entry.findingId) ?? labOf(entry);
   items.push({
     stage,
     findingId: entry.findingId,
@@ -457,11 +512,13 @@ interface LabPlan {
   snapshotDigest: string;
   findingIds: string[];
 }
-// 構成員の誰かが観測待ちか報告に進んだ単位は、報告 1 件にまとめるので Lab を立てない。
+// 構成員の誰かが検証中、観測待ち、報告に進んだ単位は、報告 1 件にまとめるので Lab を立てない。
 const coveredUnits = new Set(
   items.flatMap((item) =>
     item.unit !== undefined &&
-    (item.stage.startsWith("awaiting-human") || item.stage === "report")
+    (item.stage.startsWith("awaiting-human") ||
+      item.stage === "report" ||
+      item.stage === "verifying")
       ? [item.unit]
       : [],
   ),
@@ -513,9 +570,11 @@ const teardown = [
       .map((item) => item.labId as string),
   ),
 ];
-// 所有者 2026-10-31: 資源に余裕があれば Lab を絞らない。探索のために 16 GiB を残し、
-// 検証中の Lab 1 台（Lab browser を含む）を 1.5 GiB と見込む。保持中は 1 台約 0.5 GiB。
-const MEMORY_RESERVE_GIB = 16;
+// 所有者 2026-10-31: 資源に余裕があれば Lab を絞らない。ただし探索の campaign 設定は
+// 名目で約 52 GiB（memoryBudgetMiB 10752 × 同時 5 対象）を持つので、当面は探索に 24 GiB を残す。
+// 2 周分の docker stats の実測で決め直す（「動作確認」2026-10-31）。検証中の Lab 1 台
+// （Lab browser を含む）を 1.5 GiB と見込む。保持中は 1 台約 0.5 GiB。
+const MEMORY_RESERVE_GIB = 24;
 const GIB_PER_ACTIVE_LAB = 1.5;
 function memAvailableGib(): number | undefined {
   if (values["mem-available-gib"] !== undefined)
@@ -530,20 +589,64 @@ function memAvailableGib(): number | undefined {
   }
 }
 const memoryGib = memAvailableGib();
+
+const UNIT_GIB: Record<string, number> = {
+  B: 1 / 1024 ** 3,
+  KiB: 1 / 1024 ** 2,
+  MiB: 1 / 1024,
+  GiB: 1,
+  kB: 1e3 / 1024 ** 3,
+  MB: 1e6 / 1024 ** 3,
+  GB: 1e9 / 1024 ** 3,
+};
+/** docker stats の使用量を、探索（codex-agent / provider-egress-broker）と Lab（wbh-）に分けて合計する。 */
+function containerMemoryGib():
+  { exploration: number; labs: number } | undefined {
+  if (values["running-labs"] !== undefined) return undefined; // 試験では docker を読まない。
+  try {
+    const lines = execFileSync(
+      "docker",
+      ["stats", "--no-stream", "--format", "{{.Name}}\t{{.MemUsage}}"],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 60_000,
+      },
+    ).split("\n");
+    const total = { exploration: 0, labs: 0 };
+    for (const line of lines) {
+      const match = /^(\S+)\t([\d.]+)([A-Za-z]+)\s*\//.exec(line.trim());
+      if (match === null) continue;
+      const gib = Number(match[2]) * (UNIT_GIB[match[3] as string] ?? 0);
+      if (
+        /^(codex-agent|claude-agent|provider-egress-broker)-/.test(
+          match[1] as string,
+        )
+      )
+        total.exploration += gib;
+      else if (/^wbh-[0-9a-f-]{36}-/.test(match[1] as string))
+        total.labs += gib;
+    }
+    return total;
+  } catch {
+    return undefined;
+  }
+}
+const containerGib = containerMemoryGib();
 const slotsByMemory =
   memoryGib === undefined
     ? Number.POSITIVE_INFINITY
     : Math.floor(
         Math.max(0, memoryGib - MEMORY_RESERVE_GIB) / GIB_PER_ACTIVE_LAB,
       );
+// 検証中の Lab も枠を使う。一括の途中で観測待ちになった Lab は 1 台として数える。
+const activeLabs = [...new Set(inflight.values())].filter(
+  (id) => !heldLabs.has(id),
+);
+const usedLabs = new Set([...heldLabs, ...viewOnlyLabs, ...activeLabs]);
 const freeSlots = Math.min(
   slotsByMemory,
-  Math.max(
-    0,
-    labSlots -
-      heldLabs.size -
-      viewOnlyLabs.filter((id) => !heldLabs.has(id)).length,
-  ),
+  Math.max(0, labSlots - usedLabs.size),
 );
 
 // 測る数字: finding-recorded から最初の observation-ready までの時間（--since 以降に記録した Finding）。
@@ -581,9 +684,20 @@ const result = {
     slots: labSlots,
     held: [...heldLabs],
     viewOnly: viewOnlyLabs,
+    active: activeLabs,
     free: freeSlots,
     memAvailableGib:
       memoryGib === undefined ? null : Math.round(memoryGib * 10) / 10,
+    reserveGib: MEMORY_RESERVE_GIB,
+    /** 実測の docker stats 合計（GiB）。周の記録に残し、予約を決め直す材料にする。 */
+    explorationUsedGib:
+      containerGib === undefined
+        ? null
+        : Math.round(containerGib.exploration * 10) / 10,
+    labsUsedGib:
+      containerGib === undefined
+        ? null
+        : Math.round(containerGib.labs * 10) / 10,
     dockerReadable: runningLabs !== undefined,
     teardown,
   },
@@ -595,6 +709,7 @@ const result = {
     labWaiting: [...plans.values()].slice(freeSlots),
     /** 同じ単位の構成員がすでに観測待ちか報告にある。Lab を立てずに待つ。 */
     labCovered: covered,
+    verifying: items.filter((item) => item.stage === "verifying"),
     stalled: items.filter((item) => item.stage === "stalled"),
     report: items.filter((item) => item.stage === "report"),
     awaitingHuman: items.filter((item) =>
