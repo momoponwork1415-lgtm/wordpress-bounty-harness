@@ -9,6 +9,7 @@ AI に「調べて報告」を頼んだときの成果物を、日付付きで�
 正本と運用文書（AGENTS、SPEC、ADR、`docs/` 直下、`docs/agents/`、`docs/evaluation/`、`docs/knowledge/`、skill、コード）から参照されている報告と、それらの報告が参照している報告だけを置く。
 
 設計と方針の出典:
+- [2026-10-31-wbh-screen-v5-source-table.md](2026-10-31-wbh-screen-v5-source-table.md): `wbh-screen` v5 の各項目と、Wordfence の決定・規則の写し・所有者決定との対応。
 
 - [2026-10-11-harness-completeness-review.md](2026-10-11-harness-completeness-review.md): 報奨を得る装置としての完成度を、探索・検証・選定の 3 領域で監査した。
 - [2026-10-11-thorough-design-review.md](2026-10-11-thorough-design-review.md): 不変条件が守られているかと、削るべき構造を 4 本の監査で調べた。

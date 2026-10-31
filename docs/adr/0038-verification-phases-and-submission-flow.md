@@ -242,3 +242,22 @@ v16-wide（42 Trial、Finding 0.3/Trial）と v17-wide（36 Trial、0）はど�
 - 消し方: 3 行の契約を v5 に戻す。schema と park は残っているので、それだけで欄が渡る。
 
 - 2026-10-28 追記（#601）: `review submitted --external` は Harness 外で済んだ提出を Finding 参照・提出先・提出日・記録者だけの `submission-recorded-externally` として追記し、レビュー列から外して funnel の台帳外内訳と export に出すが、Harness 経由の提出の承認条件は変えず、外部送信も行わない。
+
+## 2026-10-31 追記 16: 段 1 を 2 値にし、Wordfence の決定から確認した基準と通常利用の調査を足す（`wbh-screen` v5）
+
+所有者決定 2026-10-31。所有者が受け取った Wordfence の決定（受理、却下、対象外の通知）を読み合わせると、Lab で再現できても報奨にならなかった種類が繰り返し出ていた。本体の振る舞いに依存して低権限になる経路、外部サービスの所有者しか書けない入力、cron やキャッシュや時間窓に頼る連鎖、導入時だけの一時スクリプト、乗っ取りに届かない影響、提出時に最新版で既に塞がれていたもの、管理者がその効果のためだけに組み立てる構成である。受理された記録との差は「プラグインの通常利用の範囲か」にあった。段 1 はこれらを規則の写しだけでは外せず、`検証へ` に流していた。
+
+決定:
+
+- `wbh-screen` を v5 にする。判定は `要検証` / `除外` の 2 値とし、確度を下げて残す中間の区分は置かない。
+- 除外の項目を 11 に固定し、理由コードを `policy-out-of-scope` / `core-dependency` / `external-not-writable` / `contrived-usage` / `chain-fragile` / `installer-transient` / `cve-only-grade` / `same-root-ticket` / `public-duplicate` / `patched-in-latest` とする。各項目の確認の仕方は skill 本文にある。
+- 通常利用の調査を段 1 に入れる。Snapshot の readme、WordPress.org の説明、開発元の公式資料を読み、前提となる構成を主機能 / 公式の周辺機能 / こじつけ に分ける。こじつけだけを除外し、周辺機能は公式資料の URL を付けて残す。
+- 同根の Finding は 1 つの報告単位にまとめ、人間向けの一覧は報告単位で出す（所有者は CLI を使わない）。
+- 重複は、公開記録で明らかに同じものだけ止める。Wordfence の内部キューでの重複は推測しない。公開記録に似たものがあれば、Lab の前に修正差分を確認する一手を置く。
+- 最新版の確認は WordPress.org の API と SVN の trunk で行い、Lab の前と提出の直前の 2 回やり直す。
+
+変えないもの: 段 1b（`wbh-source-check`）のソース読み直し、段 2 の群、段 3 の Lab、段 4 の照合、確定の根拠（ADR 0040）。Harness のコードは変えず、判定器は置かない（不変条件 3）。`除外` の台帳への記録は所有者の了解を得た AI 操作役が `review decide --decision reject --reason screen-v5:<理由コード> --by ai` で行う。
+
+計測: 2026-10-31 の本番の未決 Finding 262 件に v5 の項目を当てた結果は `要検証` 52 件（22 報告単位）、`除外` 210 件（35 対象）。内訳は Git 外の `review-notes/exclusion-screen-2026-10-31.json` にある。出典対照表は `docs/reviews/2026-10-31-wbh-screen-v5-source-table.md`。
+
+消し方: `SKILL.md` を `versions/v4.2.md` に戻し、OPERATIONS 第 3 節の 0 行をこの追記の前の文に戻す。記録した `reject` は別の判断を記録すれば検証列に戻る。
