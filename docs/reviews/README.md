@@ -9,6 +9,8 @@ AI に「調べて報告」を頼んだときの成果物を、日付付きで�
 正本と運用文書（AGENTS、SPEC、ADR、`docs/` 直下、`docs/agents/`、`docs/evaluation/`、`docs/knowledge/`、skill、コード）から参照されている報告と、それらの報告が参照している報告だけを置く。
 
 設計と方針の出典:
+- [2026-10-31-exploration-structure-investigation.md](2026-10-31-exploration-structure-investigation.md): 探索の構造調査。Root が中央値約 16 分で閉じ、120 分の大半を使わない構造を本番台帳と実行記録から示した。ADR 0039 追記 16（#714）の数字の出典。
+- [2026-10-31-wp2shell-bounty-v19-wide.md](2026-10-31-wp2shell-bounty-v19-wide.md): wp2shell-bounty-v19-wide（v18-wide の停止文を tools の一覧に結び付けた比較候補、#714）の本文と出典対照表。
 - [2026-10-31-wbh-screen-v5-source-table.md](2026-10-31-wbh-screen-v5-source-table.md): `wbh-screen` v5 の各項目と、Wordfence の決定・規則の写し・所有者決定との対応。
 - [2026-10-31-hosting-defaults.md](2026-10-31-hosting-defaults.md): エックスサーバーとさくらの WordPress 既定の堅牢化を公式マニュアルで調べた。検証 Lab の基準環境 `hosting-default-v1`（#699）の出典。v2（#706、パーマリンク `/%postname%/` と標準の書き換えブロック）の差分は 4.3a に追記した。
 
