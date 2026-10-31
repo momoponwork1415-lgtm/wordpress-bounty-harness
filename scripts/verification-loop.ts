@@ -3,13 +3,14 @@
 //
 //   node scripts/verification-loop.ts [--state <dir>] [--units <path>]
 //     [--lab-slots <n>] [--running-labs <id,...>] [--since <ISO>]
-//     [--exclude-campaigns <regex>] [--json]
+//     [--exclude-campaigns <regex>] [--mem-available-gib <n>] [--json]
 //
 // 手順は docs/agents/verification-loop.md。所有者決定 2026-10-27: scripts は AI の道具で、
 // Harness の制御には入れない。台帳と Private Evidence は読み取り専用で開き、何も書かない。
 // 段の判定はここでは行わない。各 Finding の最新の記録（判断の理由コード、検証の結果、
 // 人間の観測）から、手順のどの節に回すかを機械的に振り分けるだけである。
-// Lab の枠（--lab-slots、既定 4）はこの道具の既定値で、Harness は強制しない。
+// Lab の枠（--lab-slots、既定 12）はこの道具の既定値で、Harness は強制しない。
+// 空きはさらに host の空きメモリで絞る（/proc/meminfo の MemAvailable、--mem-available-gib で上書き）。
 //
 // 入力:
 //   台帳         <state>/ledger.sqlite の ledger_events
@@ -24,7 +25,7 @@ import { parseArgs } from "node:util";
 import type { DatabaseSync as Database } from "node:sqlite";
 
 const USAGE =
-  "usage: node scripts/verification-loop.ts [--state <dir>] [--units <path>] [--lab-slots <n>] [--running-labs <id,...>] [--since <ISO>] [--exclude-campaigns <regex>] [--json]";
+  "usage: node scripts/verification-loop.ts [--state <dir>] [--units <path>] [--lab-slots <n>] [--running-labs <id,...>] [--since <ISO>] [--exclude-campaigns <regex>] [--mem-available-gib <n>] [--json]";
 
 // node:sqlite は stderr に ExperimentalWarning を出す。その 1 種だけを落とす。
 type Emit = (name: string | symbol, ...args: unknown[]) => boolean;
@@ -45,7 +46,8 @@ const { values } = parseArgs({
   options: {
     state: { type: "string" },
     units: { type: "string" },
-    "lab-slots": { type: "string", default: "4" },
+    "lab-slots": { type: "string", default: "12" },
+    "mem-available-gib": { type: "string" },
     "running-labs": { type: "string" },
     since: { type: "string" },
     // 開発セットと配線確認の campaign。本番だけを回す（所有者 2026-10-26）。
@@ -511,11 +513,37 @@ const teardown = [
       .map((item) => item.labId as string),
   ),
 ];
-const freeSlots = Math.max(
-  0,
-  labSlots -
-    heldLabs.size -
-    viewOnlyLabs.filter((id) => !heldLabs.has(id)).length,
+// 所有者 2026-10-31: 資源に余裕があれば Lab を絞らない。探索のために 16 GiB を残し、
+// 検証中の Lab 1 台（Lab browser を含む）を 1.5 GiB と見込む。保持中は 1 台約 0.5 GiB。
+const MEMORY_RESERVE_GIB = 16;
+const GIB_PER_ACTIVE_LAB = 1.5;
+function memAvailableGib(): number | undefined {
+  if (values["mem-available-gib"] !== undefined)
+    return Number(values["mem-available-gib"]);
+  try {
+    const line = /^MemAvailable:\s+(\d+) kB$/m.exec(
+      readFileSync("/proc/meminfo", "utf8"),
+    );
+    return line === null ? undefined : Number(line[1]) / 1024 / 1024;
+  } catch {
+    return undefined;
+  }
+}
+const memoryGib = memAvailableGib();
+const slotsByMemory =
+  memoryGib === undefined
+    ? Number.POSITIVE_INFINITY
+    : Math.floor(
+        Math.max(0, memoryGib - MEMORY_RESERVE_GIB) / GIB_PER_ACTIVE_LAB,
+      );
+const freeSlots = Math.min(
+  slotsByMemory,
+  Math.max(
+    0,
+    labSlots -
+      heldLabs.size -
+      viewOnlyLabs.filter((id) => !heldLabs.has(id)).length,
+  ),
 );
 
 // 測る数字: finding-recorded から最初の observation-ready までの時間（--since 以降に記録した Finding）。
@@ -554,6 +582,8 @@ const result = {
     held: [...heldLabs],
     viewOnly: viewOnlyLabs,
     free: freeSlots,
+    memAvailableGib:
+      memoryGib === undefined ? null : Math.round(memoryGib * 10) / 10,
     dockerReadable: runningLabs !== undefined,
     teardown,
   },

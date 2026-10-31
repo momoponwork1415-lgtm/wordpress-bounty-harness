@@ -117,6 +117,10 @@ function run(extra: string[] = []) {
       "lab-v-held",
       "--since",
       "2026-10-29T00:00:00.000Z",
+      "--lab-slots",
+      "4",
+      "--mem-available-gib",
+      "64",
       "--json",
       ...extra,
     ],
@@ -326,4 +330,10 @@ test("a later attempt supersedes a held observation Lab: the Finding retries, th
     viewOnly: ["lab-v-held"],
     free: 3,
   });
+});
+
+test("caps the free Lab slots by the host's available memory", () => {
+  const result = run(["--lab-slots", "12", "--mem-available-gib", "20"]);
+  // (20 - 16) / 1.5 → 2 台。
+  expect(result.labs).toMatchObject({ slots: 12, free: 2 });
 });

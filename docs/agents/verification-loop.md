@@ -41,7 +41,7 @@
 node --experimental-strip-types scripts/verification-loop.ts --json > <state>/review-notes/verification-loop-<YYYYMMDDTHHMM>.json
 ```
 
-道具は台帳、`review-decision` の記録、最新の `review-notes/report-units-*.json`、`docker ps` だけを読み、何も書かない。開発セットの campaign（既定は `^(tp326-|issue-?[0-9])`）は数えない。出力の `next` の各列が、下の各節に当たる。`labs.free` は Lab の枠（`--lab-slots`、既定 4）から、観測待ちで生きている Lab の数を引いた残りである。この 4 は道具の既定値で、Harness は Lab の数を制限しない（#432）。
+道具は台帳、`review-decision` の記録、最新の `review-notes/report-units-*.json`、`docker ps` だけを読み、何も書かない。開発セットの campaign（既定は `^(tp326-|issue-?[0-9])`）は数えない。出力の `next` の各列が、下の各節に当たる。`labs.free` は Lab の枠（`--lab-slots`、既定 12）から、観測待ちで生きている Lab と目視専用の Lab の数を引いた残りである。さらに host の空きメモリで絞る。探索のために 16 GiB を残し、検証中の Lab 1 台を 1.5 GiB と見込む（所有者 2026-10-31「資源に余裕があるなら検証 Lab を少なめにする必要はない」。保持中の Lab は 1 台約 0.5 GiB）。この 12 と見込みは道具の既定値で、Harness は Lab の数を制限しない（#432）。Lab ごとの port は Docker が空いているものを選ぶので、台数が増えても取り合わない。
 
 ### 1. 片付け（`labs.teardown`）
 
