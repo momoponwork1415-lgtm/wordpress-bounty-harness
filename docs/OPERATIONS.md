@@ -250,7 +250,7 @@ harness ledger runtime [--campaign <id>]  # runが記録したmodel、effort、C
 - 更新は既存の正規化器で行う。旧環境で `python3 tools/refresh_wordfence.py --workspace /home/dev/wp-bounty-workspace` を実行する。API keyは `WORDFENCE_INTELLIGENCE_API_KEY` か `~/.config/wordfence/env` に置く。成功後30分以内の再取得は抑止される。
 - 更新後に `harness history status` を見る。照合口と同じ規則で、`fresh` / `stale`（既定24時間超、または前回更新の失敗）/ `unavailable`（stateが読めない、DBとstateが食い違う）を表示する。
 - `stale` / `unavailable` は「重複なし」を意味しない。詳細は [wordfence-history/README.md](../src/profiles/wordpress/wordfence-history/README.md)。
-- 選定は mirror の鮮度を gate にしない。screen と dedupe のための日次更新は host の cron（19:10 UTC）で回す。
+- 選定は mirror の鮮度を gate にしない。screen と dedupe のための日次更新は host の cron（19:10 JST = 10:10 UTC。ホストのスリープで取りこぼした回は再実行されないので、`history status` が stale なら第 5 節の手順で手で 1 回回す）で回す。
 
 ### 対象の自動選定
 
