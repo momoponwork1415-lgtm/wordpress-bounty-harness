@@ -68,7 +68,13 @@
     "findingId": "sha256:aaaa1111000000000000000000000000000000000000000000000000000000aa",
     "decision": "defer",
     "snapshotDigest": "sha256:snap-gallery",
-    "occurredAt": "2026-01-03T00:00:00Z"
+    "occurredAt": "2026-01-03T00:00:00Z",
+    "artifacts": [
+      {
+        "kind": "review-decision",
+        "digest": "sha256:record-aaaa1111"
+      }
+    ]
   },
   {
     "type": "manual-observation-lab-ready",
@@ -83,5 +89,64 @@
     "submittedOn": "2026-01-05",
     "snapshotDigest": "sha256:snap-forms",
     "occurredAt": "2026-01-06T00:00:00Z"
+  },
+  {
+    "type": "review-decided",
+    "findingId": "sha256:dddd4444000000000000000000000000000000000000000000000000000000dd",
+    "decision": "reject",
+    "snapshotDigest": "sha256:snap-gallery",
+    "occurredAt": "2026-01-06T00:00:00Z",
+    "artifacts": [
+      {
+        "kind": "review-decision",
+        "digest": "sha256:record-dddd4444"
+      }
+    ]
+  },
+  {
+    "type": "review-decided",
+    "findingId": "sha256:eeee5555000000000000000000000000000000000000000000000000000000ee",
+    "decision": "reject",
+    "snapshotDigest": "sha256:snap-gallery",
+    "occurredAt": "2026-01-06T00:00:00Z",
+    "artifacts": [
+      {
+        "kind": "review-decision",
+        "digest": "sha256:record-eeee5555"
+      }
+    ]
+  },
+  {
+    "type": "review-decided",
+    "findingId": "sha256:ffff6666000000000000000000000000000000000000000000000000000000ff",
+    "decision": "reject",
+    "snapshotDigest": "sha256:snap-widgets",
+    "occurredAt": "2026-01-06T00:00:00Z",
+    "artifacts": [
+      {
+        "kind": "review-decision",
+        "digest": "sha256:record-ffff6666"
+      }
+    ]
+  },
+  {
+    "type": "finding-recorded",
+    "findingId": "sha256:bbbb8888000000000000000000000000000000000000000000000000000000bb",
+    "category": "stored-xss",
+    "snapshotDigest": "sha256:snap-gallery",
+    "occurredAt": "2026-01-01T00:00:00Z"
+  },
+  {
+    "type": "review-decided",
+    "findingId": "sha256:bbbb8888000000000000000000000000000000000000000000000000000000bb",
+    "decision": "reject",
+    "snapshotDigest": "sha256:snap-gallery",
+    "occurredAt": "2026-01-06T00:00:00Z",
+    "artifacts": [
+      {
+        "kind": "review-decision",
+        "digest": "sha256:record-bbbb8888"
+      }
+    ]
   }
 ]
