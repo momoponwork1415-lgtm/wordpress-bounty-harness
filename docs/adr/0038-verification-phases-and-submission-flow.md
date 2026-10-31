@@ -256,7 +256,7 @@ v16-wide（42 Trial、Finding 0.3/Trial）と v17-wide（36 Trial、0）はど�
 - 重複は、公開記録で明らかに同じものだけ止める。Wordfence の内部キューでの重複は推測しない。公開記録に似たものがあれば、Lab の前に修正差分を確認する一手を置く。
 - 最新版の確認は WordPress.org の API と SVN の trunk で行い、Lab の前と提出の直前の 2 回やり直す。
 
-変えないもの: 段 1b（`wbh-source-check`）のソース読み直し、段 2 の群、段 3 の Lab、段 4 の照合、確定の根拠（ADR 0040）。Harness のコードは変えず、判定器は置かない（不変条件 3）。`除外` の台帳への記録は所有者の了解を得た AI 操作役が `review decide --decision reject --reason screen-v5:<理由コード> --by ai` で行う。
+変えないもの: 段 1b（`wbh-source-check`）のソース読み直し、段 2 の群、段 3 の Lab、段 4 の照合、確定の根拠（ADR 0040）。Harness のコードは変えず、判定器は置かない（不変条件 3）。`除外` の台帳への記録は所有者の了解を得た AI 操作役が `review decide --decision reject --reason screen-v5-<理由コード> --by ai` で行う。
 
 計測: 2026-10-31 の本番の未決 Finding 262 件に v5 の項目を当てた結果は `要検証` 50 件（21 報告単位）、`除外` 212 件（36 対象）。除外のうち 2 件は、項目 11 の修正差分の確認で最新版が塞いでいると分かったもの。内訳は Git 外の `review-notes/exclusion-screen-2026-10-31.json` にある。出典対照表は `docs/reviews/2026-10-31-wbh-screen-v5-source-table.md`。
 

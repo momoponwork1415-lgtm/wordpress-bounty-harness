@@ -1,0 +1,33 @@
+[
+  {
+    "groupId": "example-gallery-1",
+    "slug": "example-gallery",
+    "version": "2.1.0",
+    "members": ["aaaa1111", "aaaa2222"],
+    "representative": "aaaa1111",
+    "kind": "格納型 XSS",
+    "attacker": "Contributor",
+    "title": "架空の画像集で題名欄が管理者画面に出る",
+    "summary": "試験用の要約。",
+    "precondition": "試験用の前提",
+    "victim": "管理者",
+    "publicNote": "試験用の近い記録",
+    "nextStep": "Lab",
+    "notes": "試験用の注記"
+  },
+  {
+    "groupId": "sample-forms-1",
+    "slug": "sample-forms",
+    "version": "1.0.0",
+    "members": ["cccc3333"],
+    "representative": "cccc3333",
+    "kind": "任意ファイルダウンロード",
+    "attacker": "Subscriber",
+    "title": "架空のフォームで添付が読める",
+    "summary": "試験用の要約 2。",
+    "precondition": "既定設定",
+    "victim": "サイト",
+    "publicNote": "",
+    "nextStep": "修正差分の確認"
+  }
+]
