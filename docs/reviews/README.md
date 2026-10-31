@@ -83,6 +83,7 @@ Codex への依頼文:
 - [2026-10-28-codex-brief-cleanup.md](2026-10-28-codex-brief-cleanup.md): Codex への依頼文: 実装の前の整理。
 - [2026-10-28-codex-brief-codex-one-shot.md](2026-10-28-codex-brief-codex-one-shot.md): Codex への依頼文: 区画分配型を本番で回せるようにする。
 - [2026-10-28-codex-brief-partitioned.md](2026-10-28-codex-brief-partitioned.md): Codex への依頼: 区画分配型の探索（partitioned）を Claude runtime で本番に入れる。
+- [2026-10-30-codex-brief-partitioned-deletion.md](2026-10-30-codex-brief-partitioned-deletion.md): Codex への依頼: 区画分配型の削除（#685、PR #690）。ADR 0042 追記 6 の出典。
 - [2026-10-28-codex-one-prompt.md](2026-10-28-codex-one-prompt.md): Codex に貼る 1 本のプロンプト（オーケストレーター、2026-10-28）。
 - [2026-10-28-codex-triage-and-verify.md](2026-10-28-codex-triage-and-verify.md): Codex への依頼: 振り分けと検証を列から回す（非機密参照）。
 - [2026-10-28-harness-gap-analysis.md](2026-10-28-harness-gap-analysis.md): いまの Harness に足りないもの。

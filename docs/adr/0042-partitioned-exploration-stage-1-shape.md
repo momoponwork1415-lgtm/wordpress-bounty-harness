@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded（2026-10-30、所有者決定。区画分配型は #685 で削除し、再利用する部品は ADR 0043 の探索スキルとして運ぶ。追記 6）
 date: 2026-10-28
 amends: 0029（単一協調 Trial の主経路）と 0039（探索の mode）に、Root を置かない 3 つ目の mode を足す。0019（生成する契約）に solo の描画を足す
 ---
@@ -129,3 +129,16 @@ Codex の一発 sandbox も既存の役用の 4,096 MiB を使う。子のない
 新しい枠の本番採用は、隔離した異なる本番選定対象 3 件以上で各役の peak、OOM、wall、停止理由、provider 制限を測り、候補上限を支えられると確認した後にする。切替は #633 に記録し、1 対象から 2、3、5 対象へ増やしながら資源を観測する。固定ソース、プロンプト、道具、Snapshot、台帳 event 型、Programme Boundary、gVisor と broker の境界は変えない。
 
 消し方: 新しい枠の指定を外した設定で従来の cgroup 上限と検査へ戻す。
+
+## 追記 6（2026-10-30）: 廃止と削除
+
+所有者決定（2026-10-30、Claude Code session fb08da25）: 「区画分配は廃止。部分的に使うとは思うが、いらないものを残しても dirty なコードベースになる」。探索の主経路は Root 配分型の協調 Trial（ADR 0029、0039）に戻し、探索の手順は目的文ではなくスキル（ADR 0043）で渡す。
+
+本番で動いた記録（`~/.local/state/wordpress-bounty-harness/ledger.sqlite`、2026-10-28〜29、campaign `prod-part-codex-*` 7 本）: 役の run 218（列挙役 76、追跡役 142）、受理した列挙 34、区画付きの Finding 2、Lead 88。同じ時期までの v14 wide の Root run は 186 本で Finding / run 0.51、v8 deep は 272 本で 0.10（ADR 0043 の計測、#686）。区画分配型は Finding / 列挙 0.06 で、追跡役が Finding を出さなかった。これは腕を揃えない比較であり、Trial 数も少ない。所有者は数字を待たずに廃止を決めた。理由は、Root を無くす形が所有者の 8 件の提出すべてを出した v8 の形から離れること、Harness 側に区画・割り当て・差し戻しの判断が増えて「中身は AI、形は Harness」の線を越え始めたこと、使わない mode を残すと codebase が汚れることである。
+
+削除は Codex が PR #690（Issue #685）で行った。消したもの: runtime（`partitioned-trial.ts`、`partition.ts`、`one-shot-run.ts`、`one-shot-lab.ts`、両 one-shot runtime、`role-definition.ts`）、両 gVisor sandbox の one-shot 分岐、host の配線、設定の 3 節と `partitionedRoleMemoryProfile`、役の Markdown と `objective-partition-v1`、契約 v4 の solo 描画、Partition limits 節、列挙 tool registry、専用 test、GLOSSARY の 4 語、measurement 5a 節。`discovery.mode: "partitioned"` と役の設定は parse 時に `Partitioned mode was removed in #685` で拒む。削除前の状態は tag `archive/pre-partitioned-deletion`（17df4f5）にある。
+
+残したもの: 台帳の event 型（`enumeration-recorded`、`partition-assigned`、`runKind` の `enumerate` / `trace`、`configuration.role`、`finding-recorded.partition` / `lead-recorded.partition`）は読む側として残し、過去の 7 campaign を funnel と選定の履歴で数え続ける（不変条件 8）。列挙 script 2 本と本体機能の固定一覧（追記 1）は、スキル `wbh-tools-v1` の支援 file として agent が自分で走らせる形で残した（PR #688、ADR 0043 追記 1）。Harness は script を実行せず出力も読まない。設計の報告（2026-10-27、2026-10-28）と CVE ベンチの記録は出典として残す。
+
+本 ADR で足した決定のうち生きているものは無い。追記 1 の固定一覧だけが file として残り、その置き場と使い方は ADR 0043 が決める。
+
