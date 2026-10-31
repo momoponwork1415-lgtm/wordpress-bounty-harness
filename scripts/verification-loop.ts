@@ -689,9 +689,13 @@ const teardown = [
     items
       .filter(
         (item) =>
-          (item.stage === "report" || item.stage === "owner") &&
+          // 人間の観測が記録された Finding の Lab だけ。所有者の判断待ちの defer では片付けない。
+          (item.stage === "report" ||
+            (item.stage === "owner" && item.note.startsWith("human "))) &&
           item.labId !== undefined &&
-          runningLabs?.has(item.labId) === true,
+          runningLabs?.has(item.labId) === true &&
+          // 同じ Lab で別の Finding がまだ観測を待っている。
+          !heldLabs.has(item.labId),
       )
       .map((item) => item.labId as string),
   ),

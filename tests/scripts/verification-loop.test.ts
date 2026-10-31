@@ -568,3 +568,32 @@ test("reports days since discovery for awaiting Findings and the median discover
     medianDaysRecordedToSubmitted: 3.5,
   });
 });
+
+test("an owner-hold defer does not tear down a Lab that another Finding still awaits a human on", () => {
+  for (const digit of ["1", "2"]) {
+    recorded(id(digit));
+    verified(id(digit), `v${digit}`, {
+      status: "incomplete",
+      reason: "awaiting-human-observation",
+    });
+    events.push({
+      type: "lab-provisioned",
+      identity: `verification-lab-v${digit}`,
+      labId: "lab-shared",
+      occurredAt: at(3),
+    });
+    events.push({
+      type: "manual-observation-lab-ready",
+      findingId: id(digit),
+      verificationId: `v${digit}`,
+      occurredAt: at(10),
+    });
+  }
+  // 2 は後の attempt が止まった（保持中の Lab は 2 にとって目視専用になる）。所有者の判断待ちにする。
+  verified(id("2"), "v2b", { status: "incomplete", reason: "recipe" }, 15);
+  decided(id("2"), "defer", "operator-classifier-stopped", 20);
+  const result = run(["--running-labs", "lab-shared"]);
+  expect(ids(result.next.awaitingHuman)).toEqual([id("1")]);
+  expect(ids(result.next.owner)).toEqual([id("2")]);
+  expect(result.labs).toMatchObject({ held: ["lab-shared"], teardown: [] });
+});
