@@ -19,7 +19,7 @@
 
 1. 探索エージェントへ渡すのは、固定したソース、人間が書いた trust 境界宣言、Programme Boundary、Lab、時点で切った対象の公開履歴だけである。公開履歴はカタログ情報に限る（ADR 0012）。評価対象の答え、held-out 公開日以降の記録、PoC、ペイロード、再現手順は渡さない。
 2. 対象は gVisor（`runsc`）の使い捨て環境の中でだけ実行する。ホストでは実行せず、弱い隔離へ暗黙に切り替えない。外向き通信は、認証ブローカー経由の provider API に限る。
-3. Harness は判定器を持たない。確定の根拠は、名指しした人間が新しい review Lab で記録した `review observe` の match と `review decide --reproduced match` だけである（ADR 0040）。エージェントや recipe の自己申告、捕捉を読んだだけの推定、AI が打った `review observe` / `--reproduced` は根拠にしない。リバースシェル、永続化、ホストへのアクセスは証明にしない。既存の `runtime-confirmed` の event は、判定器があった時期の記録として読み続ける。
+3. Harness は判定器を持たない。確定の根拠は、名指しした人間が新しい review Lab で記録した `review observe` の match と `review decide --reproduced match` だけである（ADR 0040）。エージェントや recipe の自己申告、捕捉を読んだだけの推定、AI が自分で Lab を見て打った `review observe` / `--reproduced` は根拠にしない。所有者が会話の中で観測の結果を明言し、自分の画面画像を示したときに限り、AI 操作役が所有者の名前で `review observe`（`--evidence` はその画像）と `review decide --reproduced` を代行記録できる。所有者の発言の原文、時刻、会話の識別子、画像の digest は Private Evidence の attestation に残す（2026-10-31 改訂、ADR 0040 追記 3）。リバースシェル、永続化、ホストへのアクセスは証明にしない。既存の `runtime-confirmed` の event は、判定器があった時期の記録として読み続ける。
 4. 検証の失敗（環境、手順、観測、証拠の不足）は `incomplete` にする。`contradicted` にも棄却にもしない。
 5. 判定は、Finding と検証結果の Target Snapshot digest が同じときだけ行う。digest が一致しなければ `incomplete` にする。
 6. 人間の判断点は「提出前のレビュー」と「外部行動の承認」の 2 つとする。対象選定の承認と、未検証候補の採否は置かない。権限・対象範囲の拡張には、人間の明示の承認が要る。
