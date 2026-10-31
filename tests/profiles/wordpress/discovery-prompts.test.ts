@@ -71,7 +71,7 @@ describe("WordPress prompt table", () => {
   it("derives the id lists and the current versions from the table", () => {
     const ids = WORDPRESS_DISCOVERY_PROMPTS.map((row) => row.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(31);
+    expect(ids).toHaveLength(32);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual(ids);
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       ...ids,
@@ -109,12 +109,15 @@ describe("WordPress prompt table", () => {
       { id: "wp2shell-bounty-v15-wide", mode: "wide" },
       // Archived 2026-10-28, candidate again 2026-10-31 (ADR 0039 addendum 15).
       { id: "wp2shell-bounty-v18-wide", mode: "wide" },
+      // v18-wide with the stop tied to the tools listing (ADR 0039 addendum 16, #714).
+      { id: "wp2shell-bounty-v19-wide", mode: "wide" },
     ]);
     expect(WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS).toEqual([
       "wp2shell-bounty-v11",
       "wp2shell-bounty-v14-wide",
       "wp2shell-bounty-v15-wide",
       "wp2shell-bounty-v18-wide",
+      "wp2shell-bounty-v19-wide",
     ]);
     expect(
       WORDPRESS_VERIFIER_PROMPTS.filter((row) => row.status === "current"),
@@ -157,6 +160,7 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
       "wp2shell-bounty-v16-wide",
       "wp2shell-bounty-v17-wide",
       "wp2shell-bounty-v18-wide",
+      "wp2shell-bounty-v19-wide",
     ]);
     for (const row of WORDPRESS_DISCOVERY_PROMPTS.filter(
       (entry) => entry.status !== "archived",
@@ -185,6 +189,9 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
       // The v16-wide body on the v4 contract (ADR 0039 addendum 13); same digest.
       "wp2shell-bounty-v18-wide":
         "sha256:1ffb15f4f3f7ad6de70e330e10fd24c31513e41d250c8e0d6885b760a0a5c1f3",
+      // v18-wide with the stop fragment replaced (ADR 0039 addendum 16, #714).
+      "wp2shell-bounty-v19-wide":
+        "sha256:21ade74ca94a70c57083b48ce6325803e5f00f7b5c7f6ae417f04a132241e9aa",
     } as const;
     for (const row of composed) {
       const bytes = (await promptBytes(row.id)).toString("utf8");
@@ -486,7 +493,8 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v15-wide" ||
         id === "wp2shell-bounty-v16-wide" ||
         id === "wp2shell-bounty-v17-wide" ||
-        id === "wp2shell-bounty-v18-wide"
+        id === "wp2shell-bounty-v18-wide" ||
+        id === "wp2shell-bounty-v19-wide"
       )
         expect(text).toContain("one specialist agent per sink class");
       else expect(text).toMatch(/Lead|Finding/);
@@ -923,6 +931,53 @@ describe("WordPress discovery prompt assets", () => {
     ).toMatch(/^Stop when/);
   });
 
+  it("makes v19-wide the v18-wide objective with only the stop fragment replaced, tying closure to the tools listing (#714, ADR 0039 addendum 16)", async () => {
+    const rows = WORDPRESS_DISCOVERY_PROMPTS.filter(
+      (row) => "fragments" in row,
+    );
+    const v18 = rows.find((row) => row.id === "wp2shell-bounty-v18-wide")!;
+    const v19 = rows.find((row) => row.id === "wp2shell-bounty-v19-wide")!;
+    expect(v19.fragments).toHaveLength(v18.fragments.length);
+    expect(
+      v19.fragments.flatMap((fragment, index) =>
+        fragment.section === v18.fragments[index]!.section &&
+        fragment.file === v18.fragments[index]!.file
+          ? []
+          : [index],
+      ),
+    ).toEqual([v18.fragments.length - 1]);
+    expect(v19.fragments.at(-1)).toEqual({
+      section: "coordination",
+      file: "stop-wide-v14",
+    });
+
+    const paragraphs = (text: string) => text.trim().split(/\n\s*\n/);
+    const old = paragraphs(
+      (await loadWordPressDiscoveryAsset("wp2shell-bounty-v18-wide")).text,
+    );
+    const text = (await loadWordPressDiscoveryAsset("wp2shell-bounty-v19-wide"))
+      .text;
+    const now = paragraphs(text);
+    expect(now.slice(0, -1)).toEqual(old.slice(0, -1));
+    const stop = now.at(-1)!;
+    expect(stop).toContain("/workspace/research/tools/hooks.tsv");
+    expect(stop).toContain(
+      "Do not close while any sink class has rows remaining.",
+    );
+    expect(stop).toContain("or when the Trial wall is reached");
+    // The closing sentences of the v13 stop rule stay as they were.
+    for (const sentence of [
+      "Do not fabricate elapsed time.",
+      "Reporting zero candidates after bounded closure is a normal ending.",
+    ]) {
+      expect(old.at(-1)).toContain(sentence);
+      expect(stop).toContain(sentence);
+    }
+    // No Harness-enforced numbers and no target names (ADR 0039 addendum 4).
+    expect(stop).not.toMatch(/\d|\bhour\b|\bminutes?\b|\bchild(?:ren)?\b/);
+    expect(stop).not.toMatch(/\b(?:PoC|CVE|advisory|payload)\b/i);
+  });
+
   it("keeps the v2 method in v3 without an effort floor or handwritten output contract", async () => {
     const { text } = await loadWordPressDiscoveryAsset("wp2shell-bounty-v3");
     expect(text).toContain(
@@ -1184,7 +1239,8 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v15-wide" ||
         id === "wp2shell-bounty-v16-wide" ||
         id === "wp2shell-bounty-v17-wide" ||
-        id === "wp2shell-bounty-v18-wide"
+        id === "wp2shell-bounty-v18-wide" ||
+        id === "wp2shell-bounty-v19-wide"
       ) {
         // v5 leaves attacker positions and in-scope effects to the supplied
         // trust boundary and Programme Boundary sections (owner decision, 2026-10-16).
