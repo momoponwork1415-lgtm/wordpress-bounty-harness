@@ -140,6 +140,8 @@ async function fixture(
     browserDiagnosticOutput: "valid" as "valid" | "missing" | "invalid",
     /** WebM bytes the browser prints when the visit asks for video (#549). */
     videoOutput: null as Buffer | null,
+    /** What `wp user get harness-admin --field=ID` prints (#718). */
+    administratorId: "1",
   };
   /** The fake Docker daemon's objects and the loopback ports it bound. */
   const docker = {
@@ -417,6 +419,12 @@ async function fixture(
             ? { exitCode: 1, stdout: "", stderr: "missing" }
             : { exitCode: 0, stdout: `${value}\n`, stderr: "" };
         }
+        if (request.args.includes("--field=ID"))
+          return {
+            exitCode: 0,
+            stdout: `${database.administratorId}\n`,
+            stderr: "",
+          };
         if (request.args.includes("--porcelain"))
           return { exitCode: 0, stdout: "7", stderr: "" };
         return { exitCode: 0, stdout: "ok", stderr: "" };
@@ -1092,6 +1100,79 @@ describe("WordPress gVisor Lab", () => {
     if (comment !== undefined && post !== undefined)
       expect(commands.indexOf(comment)).toBeGreaterThan(commands.indexOf(post));
     await lab.teardown(provisioned.handle);
+  });
+
+  it("seeds every initial post as the Lab administrator (#718)", async () => {
+    const { lab, snapshot, setup, commands, database } = await fixture();
+    database.administratorId = "3";
+    const provisioned = await lab.provision(snapshot, {
+      ...setup,
+      initialPosts: ["Welcome", "Second"],
+      initialApprovedComment: true,
+    });
+    expect(provisioned.status).toBe("ready");
+    if (provisioned.status !== "ready") return;
+    const lookups = commands.filter((command) =>
+      command.args.includes("--field=ID"),
+    );
+    expect(lookups).toHaveLength(1);
+    expect(lookups[0]?.args.slice(-4)).toEqual([
+      "user",
+      "get",
+      "harness-admin",
+      "--field=ID",
+    ]);
+    const posts = commands.filter(
+      (command) =>
+        command.args.includes("post") && command.args.includes("create"),
+    );
+    expect(
+      posts.map((command) =>
+        command.args.find((arg) => arg.startsWith("--post_title=")),
+      ),
+    ).toEqual(["--post_title=Welcome", "--post_title=Second"]);
+    for (const post of posts) expect(post.args).toContain("--post_author=3");
+    const install = commands.find((command) =>
+      command.args.includes("--admin_user=harness-admin"),
+    );
+    expect(install).toBeDefined();
+    if (install !== undefined && lookups[0] !== undefined)
+      expect(commands.indexOf(lookups[0])).toBeGreaterThan(
+        commands.indexOf(install),
+      );
+    await lab.teardown(provisioned.handle);
+  });
+
+  it("does not look up the administrator when no initial post is seeded", async () => {
+    const { lab, snapshot, setup, commands } = await fixture();
+    const provisioned = await lab.provision(snapshot, {
+      ...setup,
+      initialPosts: [],
+    });
+    expect(provisioned.status).toBe("ready");
+    if (provisioned.status !== "ready") return;
+    expect(
+      commands.some((command) => command.args.includes("--field=ID")),
+    ).toBe(false);
+    await lab.teardown(provisioned.handle);
+  });
+
+  it("refuses to seed author-less posts when the administrator ID is not a positive integer", async () => {
+    const { lab, snapshot, setup, commands, database } = await fixture();
+    database.administratorId = "0";
+    expect(await lab.provision(snapshot, setup)).toMatchObject({
+      status: "incomplete",
+      reason: "provision",
+      exception: {
+        message: "Lab administrator ID is unavailable for seed posts",
+      },
+    });
+    expect(
+      commands.some(
+        (command) =>
+          command.args.includes("post") && command.args.includes("create"),
+      ),
+    ).toBe(false);
   });
 
   it("grants SELECT only on existing tables", async () => {

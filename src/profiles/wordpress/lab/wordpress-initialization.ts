@@ -128,6 +128,13 @@ async function seedInitialPosts({
   prepared,
 }: WordPressInitialization): Promise<void> {
   const { setup } = prepared;
+  if (setup.initialPosts.length === 0) return;
+  // #718: an ordinary site has no author-less posts; seed them as the admin.
+  const authorId = (
+    await lab.wp(["user", "get", "harness-admin", "--field=ID"])
+  ).stdout.trim();
+  if (!/^[1-9][0-9]*$/.test(authorId))
+    throw new Error("Lab administrator ID is unavailable for seed posts");
   for (const [index, title] of setup.initialPosts.entries()) {
     const approvedComment =
       index === 0 && setup.initialApprovedComment === true;
@@ -136,6 +143,7 @@ async function seedInitialPosts({
       "create",
       "--post_status=publish",
       `--post_title=${title}`,
+      `--post_author=${authorId}`,
       ...(approvedComment ? ["--porcelain"] : []),
     ]);
     if (!approvedComment) continue;
