@@ -693,7 +693,21 @@ const slotsByMemory =
 const activeLabs = [...new Set(inflight.values())].filter(
   (id) => !heldLabs.has(id),
 );
-const usedLabs = new Set([...heldLabs, ...viewOnlyLabs, ...activeLabs]);
+// 提出済みの Finding の Lab など、どの列にも当たらないが生きている Lab も host の枠を使う。
+// 片付けは所有者の了承の後（手順書 1 節）。この周で片付ける teardown だけは数えない。
+const otherLabs = [...(runningLabs ?? [])].filter(
+  (id) =>
+    !heldLabs.has(id) &&
+    !viewOnlyLabs.includes(id) &&
+    !activeLabs.includes(id) &&
+    !teardown.includes(id),
+);
+const usedLabs = new Set([
+  ...heldLabs,
+  ...viewOnlyLabs,
+  ...activeLabs,
+  ...otherLabs,
+]);
 const freeSlots = Math.min(
   slotsByMemory,
   Math.max(0, labSlots - usedLabs.size),
@@ -735,6 +749,8 @@ const result = {
     held: [...heldLabs],
     viewOnly: viewOnlyLabs,
     active: activeLabs,
+    /** どの列にも当たらないが生きている Lab（提出済みの Finding の Lab など）。所有者の了承で片付ける。 */
+    other: otherLabs,
     free: freeSlots,
     memAvailableGib:
       memoryGib === undefined ? null : Math.round(memoryGib * 10) / 10,

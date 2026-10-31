@@ -437,3 +437,23 @@ test("a Lab-image block keeps a stalled Finding out of the Lab plan until a late
     expect.objectContaining({ unit: "u", findingIds: [id("2")] }),
   ]);
 });
+
+test("a live Lab that no list accounts for, such as a submitted Finding's, still takes a slot", () => {
+  recorded(id("1"));
+  verified(id("1"), "v-sub", {
+    status: "incomplete",
+    reason: "awaiting-human-observation",
+  });
+  events.push({
+    type: "submission-recorded-externally",
+    findingId: id("1"),
+    occurredAt: at(30),
+  });
+  const result = run(["--running-labs", "lab-v-sub,lab-unknown"]);
+  expect(result.counts.done).toBe(1);
+  expect(result.labs).toMatchObject({
+    held: [],
+    other: ["lab-v-sub", "lab-unknown"],
+    free: 2,
+  });
+});

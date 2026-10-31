@@ -43,13 +43,15 @@
 node --experimental-strip-types scripts/verification-loop.ts --json > <state>/review-notes/verification-loop-<YYYYMMDDTHHMM>.json
 ```
 
-道具は台帳、`review-decision` の記録、最新の `review-notes/report-units-*.json`、`docker ps` だけを読み、何も書かない。開発セットの campaign（既定は `^(tp326-|issue-?[0-9])`）は数えない。出力の `next` の各列が、下の各節に当たる。`labs.free` は Lab の枠（`--lab-slots`、既定 8）から、観測待ちで生きている Lab、目視専用の Lab、検証中の Lab（`labs.active`）の数を引いた残りである。検証中とは、`<state>/handoff*/` の `batch.json` に載り、Lab が生きていて、まだ結果の無い Finding で、`next.verifying` に並ぶ。そのため handoff ディレクトリは `<state>/handoff-loop-<日付>/<単位>` に置く。さらに host の空きメモリで絞る。探索のために 16 GiB を残し、検証中の Lab 1 台を 1.5 GiB と見込む（所有者 2026-10-31「資源に余裕があるなら検証 Lab を少なめにする必要はない」。保持中の Lab は 1 台約 0.5 GiB）。探索の campaign 設定は名目で約 52 GiB（memoryBudgetMiB 10752 × 同時 5 対象）を持つので、予約は実測で決め直す。道具は `labs.explorationUsedGib` と `labs.labsUsedGib`（`docker stats` の合計）に加え、gVisor の sandbox が `docker stats` に乗らないときの照合に `labs.explorationRssGib` と `labs.labsRssGib`（`ps` の runsc の RSS を container 名で分けた合計）を出す。周の記録に `memAvailableGib` と合わせて残し、2 周分の数字で予約を見直す。この 8 と見込みは道具の既定値で、Harness は Lab の数を制限しない（#432）。Lab ごとの port は Docker が空いているものを選ぶので、台数が増えても取り合わない。
+道具は台帳、`review-decision` の記録、最新の `review-notes/report-units-*.json`、`docker ps` だけを読み、何も書かない。開発セットの campaign（既定は `^(tp326-|issue-?[0-9])`）は数えない。出力の `next` の各列が、下の各節に当たる。`labs.free` は Lab の枠（`--lab-slots`、既定 8）から、観測待ちで生きている Lab、目視専用の Lab、検証中の Lab（`labs.active`）、どの列にも当たらないが生きている Lab（`labs.other`。提出済みの Finding の Lab など）の数を引いた残りである。検証中とは、`<state>/handoff*/` の `batch.json` に載り、Lab が生きていて、まだ結果の無い Finding で、`next.verifying` に並ぶ。そのため handoff ディレクトリは `<state>/handoff-loop-<日付>/<単位>` に置く。さらに host の空きメモリで絞る。探索のために 16 GiB を残し、検証中の Lab 1 台を 1.5 GiB と見込む（所有者 2026-10-31「資源に余裕があるなら検証 Lab を少なめにする必要はない」。保持中の Lab は 1 台約 0.5 GiB）。探索の campaign 設定は名目で約 52 GiB（memoryBudgetMiB 10752 × 同時 5 対象）を持つので、予約は実測で決め直す。道具は `labs.explorationUsedGib` と `labs.labsUsedGib`（`docker stats` の合計）に加え、gVisor の sandbox が `docker stats` に乗らないときの照合に `labs.explorationRssGib` と `labs.labsRssGib`（`ps` の runsc の RSS を container 名で分けた合計）を出す。周の記録に `memAvailableGib` と合わせて残し、2 周分の数字で予約を見直す。この 8 と見込みは道具の既定値で、Harness は Lab の数を制限しない（#432）。Lab ごとの port は Docker が空いているものを選ぶので、台数が増えても取り合わない。
 
 ### 1. 片付け（`labs.teardown`）
 
 人間が観測を記録した Lab を、`lab down --lab <labId> --config <path>` で落とす。その Lab を保持している `verify next` のプロセスも終わったことを確かめる。ほかの Lab と探索の container には触らない。`lab cleanup --remove` は使わない。
 
 `labs.viewOnly` は、後の attempt に置き換えられたのに観測用に保持したまま生きている Lab である。`review observe` は最新の attempt と照合するので、この Lab には記録できない。所有者が目視を終えたと「検証と提出」が知らせてから落とす。それまでは枠に数える。その Finding は止まった検証として、単位の新しい Lab でやり直す。
+
+`labs.other` は、提出済みの Finding の Lab など、どの列にも当たらないのに生きている Lab である。所有者の了承を得てから落とす。それまでは枠に数える。
 
 ### 2. 段 1（`next.screen`）
 
