@@ -360,6 +360,12 @@ function classify(entry: FindingFacts): { stage: Stage; note: string } {
       ? { stage: "report", note: "human match" }
       : { stage: "owner", note: `human ${entry.observation.result}` };
   const verification = entry.verification;
+  // 観測用に保持した Lab が生きている間は、後から別の結果が記録されても観測待ちに数える。
+  if (entry.readyAt !== undefined) {
+    const labId = labOf(entry);
+    if (labId !== undefined && runningLabs?.has(labId) === true)
+      return { stage: "awaiting-human", note: "Lab up" };
+  }
   if (verification !== undefined) {
     if (verification.reason === AWAITING_HUMAN && entry.readyAt !== undefined) {
       const labId = labOf(entry);

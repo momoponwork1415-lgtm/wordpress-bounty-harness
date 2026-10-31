@@ -304,3 +304,29 @@ test("skips a Lab for a unit already awaiting a human, and retries a stalled mem
     expect.objectContaining({ unit: "retry", findingIds: [id("3"), id("4")] }),
   ]);
 });
+
+test("counts a held observation Lab as awaiting a human even after a later result for the same Finding", () => {
+  recorded(id("1"));
+  verified(id("1"), "v-held", {
+    status: "incomplete",
+    reason: "awaiting-human-observation",
+  });
+  events.push({
+    type: "manual-observation-lab-ready",
+    findingId: id("1"),
+    verificationId: "v-held",
+    occurredAt: at(10),
+  });
+  events.push({
+    type: "verification-finished",
+    campaignId: "prod-fixture-1",
+    findingId: id("1"),
+    verificationId: "v-held",
+    result: { status: "incomplete", reason: "recipe" },
+    occurredAt: at(12),
+  });
+  const result = run();
+  expect(ids(result.next.awaitingHuman)).toEqual([id("1")]);
+  expect(ids(result.next.stalled)).toEqual([]);
+  expect(result.labs).toMatchObject({ held: ["lab-v-held"], free: 3 });
+});
