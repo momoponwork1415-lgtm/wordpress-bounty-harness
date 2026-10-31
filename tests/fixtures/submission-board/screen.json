@@ -1,0 +1,50 @@
+{
+  "recordedAt": "2026-01-01",
+  "verdicts": [
+    {
+      "fid": "sha256:aaaa1111000000000000000000000000000000000000000000000000000000aa",
+      "short": "aaaa1111",
+      "slug": "example-gallery",
+      "version": "2.1.0",
+      "verdict": "keep",
+      "codes": [],
+      "noteJa": "残す"
+    },
+    {
+      "fid": "sha256:dddd4444000000000000000000000000000000000000000000000000000000dd",
+      "short": "dddd4444",
+      "slug": "example-gallery",
+      "version": "2.1.0",
+      "verdict": "exclude",
+      "codes": ["core-dependency"],
+      "noteJa": "本体の機能に依存する"
+    },
+    {
+      "fid": "sha256:eeee5555000000000000000000000000000000000000000000000000000000ee",
+      "short": "eeee5555",
+      "slug": "example-gallery",
+      "version": "2.1.0",
+      "verdict": "exclude",
+      "codes": ["park-impact", "public-similar"],
+      "noteJa": "park 対象"
+    },
+    {
+      "fid": "sha256:ffff6666000000000000000000000000000000000000000000000000000000ff",
+      "short": "ffff6666",
+      "slug": "other-widgets",
+      "version": "0.5",
+      "verdict": "exclude",
+      "codes": ["pr-mid-or-high"],
+      "noteJa": "編集者以上が要る"
+    },
+    {
+      "fid": "sha256:9999777700000000000000000000000000000000000000000000000000000099",
+      "short": "99997777",
+      "slug": "other-widgets",
+      "version": "0.5",
+      "verdict": "exclude",
+      "codes": ["standard-feature"],
+      "noteJa": "標準機能の組合せ"
+    }
+  ]
+}
