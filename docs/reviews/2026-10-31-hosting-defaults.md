@@ -173,6 +173,8 @@ v1 の Lab はパーマリンクが「基本」（`permalink_structure` が空�
 
 国外 403 の 4 パス、認証済みの攻撃者を国内に置く扱い、PHP の値、同梱プラグインを置かないことは v1 と同じである。v1 のファイルと digest は変えない。`verify next --handoff` は v2 を使い、`lab-provisioned.baseline.id` に `hosting-default-v2` を記録する。
 
+基準ファイルの外の振る舞い（2026-10-31 追記、#718）: campaign 設定の `lab.initialPosts` で作る初期記事は、`core install` が作る管理者（`harness-admin`）を作者にする。通常のサイトに作者のない記事は無いためで、基準ファイルに行を足すと digest が変わるので v2 のファイルは変えない。
+
 ### 4.4 実機確認が要る残りの問い（推測で埋めなかったもの）
 
 1. `/wp-admin/admin-ajax.php`・`admin-post.php` は、両社の `/wp-admin` 国外制限の対象か。
