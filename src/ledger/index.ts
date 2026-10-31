@@ -14,6 +14,15 @@ export const LEDGER_ID_MAX_LENGTH = 128;
 const id = z.string().min(1).max(LEDGER_ID_MAX_LENGTH);
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const artifactRef = z.strictObject({ kind: id, digest });
+/** A version string such as `3.3.1`; never free text. */
+const versionToken = z.string().regex(/^[0-9A-Za-z.+_-]{1,64}$/);
+/** A programme's decision on an external submission (#698). */
+export const EXTERNAL_OUTCOMES = [
+  "accepted",
+  "rejected",
+  "duplicate",
+  "out-of-scope",
+] as const;
 /** An enum value a profile declared; never free text. */
 const declaredToken = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
 const base = z.strictObject({
@@ -664,6 +673,35 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     destination: id,
     submittedOn: z.iso.date(),
     recordedBy: id,
+    /** #698: the newest public version when the submission was recorded. */
+    latestVersionAtSubmission: z
+      .strictObject({
+        version: versionToken,
+        observedAt: z.iso.datetime({ offset: true }),
+        /** `operator`, or the public listing the profile declares it observed. */
+        source: declaredToken,
+      })
+      .optional(),
+    /** #698: the Finding's group keys when the submission was recorded. */
+    sameRootKeys: z.array(digest).optional(),
+  }),
+  event({
+    /**
+     * #698: the decision a programme sent for an external submission, as the
+     * owner received it; reasons and bodies stay in Private Evidence.
+     */
+    type: z.literal("submission-outcome-recorded"),
+    findingId: id,
+    destination: id,
+    ticket: z.string().regex(/^[A-Za-z0-9._#-]{1,64}$/),
+    outcome: z.enum(EXTERNAL_OUTCOMES),
+    reasonCode: z
+      .string()
+      .regex(/^[a-z0-9-]{1,64}$/)
+      .optional(),
+    rewardUsd: z.number().nonnegative().max(1_000_000).optional(),
+    decidedOn: z.iso.date(),
+    recordedBy: id,
   }),
   event({
     type: z.literal("submission-outcome"),
@@ -1043,6 +1081,13 @@ export type CampaignFunnel = FunnelCounts & {
   readonly outcomesByKind: Readonly<Record<string, number>>;
   /** Sum of each candidate's latest reported reward. */
   readonly rewardUsd: number;
+  /** #698: externally submitted Findings by their latest recorded outcome. */
+  readonly externalOutcomes: {
+    readonly byOutcome: Readonly<
+      Record<(typeof EXTERNAL_OUTCOMES)[number] | "none", number>
+    >;
+    readonly byReason: Readonly<Record<string, number>>;
+  };
   /** Null until a submission supplies the denominator. */
   readonly ownerMinutesPerSubmission: number | null;
   readonly openedFindingsPerSubmission: number | null;
@@ -1857,6 +1902,10 @@ export class Ledger {
     const scopes = new Map<string, Map<string, string>>();
     const submissions = new Map<string, string>();
     const externalSubmissions = new Map<string, string>();
+    const latestExternalOutcome = new Map<
+      string,
+      Extract<LedgerEventV1, { type: "submission-outcome-recorded" }>
+    >();
     const submittedFindingsByCandidate = new Map<string, string>();
     const outcomes = new Set<string>();
     const latestOutcome = new Map<
@@ -2019,6 +2068,9 @@ export class Ledger {
           break;
         case "submission-recorded-externally":
           externalSubmissions.set(current.findingId, current.snapshotDigest);
+          break;
+        case "submission-outcome-recorded":
+          latestExternalOutcome.set(current.findingId, current);
           break;
         case "submission-outcome":
           outcomes.add(current.candidateId);
@@ -2227,6 +2279,31 @@ export class Ledger {
         (outcomesByKind[latest.outcome] ?? 0) + 1;
       rewardUsd += latest.rewardUsd ?? 0;
     }
+    const externalOutcomes = {
+      byOutcome: {
+        accepted: 0,
+        rejected: 0,
+        duplicate: 0,
+        "out-of-scope": 0,
+        none: 0,
+      },
+      byReason: Object.create(null) as Record<string, number>,
+    };
+    for (const finding of findings.values()) {
+      if (finding.derivationKind === "fixed-version-control") continue;
+      if (parkedFindings.has(finding.findingId)) continue;
+      if (externalSubmissions.get(finding.findingId) !== finding.snapshotDigest)
+        continue;
+      const latest = latestExternalOutcome.get(finding.findingId);
+      if (latest?.snapshotDigest !== finding.snapshotDigest) {
+        externalOutcomes.byOutcome.none++;
+        continue;
+      }
+      externalOutcomes.byOutcome[latest.outcome]++;
+      if (latest.reasonCode !== undefined)
+        externalOutcomes.byReason[latest.reasonCode] =
+          (externalOutcomes.byReason[latest.reasonCode] ?? 0) + 1;
+    }
     const byArm: Record<
       string,
       { runs: number; findings: number; confirmed: number }
@@ -2387,6 +2464,7 @@ export class Ledger {
       inScopeByProgramme: { ...inScopeByProgramme },
       outcomesByKind,
       rewardUsd,
+      externalOutcomes,
       ownerMinutesPerSubmission:
         submittedFindingIds.length === 0 || humanEffortEvents.length === 0
           ? null

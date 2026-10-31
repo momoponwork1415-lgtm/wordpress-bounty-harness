@@ -123,6 +123,8 @@ export async function recordedReviewState(
     /** Replaces the facts `review scope` reads from the records. */
     readonly scopeFacts?: WordPressCliProfileOptions["scopeFacts"];
     readonly askMinutes?: CliIo["askMinutes"];
+    /** Stands in for the host's one WordPress.org observation (#698). */
+    readonly latestVersion?: CliProfile["latestVersion"];
   } = {},
 ): Promise<RecordedReviewState> {
   const campaignId = options.campaignId ?? "campaign-1";
@@ -413,6 +415,8 @@ export async function recordedReviewState(
   for (const name of EXECUTION_METHODS)
     if (wordpress[name] !== undefined)
       Object.assign(profile, { [name]: refuse(name) });
+  if (options.latestVersion !== undefined)
+    profile.latestVersion = options.latestVersion;
 
   let ids = 0;
   const environment = {

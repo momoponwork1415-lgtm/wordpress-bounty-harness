@@ -10,7 +10,11 @@ import {
   readFindingGroups,
   type FindingGroup,
 } from "../ledger/finding-groups.js";
-import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
+import {
+  type EXTERNAL_OUTCOMES,
+  type Ledger,
+  type LedgerEventV1,
+} from "../ledger/index.js";
 import {
   countAttemptsForReason,
   shouldAutomaticallyRetryVerification,
@@ -25,6 +29,7 @@ import {
   manualObservationEvidenceStatus,
 } from "./manual-observation.js";
 import { openReproductionPackage } from "./reproduction-package.js";
+import { versionOf } from "./export.js";
 import {
   submissionBasis,
   type BasisAnswer,
@@ -1312,6 +1317,14 @@ export class Review<TFacts = unknown> {
     readonly destination: string;
     readonly submittedOn: string;
     readonly recordedBy: string;
+    /** The operator's own reading of the newest version; skips the observation. */
+    readonly latestVersion?: string;
+    /** One public observation of the target's newest version and its source (#698). */
+    readonly observeLatestVersion?: (targetId: string) => Promise<{
+      version: string;
+      observedAt: string;
+      source: string;
+    } | null>;
   }): Promise<void> {
     const record = {
       campaignId: id.parse(input.campaignId),
@@ -1330,16 +1343,104 @@ export class Review<TFacts = unknown> {
       .at(0)?.event;
     if (finding?.type !== "finding-recorded")
       throw new Error("The finding is not recorded in this campaign");
+    const identity = `external-submission:${canonicalDigest(record)}`;
+    // A repeated record is the one stored; its version was observed then.
+    if (
+      this.#ledger
+        .readAll({
+          campaignId: record.campaignId,
+          findingId: record.findingId,
+          type: "submission-recorded-externally",
+        })
+        .some(({ event }) => event.identity === identity)
+    )
+      return;
+    const now = this.#clock().toISOString();
+    const selected = this.#ledger
+      .readAll({ campaignId: record.campaignId, type: "target-selected" })
+      .find(
+        ({ event }) => event.snapshotDigest === finding.snapshotDigest,
+      )?.event;
+    const targetId =
+      selected?.type === "target-selected"
+        ? versionOf(selected.selectionId)?.targetId
+        : undefined;
+    const observed =
+      input.latestVersion !== undefined
+        ? {
+            version: input.latestVersion,
+            observedAt: now,
+            source: "operator" as const,
+          }
+        : targetId === undefined || input.observeLatestVersion === undefined
+          ? null
+          : await input.observeLatestVersion(targetId).catch(() => null);
+    if (observed === null)
+      throw new Error(
+        "The latest version could not be observed; pass --latest-version <version>",
+      );
     const appended = await this.#ledger.append({
       schemaVersion: 1,
-      identity: `external-submission:${canonicalDigest(record)}`,
+      identity,
       ...record,
       snapshotDigest: finding.snapshotDigest,
-      occurredAt: this.#clock().toISOString(),
+      occurredAt: now,
       type: "submission-recorded-externally",
+      latestVersionAtSubmission: observed,
+      sameRootKeys: [...this.#ledger.findingGroupKeyDigests(finding)],
     });
     if (appended.status === "conflict")
       throw new Error("External submission ledger conflict");
+  }
+
+  /** A programme's decision on an external submission, as the owner received it (#698). */
+  async recordExternalOutcome(input: {
+    readonly campaignId: string;
+    readonly findingId: string;
+    readonly destination: string;
+    readonly ticket: string;
+    readonly outcome: (typeof EXTERNAL_OUTCOMES)[number];
+    readonly reasonCode?: string;
+    readonly rewardUsd?: number;
+    readonly decidedOn: string;
+    readonly recordedBy: string;
+  }): Promise<void> {
+    const record = {
+      campaignId: id.parse(input.campaignId),
+      findingId: id.parse(input.findingId),
+      destination: id.parse(input.destination),
+      ticket: input.ticket,
+      outcome: input.outcome,
+      ...(input.reasonCode === undefined
+        ? {}
+        : { reasonCode: input.reasonCode }),
+      ...(input.rewardUsd === undefined ? {} : { rewardUsd: input.rewardUsd }),
+      decidedOn: input.decidedOn,
+      recordedBy: id.parse(input.recordedBy),
+    };
+    const submission = this.#ledger
+      .readAll({
+        campaignId: record.campaignId,
+        findingId: record.findingId,
+        type: "submission-recorded-externally",
+      })
+      .find(
+        ({ event }) =>
+          event.type === "submission-recorded-externally" &&
+          event.destination === record.destination,
+      )?.event;
+    if (submission === undefined)
+      throw new Error("Record the submission before its outcome");
+    const appended = await this.#ledger.append({
+      schemaVersion: 1,
+      identity: `external-outcome:${canonicalDigest(record)}`,
+      ...record,
+      snapshotDigest: submission.snapshotDigest,
+      occurredAt: this.#clock().toISOString(),
+      type: "submission-outcome-recorded",
+    });
+    if (appended.status === "conflict")
+      throw new Error("External outcome ledger conflict");
   }
 
   async recordOutcome(input: {

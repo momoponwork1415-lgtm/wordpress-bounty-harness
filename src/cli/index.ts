@@ -9,6 +9,7 @@ import { canonicalJson } from "../infrastructure/canonical-json.js";
 import { serializeFindingGroupKeyCache } from "../ledger/finding-group-key-cache.js";
 import { readFindingGroups } from "../ledger/finding-groups.js";
 import {
+  EXTERNAL_OUTCOMES,
   type CampaignFunnel,
   type ResumeRow,
   type StopRow,
@@ -551,6 +552,14 @@ export function formatFunnel(funnel: CampaignFunnel): string[] {
     lines.push(
       `outcomes: ${outcomes.map((outcome) => `${outcome} ${funnel.outcomesByKind[outcome]}`).join(", ")}  reward $${funnel.rewardUsd.toFixed(2)}`,
     );
+  const external = funnel.externalOutcomes.byOutcome;
+  // Shown once an outcome exists, so a ledger without one prints as before (#698).
+  if (EXTERNAL_OUTCOMES.some((outcome) => external[outcome] > 0)) {
+    const reasons = Object.keys(funnel.externalOutcomes.byReason).sort();
+    lines.push(
+      `external outcomes: ${[...EXTERNAL_OUTCOMES, "none" as const].map((outcome) => `${outcome} ${external[outcome]}`).join(", ")}${reasons.length === 0 ? "" : `  reasons: ${reasons.map((reason) => `${reason} ${funnel.externalOutcomes.byReason[reason]}`).join(", ")}`}`,
+    );
+  }
   const categories = Object.keys(funnel.byCategory).sort();
   if (categories.length > 0) lines.push("by category:");
   for (const category of categories) {
@@ -1889,7 +1898,7 @@ const COMMANDS: readonly Command[] = [
     required: ["to"],
     usage: [
       "review submitted --candidate <id> --draft <digest> --to <destination>",
-      "review submitted --external --campaign <id> --finding <id> --to <destination> --on <date> --by <who>",
+      "review submitted --external --campaign <id> --finding <id> --to <destination> --on <date> --by <who> [--latest-version <v>]",
     ],
     options: {
       candidate: STR,
@@ -1900,6 +1909,7 @@ const COMMANDS: readonly Command[] = [
       finding: STR,
       on: STR,
       by: STR,
+      "latest-version": STR,
     },
     validate: (values) => {
       if (values.external) {
@@ -1912,7 +1922,13 @@ const COMMANDS: readonly Command[] = [
           );
       } else {
         exactDraft(values);
-        for (const name of ["campaign", "finding", "on", "by"] as const)
+        for (const name of [
+          "campaign",
+          "finding",
+          "on",
+          "by",
+          "latest-version",
+        ] as const)
           if (values[name] !== undefined)
             throw new UsageError(`--${name} requires --external`);
       }
@@ -1925,6 +1941,23 @@ const COMMANDS: readonly Command[] = [
           destination: required(values.to, "to"),
           submittedOn: required(values.on, "on"),
           recordedBy: required(values.by, "by"),
+          ...(values["latest-version"] === undefined
+            ? {}
+            : { latestVersion: values["latest-version"] }),
+          ...(environment.profile.latestVersion === undefined
+            ? {}
+            : {
+                // The host observes WordPress.org, as `review export` does.
+                observeLatestVersion: async (targetId: string) => {
+                  const observed = await environment.profile.latestVersion!(
+                    state,
+                    targetId,
+                  );
+                  return observed === null
+                    ? null
+                    : { ...observed, source: "wordpress-org" };
+                },
+              }),
         });
         io.stdout("external submission recorded; Harness sends nothing");
         return 0;
@@ -1948,17 +1981,52 @@ const COMMANDS: readonly Command[] = [
   }),
   command({
     name: "review outcome",
-    required: ["candidate", "outcome"],
+    required: ["outcome"],
     usage: [
       "review outcome --candidate <id> --outcome triaged|resolved|duplicate|informative|not-applicable|rejected [--reward <usd>]",
+      "review outcome --external --campaign <id> --finding <id> --to <destination> --ticket <id> --outcome accepted|rejected|duplicate|out-of-scope [--reason <code>] [--reward <usd>] --on <date> --by <who>",
     ],
-    options: { candidate: STR, outcome: STR, reward: STR },
+    options: {
+      candidate: STR,
+      outcome: STR,
+      reward: STR,
+      external: BOOL,
+      campaign: STR,
+      finding: STR,
+      to: STR,
+      ticket: STR,
+      reason: STR,
+      on: STR,
+      by: STR,
+    },
+    validate: (values) => {
+      const external = [
+        "campaign",
+        "finding",
+        "to",
+        "ticket",
+        "on",
+        "by",
+      ] as const;
+      if (values.external) {
+        if (values.candidate !== undefined)
+          throw new UsageError(
+            "--external cannot be combined with --candidate",
+          );
+        for (const name of external) required(values[name], name);
+        z.iso.date().parse(values.on);
+      } else {
+        required(values.candidate, "candidate");
+        for (const name of [...external, "reason"] as const)
+          if (values[name] !== undefined)
+            throw new UsageError(`--${name} requires --external`);
+      }
+    },
     prepareInput: (values) => {
-      const outcome = OUTCOMES.find(
-        (candidate) => candidate === values.outcome,
-      );
+      const choices = values.external ? EXTERNAL_OUTCOMES : OUTCOMES;
+      const outcome = choices.find((candidate) => candidate === values.outcome);
       if (outcome === undefined)
-        throw new UsageError(`--outcome must be one of ${OUTCOMES.join(", ")}`);
+        throw new UsageError(`--outcome must be one of ${choices.join(", ")}`);
       const reward =
         values.reward === undefined ? undefined : Number(values.reward);
       if (
@@ -1971,9 +2039,26 @@ const COMMANDS: readonly Command[] = [
     },
     handler: async ({ values, input, state, environment, io }) => {
       const { outcome, reward } = input;
+      if (values.external) {
+        await environment.profile.review(state).recordExternalOutcome({
+          campaignId: required(values.campaign, "campaign"),
+          findingId: required(values.finding, "finding"),
+          destination: required(values.to, "to"),
+          ticket: required(values.ticket, "ticket"),
+          outcome: outcome as (typeof EXTERNAL_OUTCOMES)[number],
+          ...(values.reason === undefined ? {} : { reasonCode: values.reason }),
+          ...(reward === undefined ? {} : { rewardUsd: reward }),
+          decidedOn: required(values.on, "on"),
+          recordedBy: required(values.by, "by"),
+        });
+        io.stdout(
+          `external outcome ${outcome} recorded; Harness sends nothing`,
+        );
+        return 0;
+      }
       await environment.profile.review(state).recordOutcome({
         candidateId: required(values.candidate, "candidate"),
-        outcome,
+        outcome: outcome as (typeof OUTCOMES)[number],
         ...(reward === undefined ? {} : { rewardUsd: reward }),
       });
       // Only an interactive host asks; there is no flag for it.

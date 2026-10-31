@@ -312,6 +312,19 @@ export const reviewExportV1Schema = z.strictObject({
           submittedOn: z.iso.date(),
           recordedBy: id,
           recordedAt: z.iso.datetime({ offset: true }),
+          /** #698: the latest outcome recorded for this destination, if any. */
+          ticket: z.string().nullable().default(null),
+          outcome: z.string().nullable().default(null),
+          reasonCode: z.string().nullable().default(null),
+          latestVersionAtSubmission: z
+            .strictObject({
+              version: z.string(),
+              observedAt: z.iso.datetime({ offset: true }),
+              source: z.string(),
+            })
+            .nullable()
+            .default(null),
+          sameRootKeys: z.array(digest).default([]),
         }),
       )
       .default([]),
@@ -483,7 +496,7 @@ function duplicateView(
   };
 }
 
-function versionOf(selectionId: string): {
+export function versionOf(selectionId: string): {
   readonly targetId: string;
   readonly version: string;
 } | null {
@@ -795,6 +808,14 @@ export async function exportReviewBundle(options: {
     .filter((event) => event.type === "verification-finished")
     .sort((a, b) => a.occurredAt.localeCompare(b.occurredAt))
     .at(-1);
+  const externalOutcomes = ofFinding("submission-outcome-recorded", [
+    findingId,
+  ]).flatMap((event) =>
+    event.type === "submission-outcome-recorded" &&
+    event.snapshotDigest === finding.snapshotDigest
+      ? [event]
+      : [],
+  );
   const draft = ofFinding("draft-saved", [findingId]).at(-1);
   const draftRecord = await privateRecord(draft, "review-draft");
   const latestObserved =
@@ -944,19 +965,29 @@ export async function exportReviewBundle(options: {
             },
       externalSubmissions: ofFinding("submission-recorded-externally", [
         findingId,
-      ]).flatMap((event) =>
-        event.type === "submission-recorded-externally" &&
-        event.snapshotDigest === finding.snapshotDigest
-          ? [
-              {
-                destination: event.destination,
-                submittedOn: event.submittedOn,
-                recordedBy: event.recordedBy,
-                recordedAt: event.occurredAt,
-              },
-            ]
-          : [],
-      ),
+      ]).flatMap((event) => {
+        if (
+          event.type !== "submission-recorded-externally" ||
+          event.snapshotDigest !== finding.snapshotDigest
+        )
+          return [];
+        const outcome = externalOutcomes
+          .filter((item) => item.destination === event.destination)
+          .at(-1);
+        return [
+          {
+            destination: event.destination,
+            submittedOn: event.submittedOn,
+            recordedBy: event.recordedBy,
+            recordedAt: event.occurredAt,
+            ticket: outcome?.ticket ?? null,
+            outcome: outcome?.outcome ?? null,
+            reasonCode: outcome?.reasonCode ?? null,
+            latestVersionAtSubmission: event.latestVersionAtSubmission ?? null,
+            sameRootKeys: event.sameRootKeys ?? [],
+          },
+        ];
+      }),
       latestDraft:
         draft?.type !== "draft-saved" || draftRecord === null
           ? null
