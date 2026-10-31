@@ -211,7 +211,7 @@ test("plans one Lab per report unit, at most five Findings, within the free slot
       { groupId: "u2", representative: "22222222", members: [] },
     ]),
   );
-  const result = run(["--lab-slots", "1"]);
+  const result = run(["--lab-slots", "1", "--running-labs", ""]);
   expect(result.next.lab).toEqual([
     expect.objectContaining({
       unit: "u1",
