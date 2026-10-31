@@ -20,7 +20,6 @@ export interface RunParameters {
     readonly effort: string;
   };
 }
-
 /**
  * The Harness-generated `## Run parameters` section (ADR 0019 pattern). It
  * states the enforced values only and says nothing about how to explore.
@@ -41,35 +40,6 @@ export function runParametersSection(parameters: RunParameters): string {
       lab.mode === "none"
         ? "- Lab: none."
         : `- Lab: attached, at most ${lab.maxResets} resets.`,
-    ].join("\n"),
-  ].join("\n\n");
-}
-
-/** The values the Harness enforces on an enumerator's proposal (ADR 0042). */
-export interface PartitionLimitParameters {
-  readonly maxEntriesPerPartition: number;
-  readonly maxPartitions: number;
-  readonly maxResubmits: number;
-  /** Where a sent-back proposal and its reasons arrive, as absolute sandbox paths. */
-  readonly sentBack: { readonly previous: string; readonly reasons: string };
-}
-
-/**
- * The Harness-generated `## Partition limits` section of an enumerator's
- * prompt (ADR 0042). It states the enforced limits and the files a send-back
- * arrives with; it says nothing about how to enumerate or partition.
- * Agent-facing text: changes need `owner-approved`.
- */
-export function partitionLimitsSection(
-  limits: PartitionLimitParameters,
-): string {
-  return [
-    "## Partition limits",
-    [
-      "The Harness checks the proposal's shape against these values and sends it back with the reasons when they are exceeded.",
-      `- Maximum rows per partition: ${limits.maxEntriesPerPartition}.`,
-      `- Maximum partitions: ${limits.maxPartitions}.`,
-      `- Send-backs: at most ${limits.maxResubmits}. A sent-back proposal arrives again with the previous submission at ${limits.sentBack.previous} and the reasons at ${limits.sentBack.reasons}.`,
     ].join("\n"),
   ].join("\n\n");
 }

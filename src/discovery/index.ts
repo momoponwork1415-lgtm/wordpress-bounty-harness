@@ -62,35 +62,12 @@ export {
   ClaudeNativeAgentRuntime,
   claudeProviderFailure,
 } from "./claude-native-agent-runtime.js";
-export { ClaudeOneShotRuntime } from "./claude-one-shot-runtime.js";
-export { CodexOneShotRuntime } from "./codex-one-shot-runtime.js";
-export {
-  scriptRanIn,
-  ONE_SHOT_SANDBOX_MEMORY_MIB,
-  PARTITIONED_ROLE_MEMORY_PROFILES,
-  type OneShotExecutor,
-  type OneShotFile,
-  type OneShotResult,
-  type OneShotRun,
-  type OneShotToolFile,
-} from "./one-shot-run.js";
-export {
-  ENUMERATION_OUTPUT_FILES,
-  executePartitionedTrial,
-  PARTITION_INPUT_FILES,
-  PARTITIONED_TARGET_CEILING_MS,
-  readEnumerationOutput,
-  ROLE_START_FLOOR_MS,
-  type PartitionedRolePlan,
-  type PartitionedTrialPlan,
-} from "./partitioned-trial.js";
 export {
   claudeRunSession,
   claudeSessionFromDiagnostic,
 } from "./claude-session.js";
 export {
   CLAUDE_COOPERATIVE_SANDBOX_MEMORY_MIB,
-  CLAUDE_ONE_SHOT_SANDBOX_MEMORY_MIB,
   ClaudeSandboxNotAdmittedError,
   GvisorClaudeSandbox,
   type ClaudeSandbox,
@@ -100,18 +77,7 @@ export {
   type GvisorClaudeSandboxOptions,
 } from "./claude-gvisor-sandbox.js";
 export { CLAUDE_RUNNER_DENIALS } from "./claude-runner.js";
-export {
-  partitionLimitsSection,
-  runParametersSection,
-  type PartitionLimitParameters,
-  type RunParameters,
-} from "./run-parameters.js";
-export {
-  parseRoleDefinition,
-  roleDefinitionFrontMatterSchema,
-  type RoleDefinition,
-  type RoleDefinitionFrontMatter,
-} from "./role-definition.js";
+export { runParametersSection, type RunParameters } from "./run-parameters.js";
 export {
   admittedSkillFiles,
   admittedStagedSkills,
@@ -129,27 +95,6 @@ export {
   type StagedSkill,
   type StagedSkillFile,
 } from "./skill-definition.js";
-export {
-  collapseInventory,
-  INVENTORY_MAX_ROWS,
-  inventoryRowSchema,
-  inventorySchema,
-  PARTITION_REJECTION_REASONS,
-  partitionLimitsSchema,
-  partitionProposalSchema,
-  rejectionReasonTokens,
-  resubmitDecision,
-  validatePartitionProposal,
-  type AssignedPartition,
-  type CollapsedInventory,
-  type Inventory,
-  type InventoryRow,
-  type PartitionLimits,
-  type PartitionProposal,
-  type PartitionRejection,
-  type PartitionRejectionReason,
-  type PartitionValidation,
-} from "./partition.js";
 export {
   assignDiscoveryRuntime,
   runtimeShareSchema,
@@ -232,11 +177,8 @@ export {
   type LabCommandRule,
 } from "./read-paths.js";
 export {
-  SANDBOX_INPUT_MOUNT_PATH,
-  SANDBOX_OUTPUT_MOUNT_PATH,
   SANDBOX_RESEARCH_MOUNT_PATH,
   SANDBOX_SOURCE_MOUNT_PATH,
-  SANDBOX_TOOLS_MOUNT_PATH,
   dependencyMountLabel,
   dependencyMountPathsOf,
   sourceRelativePath,

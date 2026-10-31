@@ -158,7 +158,9 @@ function configurationOf(
     ...(configuration.runtime === undefined
       ? {}
       : { runtime: configuration.runtime }),
-    ...(configuration.mode === undefined ? {} : { mode: configuration.mode }),
+    ...(configuration.mode === "deep" || configuration.mode === "wide"
+      ? { mode: configuration.mode }
+      : {}),
     ...pickDefined(configuration, [
       "wallMinutes",
       "minimumActiveMinutes",

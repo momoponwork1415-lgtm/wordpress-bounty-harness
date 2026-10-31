@@ -56,8 +56,6 @@ export interface CampaignPipeline<
     readonly concurrency?: number;
     readonly runWallTimeMs?: number;
     readonly executor: DiscoveryOptions["executor"];
-    /** ADR 0042: present when the planned Trials are partitioned. */
-    readonly oneShotExecutor?: NonNullable<DiscoveryOptions["oneShotExecutor"]>;
     readonly attachments: DiscoveryOptions["attachments"];
     readonly recordReport: DiscoveryOptions["recordReport"];
     readonly resumeInterrupted?: NonNullable<
@@ -568,8 +566,7 @@ export async function runCampaignPipeline<
         stoppedBy: discovered.stoppedBy,
         verifications: [],
       };
-      // A usage limit stops the campaign's other targets even when the Trial
-      // that met it concluded partially (ADR 0042): the runner backs off.
+      // A usage limit stops the campaign's other targets; the runner backs off.
       if (
         (discovered.stoppedBy === "provider-limit" ||
           discovered.providerLimit !== undefined) &&
