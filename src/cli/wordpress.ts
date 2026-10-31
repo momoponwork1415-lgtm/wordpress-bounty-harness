@@ -1922,6 +1922,8 @@ export function createWordPressCliProfile(
       ];
     },
     async reverify(state, input) {
+      if (input.resnapshotDependencies === true && input.handoff === undefined)
+        throw new Error("Dependency resnapshot requires a Lab handoff");
       const session = await openWordPressCampaignSession(options, state, input);
       const { boundaries } = session;
       const policy = await session.policy();
@@ -1935,6 +1937,9 @@ export function createWordPressCliProfile(
           ? {}
           : { snapshotCampaignId: input.snapshotCampaignId }),
         ...(input.version === undefined ? {} : { version: input.version }),
+        ...(input.resnapshotDependencies === true
+          ? { resnapshotDependencies: true }
+          : {}),
         ledger: state.ledger,
         store: state.store,
         clock: state.clock,

@@ -323,6 +323,8 @@ export interface CliProfile {
       readonly findingId: string;
       readonly configPath: string;
       readonly version?: string;
+      /** Retry an unconfirmed Finding after adding pinned dependency sources. */
+      readonly resnapshotDependencies?: boolean;
       /** Hand the versioned Lab to the verification skill. */
       readonly handoff?: {
         readonly directory: string;
@@ -1725,7 +1727,7 @@ const COMMANDS: readonly Command[] = [
     name: "review reverify",
     required: ["campaign", "finding", "config"],
     usage: [
-      "review reverify --campaign <id> --finding <id> --config <path> [--version <target-version>] [--handoff <dir> [--port <n>] [--db-port <n>]]",
+      "review reverify --campaign <id> --finding <id> --config <path> [--version <target-version>] [--resnapshot-dependencies] [--handoff <dir> [--port <n>] [--db-port <n>]]",
     ],
     options: {
       campaign: STR,
@@ -1734,12 +1736,21 @@ const COMMANDS: readonly Command[] = [
       finding: STR,
       handoff: STR,
       port: STR,
+      "resnapshot-dependencies": BOOL,
       version: STR,
     },
     validate: (values) => {
       const version = values.version;
       if (version !== undefined && !/^[0-9][A-Za-z0-9.+-]{0,31}$/.test(version))
         throw new UsageError("--version is invalid");
+      if (values["resnapshot-dependencies"] === true) {
+        if (version !== undefined)
+          throw new UsageError(
+            "--resnapshot-dependencies cannot be combined with --version",
+          );
+        if (values.handoff === undefined)
+          throw new UsageError("--resnapshot-dependencies requires --handoff");
+      }
       if (
         values.handoff === undefined &&
         (values.port !== undefined || values["db-port"] !== undefined)
@@ -1755,6 +1766,9 @@ const COMMANDS: readonly Command[] = [
         findingId: required(values.finding, "finding"),
         configPath: resolve(required(values.config, "config")),
         ...(version === undefined ? {} : { version }),
+        ...(values["resnapshot-dependencies"] === true
+          ? { resnapshotDependencies: true }
+          : {}),
         ...(values.handoff === undefined
           ? {}
           : {
