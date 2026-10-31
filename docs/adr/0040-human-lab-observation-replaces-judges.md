@@ -61,3 +61,14 @@ amends: 0021（判定器と canary の回収）, 0026（観測器の判定）, 0
 - `review export --version 2` の `review.manualObservation.configuration` に申告の真偽と記録の path を出す。
 
 消し方: この追記の PR を revert する。追記した `configuration` を持つ event は、旧版の台帳 schema では読めないため、revert の前に扱いを決める。
+
+## 2026-10-31 追記 3: 所有者の会話内の明言を AI 操作役が代行記録する
+
+所有者は 2026-10-31 に「2 にして　さすがにコマンドを打つのはやってられない」と言った。観測は所有者が自分のブラウザで行い、記録のコマンドだけを打ちたくない。
+
+- `review observe` と `review decide --reproduced` の根拠が所有者自身の観測であることは変えない。打つのが誰かを緩める。所有者が会話の中で結果（`match` / `mismatch` / `unavailable`）と、確かめた構成が通常の公開サイトのものか（`--ordinary-site`）を明言し、自分の画面画像を渡したときに限り、AI 操作役が所有者の名前（`--by`）でこの 2 つを記録できる。`--evidence` はその画像にする。
+- 代行の前に、AI 操作役は Private Evidence の `manual-observation-attestations/<findingId>-<画像の digest>.json` に、所有者の発言の原文、時刻、会話の識別子、画像の digest、記録した操作役を書く。台帳の `manual-observation-recorded` は変えない（`recordedBy` は所有者、`evidenceDigest` は画像）。台帳に代行の印を持たせる項目は、本番ランナーを新しい build に替えた後に別 PR で足す（台帳の項目は足すだけだが、旧 build が読むと止まるため）。
+- AI が自分で Lab を見て打つ記録、画像の無い記録、所有者の明言の無い記録は、引き続き根拠にしない。最終版の `--prepared-by human`、最終の `accept`、`review authorize` は代行しない。
+- 不変条件 3（SPEC 第 2 節、AGENTS.md）、OPERATIONS 第 3 節、skill `wbh-review` v5 をこれに合わせた。
+
+消し方: この追記の PR を revert する。代行で記録した event は `recordedBy` が所有者なので旧版でも読める。attestation は Private Evidence に残る。
