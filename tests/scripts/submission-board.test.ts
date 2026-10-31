@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
@@ -34,6 +34,17 @@ beforeEach(async () => {
   for (const event of fixture<{ type: string }[]>("ledger-events.json"))
     insert.run(event.type, JSON.stringify(event));
   ledger.close();
+  // review-decided が指す判断の記録（理由コード）を Private Evidence に置く。
+  for (const [digest, reasonCode] of Object.entries(
+    fixture<Record<string, string>>("decision-records.json"),
+  )) {
+    const directory = join(state, "private-evidence", digest, "content");
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(
+      join(directory, "record.json"),
+      JSON.stringify({ reasonCode }),
+    );
+  }
 
   const mirror = new DatabaseSync(join(state, "history.sqlite"));
   mirror.exec(`CREATE TABLE vulnerabilities (
@@ -106,7 +117,7 @@ test("renders report units with ledger, mirror and unfetched upstream without ne
     units: 2,
     excludedPlugins: 2,
     keep: 1,
-    exclude: 4,
+    exclude: 3,
     unavailable: { mirror: 0, latest: 2, trunk: 2, ledger: 0 },
   });
 
@@ -127,7 +138,7 @@ test("renders report units with ledger, mirror and unfetched upstream without ne
   expect(units).toContain("台帳の対象は wporg:sample-forms@1.0.1");
 });
 
-test("collapses excluded findings into one row per plugin", () => {
+test("lists the ledger's stage 1 and 1b rejects per plugin, with the screen JSON as notes only", () => {
   const { html } = render();
   const excluded = section(html, "除外");
   const rows = excluded.match(/<tr><td><b>[^<]+<\/b>/g) ?? [];
@@ -136,11 +147,15 @@ test("collapses excluded findings into one row per plugin", () => {
     "<tr><td><b>other-widgets</b>",
   ]);
   expect(excluded).toContain("オプション更新 1、格納型 XSS 1");
-  expect(excluded).toContain("park 対象の impact 1、本体依存 1");
-  // 除外の根拠にならない符号だけの判定は「その他」に数え、明細には残す。
-  expect(excluded).toContain("その他 1、中〜高権限が必要 1");
-  expect(excluded).toContain("台帳に無い");
+  expect(excluded).toContain("Wordfence 明示除外 1、本体依存 1");
+  // 段 1b の不成立も台帳から出る。
+  expect(excluded).toContain("sink に届かない（段 1b）");
+  // JSON の注記は台帳にある除外にだけ付く。
+  expect(excluded).toContain("本体の機能に依存する");
   expect(excluded).toContain("<details><summary>明細</summary>");
+  // JSON だけの除外と、段 1・1b 以外の理由の reject は出さない。
+  expect(excluded).not.toContain("99997777");
+  expect(excluded).not.toContain("bbbb8888");
   expect(excluded).not.toContain("aaaa1111");
 });
 
