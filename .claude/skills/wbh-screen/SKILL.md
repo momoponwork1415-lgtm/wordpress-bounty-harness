@@ -53,6 +53,6 @@ v4.2 までは「規則で明白に除外できるものだけを分け、残り
 
 所有者は CLI を使わない。人間向けには、報告単位の一覧を 1 画面にした HTML か Artifact を作る。上段に `要検証` の報告単位（種別、対象と版、攻撃者、前提、構成員の数、公開記録、次の一手）、下段に `除外` を対象ごとに 1 行（件数と理由コードの内訳）で載せる。全 Finding を並べない。未公開のペイロード、URL、関数名、再現手順は載せない。
 
-このスキルは台帳を変更しない。`除外` を台帳に残すときは、所有者の了解を得た AI 操作役が `harness review decide --campaign <id> --finding <id> --decision reject --reason screen-v5:<理由コード> --by ai` を打つ。旧版の `reject` が今回 `要検証` になったら `--decision defer --reason screen-v5-reassessment --by ai` を追記し、検証列へ戻ったことを確かめる。
+このスキルは台帳を変更しない。`除外` を台帳に残すときは、所有者の了解を得た AI 操作役が `harness review decide --campaign <id> --finding <id> --decision reject --reason screen-v5-<理由コード> --by ai` を打つ。旧版の `reject` が今回 `要検証` になったら `--decision defer --reason screen-v5-reassessment --by ai` を追記し、検証列へ戻ったことを確かめる。
 
 `要検証` の代表は、次の一手が Lab なら `verify next --config <path> --campaign <id> --finding <id> --handoff <dir>` で進む。確定の根拠は、名指しした人間が review Lab で記録した `review observe` の `match` と `review decide --reproduced match` だけである（ADR 0040）。
