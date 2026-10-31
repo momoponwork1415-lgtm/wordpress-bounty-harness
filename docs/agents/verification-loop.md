@@ -63,7 +63,7 @@ node --experimental-strip-types scripts/verification-loop.ts --json > <state>/re
 
 ### 5. Lab（`next.lab`）
 
-`next.lab` は、空いている枠の数だけ並ぶ。1 単位に Lab 1 台で、同じ Snapshot の Finding を 5 件まで順に回す（#704）。単位ごとに次を行う。
+`next.lab` は、空いている枠の数だけ並ぶ。1 単位に Lab 1 台で、同じ Snapshot の Finding を 5 件まで順に回す（#704）。止まった検証のうち単位のあるものは、その単位の Lab に入る（7 節のやり直し）。構成員の誰か（最新版の派生を含む）がすでに観測待ちか報告に進んだ単位は、報告 1 件にまとめるので Lab を立てず、`next.labCovered` に並ぶ。単位ごとに次を行う。
 
 1. Git 外に新しい handoff ディレクトリを作り、`verify next --config <path> --campaign <id> --finding <id,...> --handoff <dir> --hold-minutes 1440` をバックグラウンドで起動する。
 2. Finding ごとのディレクトリ（`<dir>/<n>-<id の先頭 12 文字>`、一覧は `<dir>/batch.json`）に `lab.json` が現れたら、`wbh-verify` の操作役サブエージェント（Opus）を 1 体立てる。1 つのディレクトリには操作役を 1 体だけ置く。依頼文には次を書く。
