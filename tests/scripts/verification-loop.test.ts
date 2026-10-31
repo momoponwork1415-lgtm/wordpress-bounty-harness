@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
@@ -475,4 +475,49 @@ test("an owner-hold defer keeps a unit out of the Lab plan, verified or not", ()
   const result = run();
   expect(ids(result.next.owner)).toEqual([id("1"), id("2")]);
   expect(result.next.lab).toEqual([]);
+});
+
+test("a single-Finding verify next (lab.json, no batch.json) is verifying while its Lab is up; an older lab.json is not", () => {
+  const handoff = (name: string, findingId: string) => {
+    const directory = join(state, "handoff-loop-fixture", name);
+    mkdirSync(directory, { recursive: true });
+    const path = join(directory, "lab.json");
+    writeFileSync(
+      path,
+      JSON.stringify({ findingId, snapshotDigest: snapshot }),
+    );
+    return path;
+  };
+  recorded(id("1"));
+  decided(id("1"), "defer", "source-check-pass");
+  handoff("one", id("1"));
+  // 前の周の handoff。同じ Snapshot の新しい Lab より前に書かれたので、その Lab の Finding ではない。
+  recorded(id("2"));
+  decided(id("2"), "defer", "source-check-pass");
+  const old = handoff("two", id("2"));
+  utimesSync(old, new Date(at(1)), new Date(at(1)));
+  events.push({
+    type: "lab-provisioned",
+    identity: "verification-lab-s1",
+    labId: "lab-s1",
+    snapshotDigest: snapshot,
+    occurredAt: at(11),
+  });
+  const result = run(["--running-labs", "lab-s1"]);
+  expect(ids(result.next.verifying)).toEqual([id("1")]);
+  expect(result.labs).toMatchObject({ active: ["lab-s1"], free: 3 });
+  expect(ids(result.next.unit)).toEqual([id("2")]);
+});
+
+test("an owner-hold defer after a judge-era runtime-confirmed keeps it out of the Lab plan", () => {
+  for (const digit of ["1", "2"]) {
+    recorded(id(digit));
+    verified(id(digit), `v${digit}`, { status: "runtime-confirmed" });
+  }
+  decided(id("1"), "defer", "owner-deferred-vendor-account", 5);
+  const result = run();
+  expect(ids(result.next.owner)).toEqual([id("1")]);
+  expect(result.next.lab).toEqual([
+    expect.objectContaining({ findingIds: [id("2")] }),
+  ]);
 });

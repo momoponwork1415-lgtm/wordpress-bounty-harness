@@ -18,9 +18,10 @@
 //   判断の理由   <state>/private-evidence/<digest>/content/record.json（review-decision）
 //   報告単位     <state>/review-notes/report-units-*.json（既定は名前順で最後のもの、無くてもよい）
 //   生きている Lab  docker ps の wbh-<labId>-wp。--running-labs で与えたらそれを使う。
-//   検証中の Lab   <state>/handoff*/batch.json と <state>/handoff*/*/batch.json（verify next の一括）
+//   検証中の Lab   <state>/handoff*/batch.json と <state>/handoff*/*/batch.json（verify next の一括）、
+//                  batch.json の無い handoff の lab.json（1 件だけの verify next）
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -139,6 +140,11 @@ const findings = new Map<string, FindingFacts>();
 const slugBySnapshot = new Map<string, string>();
 /** lab-provisioned の identity `verification-lab-<verificationId>` から labId を引く。 */
 const labByVerification = new Map<string, string>();
+/** 同じ lab-provisioned の snapshotDigest。1 件だけの verify next は batch.json を書かないので、これで Lab を引く。 */
+const snapshotByVerification = new Map<
+  string,
+  { snapshot: string; at: string }
+>();
 /** verification-finished が出た verificationId。 */
 const finishedVerifications = new Set<string>();
 
@@ -212,8 +218,16 @@ for (const row of rows) {
   if (type === "lab-provisioned") {
     const identity = text("identity") ?? "";
     const labId = text("labId");
-    if (identity.startsWith("verification-lab-") && labId !== undefined)
-      labByVerification.set(identity.slice("verification-lab-".length), labId);
+    if (identity.startsWith("verification-lab-") && labId !== undefined) {
+      const verificationId = identity.slice("verification-lab-".length);
+      labByVerification.set(verificationId, labId);
+      const snapshot = text("snapshotDigest");
+      if (snapshot !== undefined)
+        snapshotByVerification.set(verificationId, {
+          snapshot,
+          at: text("occurredAt") ?? "",
+        });
+    }
     continue;
   }
   const findingId = text("findingId");
@@ -393,6 +407,61 @@ for (const path of batchFiles()) {
     continue;
   for (const member of members) inflight.set(member.findingId, labId);
 }
+/**
+ * 1 件だけの verify next は batch.json を書かず、<handoff>/lab.json に findingId と
+ * snapshotDigest を書く。結果の無い verification-lab のうち、同じ Snapshot で Lab が
+ * 生きていて、lab.json より前に立ったものをこの Finding の検証中の Lab とみなす。
+ */
+function singleLabFiles(): string[] {
+  const found: string[] = [];
+  for (const name of readdirSync(stateDirectory)) {
+    if (!name.startsWith("handoff")) continue;
+    const directory = join(stateDirectory, name);
+    const candidates = [directory];
+    try {
+      for (const child of readdirSync(directory))
+        candidates.push(join(directory, child));
+    } catch {
+      continue; // ファイルだった
+    }
+    found.push(
+      ...candidates
+        .filter((path) => !existsSync(join(path, "batch.json")))
+        .map((path) => join(path, "lab.json"))
+        .filter((path) => existsSync(path)),
+    );
+  }
+  return found;
+}
+for (const path of singleLabFiles()) {
+  let lab: { findingId?: unknown; snapshotDigest?: unknown };
+  let written: string;
+  try {
+    lab = JSON.parse(readFileSync(path, "utf8")) as typeof lab;
+    written = statSync(path).mtime.toISOString();
+  } catch {
+    continue;
+  }
+  if (
+    typeof lab.findingId !== "string" ||
+    typeof lab.snapshotDigest !== "string" ||
+    inflight.has(lab.findingId)
+  )
+    continue;
+  for (const [verificationId, provisioned] of snapshotByVerification) {
+    const labId = labByVerification.get(verificationId);
+    if (
+      provisioned.snapshot === lab.snapshotDigest &&
+      provisioned.at <= written &&
+      !finishedVerifications.has(verificationId) &&
+      labId !== undefined &&
+      runningLabs?.has(labId) === true
+    ) {
+      inflight.set(lab.findingId, labId);
+      break;
+    }
+  }
+}
 
 // ---------------------------------------------------------------- 振り分け
 
@@ -467,9 +536,6 @@ function classify(entry: FindingFacts): { stage: Stage; note: string } {
             note: alive === undefined ? "Lab unknown" : "Lab up",
           };
     }
-    // 判定器の時期の runtime-confirmed は新しい流れで検証し直す（所有者 2026-10-26）。
-    if (verification.status === "runtime-confirmed")
-      return { stage: "lab", note: "judge-era runtime-confirmed" };
     if (
       reason === LAB_IMAGE_BLOCKED &&
       (entry.decision?.at ?? "") >= verification.at
@@ -481,6 +547,9 @@ function classify(entry: FindingFacts): { stage: Stage; note: string } {
       entry.decision.at >= verification.at
     )
       return { stage: "owner", note: reason };
+    // 判定器の時期の runtime-confirmed は新しい流れで検証し直す（所有者 2026-10-26）。
+    if (verification.status === "runtime-confirmed")
+      return { stage: "lab", note: "judge-era runtime-confirmed" };
     return {
       stage: "stalled",
       note: `${verification.status}(${verification.reason ?? ""}) attempts=${entry.verificationAttempts}${superseded(entry) === undefined ? "" : " 置き換えられた観測 Lab が生きている（目視だけ、記録不可）"}`,

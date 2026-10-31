@@ -32,6 +32,7 @@
 | 検証のやり直し | 2 回目も観測待ちに届かない | `--decision defer --reason loop-retry-exhausted`（所有者の判断待ち） |
 | 検証 | Lab image の欠落で前提を作れない（例 #712） | `--decision defer --reason lab-image-blocked`（Lab の計画から外れる。`next.blocked`） |
 | 検証 | 欠落を直した image が main に入った | 同じ Finding に `--decision defer --reason lab-image-fixed`（最新の印で判断し、止まった検証に戻る） |
+| 任意の段 | 所有者が後回しにした、依存を固定できない、前提の機能が対象の版で無効、など先へ進めない | `--decision defer --reason <理由の code>`（例 `dependency-unpinnable`、`owner-excluded-heavy-precondition`、`precondition-feature-disabled`。上の表の進む印 `screen-v5-verify`・`source-check-pass`・`lab-image-fixed` と `lab-image-blocked` 以外の defer は、すべて所有者の判断待ちになる） |
 
 理由コードの形は `^[a-z0-9][a-z0-9-]{0,63}$` で、コロンは使えない。
 
@@ -43,7 +44,7 @@
 node --experimental-strip-types scripts/verification-loop.ts --json > <state>/review-notes/verification-loop-<YYYYMMDDTHHMM>.json
 ```
 
-道具は台帳、`review-decision` の記録、最新の `review-notes/report-units-*.json`、`docker ps` だけを読み、何も書かない。開発セットの campaign（既定は `^(tp326-|issue-?[0-9])`）は数えない。出力の `next` の各列が、下の各節に当たる。`labs.free` は Lab の枠（`--lab-slots`、既定 8）から、観測待ちで生きている Lab、目視専用の Lab、検証中の Lab（`labs.active`）、どの列にも当たらないが生きている Lab（`labs.other`。提出済みの Finding の Lab など）の数を引いた残りである。検証中とは、`<state>/handoff*/` の `batch.json` に載り、Lab が生きていて、まだ結果の無い Finding で、`next.verifying` に並ぶ。そのため handoff ディレクトリは `<state>/handoff-loop-<日付>/<単位>` に置く。さらに host の空きメモリで絞る。探索のために 16 GiB を残し、検証中の Lab 1 台を 1.5 GiB と見込む（所有者 2026-10-31「資源に余裕があるなら検証 Lab を少なめにする必要はない」。保持中の Lab は 1 台約 0.5 GiB）。探索の campaign 設定は名目で約 52 GiB（memoryBudgetMiB 10752 × 同時 5 対象）を持つので、予約は実測で決め直す。道具は `labs.explorationUsedGib` と `labs.labsUsedGib`（`docker stats` の合計）に加え、gVisor の sandbox が `docker stats` に乗らないときの照合に `labs.explorationRssGib` と `labs.labsRssGib`（`ps` の runsc の RSS を container 名で分けた合計）を出す。周の記録に `memAvailableGib` と合わせて残し、2 周分の数字で予約を見直す。この 8 と見込みは道具の既定値で、Harness は Lab の数を制限しない（#432）。Lab ごとの port は Docker が空いているものを選ぶので、台数が増えても取り合わない。
+道具は台帳、`review-decision` の記録、最新の `review-notes/report-units-*.json`、`docker ps` だけを読み、何も書かない。開発セットの campaign（既定は `^(tp326-|issue-?[0-9])`）は数えない。出力の `next` の各列が、下の各節に当たる。`labs.free` は Lab の枠（`--lab-slots`、既定 8）から、観測待ちで生きている Lab、目視専用の Lab、検証中の Lab（`labs.active`）、どの列にも当たらないが生きている Lab（`labs.other`。提出済みの Finding の Lab など）の数を引いた残りである。検証中とは、`<state>/handoff*/` の `batch.json` に載り、Lab が生きていて、まだ結果の無い Finding で、`next.verifying` に並ぶ。1 件だけの `verify next` は `batch.json` を書かないので、`batch.json` の無い handoff の `lab.json` の Finding を、同じ Snapshot で結果の無い、`lab.json` より前に立った生きている Lab に結び付けて検証中に数える。そのため handoff ディレクトリは `<state>/handoff-loop-<日付>/<単位>` に置く。さらに host の空きメモリで絞る。探索のために 16 GiB を残し、検証中の Lab 1 台を 1.5 GiB と見込む（所有者 2026-10-31「資源に余裕があるなら検証 Lab を少なめにする必要はない」。保持中の Lab は 1 台約 0.5 GiB）。探索の campaign 設定は名目で約 52 GiB（memoryBudgetMiB 10752 × 同時 5 対象）を持つので、予約は実測で決め直す。道具は `labs.explorationUsedGib` と `labs.labsUsedGib`（`docker stats` の合計）に加え、gVisor の sandbox が `docker stats` に乗らないときの照合に `labs.explorationRssGib` と `labs.labsRssGib`（`ps` の runsc の RSS を container 名で分けた合計）を出す。周の記録に `memAvailableGib` と合わせて残し、2 周分の数字で予約を見直す。この 8 と見込みは道具の既定値で、Harness は Lab の数を制限しない（#432）。Lab ごとの port は Docker が空いているものを選ぶので、台数が増えても取り合わない。
 
 ### 1. 片付け（`labs.teardown`）
 
@@ -72,7 +73,7 @@ node --experimental-strip-types scripts/verification-loop.ts --json > <state>/re
 `next.lab` は、空いている枠の数だけ並ぶ。1 単位に Lab 1 台で、同じ Snapshot の Finding を 5 件まで順に回す（#704）。止まった検証のうち単位のあるものは、その単位の Lab に入る（7 節のやり直し）。構成員の誰か（最新版の派生を含む）がすでに検証中、観測待ち、報告に進んだ単位は、報告 1 件にまとめるので Lab を立てず、`next.labCovered` に並ぶ。単位ごとに次を行う。
 
 1. Git 外に新しい handoff ディレクトリを作り、`verify next --config <path> --campaign <id> --finding <id,...> --handoff <dir> --hold-minutes 1440` をバックグラウンドで起動する。
-2. Finding ごとのディレクトリ（`<dir>/<n>-<id の先頭 12 文字>`、一覧は `<dir>/batch.json`）に `lab.json` が現れたら、`wbh-verify` の操作役サブエージェント（Opus）を 1 体立てる。1 つのディレクトリには操作役を 1 体だけ置く。依頼文には次を書く。
+2. Finding ごとのディレクトリ（`<dir>/<n>-<id の先頭 12 文字>`、一覧は `<dir>/batch.json`。1 件だけのときは `<dir>` そのもの）に `lab.json` が現れたら、`wbh-verify` の操作役サブエージェント（Opus）を 1 体立てる。1 つのディレクトリには操作役を 1 体だけ置く。依頼文には次を書く。
    - 所有者が許可した、使い捨ての gVisor Lab での検証であること。
    - `.claude/skills/wbh-verify/SKILL.md` に従うこと。
    - 読むのは `lab.json` と `review-export.json` だけであること。
