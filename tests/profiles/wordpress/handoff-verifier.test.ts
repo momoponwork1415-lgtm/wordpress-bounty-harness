@@ -7,6 +7,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { admitWordPressFinding } from "../../../src/profiles/wordpress/discovery/finding.js";
+import {
+  attackerEntranceFor,
+  loadWordPressLabBaseline,
+  type WordPressLabBaseline,
+} from "../../../src/profiles/wordpress/lab/baseline.js";
 import type { WordPressLabHandle } from "../../../src/profiles/wordpress/lab/index.js";
 import {
   HandoffVerifier,
@@ -55,6 +60,8 @@ async function fixture(options: {
   readonly wallTimeMs?: number;
   readonly clock?: () => Date;
   readonly restartObservation?: () => Promise<boolean>;
+  /** #699: the Lab's baseline; absent, the Lab has none. */
+  readonly baseline?: WordPressLabBaseline;
 }) {
   const root = await mkdtemp(join(tmpdir(), "wbh-handoff-verifier-"));
   roots.push(root);
@@ -114,6 +121,10 @@ async function fixture(options: {
         options.administrator === null
           ? null
           : { username: "harness-admin", password: "admin-pass" },
+      attackerEntrance: (_handle, position) =>
+        options.baseline === undefined
+          ? null
+          : attackerEntranceFor(options.baseline, position),
     },
     ports: { http: 8080, database: 3307 },
     reviewExport: async () => '{"schema":"review-export/v1"}',
@@ -307,6 +318,53 @@ describe("HandoffVerifier (#352)", () => {
     expect(f.restarts()).toBe(1);
     expect(f.calls.at(-1)).toEqual(["withdraw"]);
   });
+
+  it("republishes the Lab on the same port with the foreign origin's denied paths after setup (#699)", async () => {
+    const { baseline } = await loadWordPressLabBaseline("hosting-default-v1");
+    const f = await fixture({ baseline });
+    const pending = f.transport.run(f.run);
+    await until(() => f.exists("lab.json"));
+    // Setup runs as the administrator without the attacker's restrictions.
+    expect(f.calls).toEqual([["expose", { httpPort: 8080, via: "recorder" }]]);
+    await f.place("setup-done");
+    await until(() => f.exists("attack.json"));
+    expect(f.calls).toEqual([
+      ["expose", { httpPort: 8080, via: "recorder" }],
+      ["withdraw"],
+      [
+        "expose",
+        {
+          httpPort: 8080,
+          via: "recorder",
+          deniedPaths: baseline.attacker.deniedPaths,
+        },
+      ],
+    ]);
+    await f.place("abort", "handoff-interrupted");
+    expect((await pending).receipt).toMatchObject({
+      attackerOrigin: "foreign",
+    });
+  });
+
+  it.each(["subscriber", "customer"] as const)(
+    "keeps /wp-login.php open for a logged-in %s attacker: the domestic origin (#699)",
+    async (attackerPosition) => {
+      const { baseline } = await loadWordPressLabBaseline("hosting-default-v1");
+      const f = await fixture({ baseline, attackerPosition });
+      const pending = f.transport.run(f.run);
+      await until(() => f.exists("lab.json"));
+      await f.place("setup-done");
+      await until(() => f.exists("attack.json"));
+      // No 403 entrance: the host stays as it was published for setup.
+      expect(f.calls).toEqual([
+        ["expose", { httpPort: 8080, via: "recorder" }],
+      ]);
+      await f.place("abort", "handoff-interrupted");
+      expect((await pending).receipt).toMatchObject({
+        attackerOrigin: "domestic",
+      });
+    },
+  );
 
   it.each(["subscriber", "customer"] as const)(
     "hands only the %s attacker account after setup",

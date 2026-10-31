@@ -9,6 +9,10 @@ import { snapshotSchema, type Snapshot } from "../../../snapshot/index.js";
 import type { WordPressSource, WordPressSourceResolver } from "./contract.js";
 import { PHP_RUNTIME_SOURCE_IDENTITY } from "../acquisition/php-runtime-source.js";
 import { wordPressOrgPluginIdentity } from "../target-identity.js";
+import {
+  loadWordPressLabBaseline,
+  type WordPressLabBaseline,
+} from "./baseline.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const slug = z
@@ -28,6 +32,16 @@ export const setupSchema = z
     translatePress: z
       .strictObject({
         administratorSecondaryLocale: z.string().regex(/^[a-z]{2}_[A-Z]{2}$/),
+      })
+      .optional(),
+    /**
+     * #699: the versioned base environment a verification or review Lab is
+     * built with, by id and digest. Discovery setups carry none.
+     */
+    baseline: z
+      .strictObject({
+        id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
+        digest,
       })
       .optional(),
     /** Read only: past setups name a scenario removed in #353; no Lab is built from one. */
@@ -53,6 +67,8 @@ export interface PreparedWordPressLab {
   readonly dependencies: readonly PluginDirectory[];
   readonly coreVersion: string | undefined;
   readonly phpVersion: string | undefined;
+  /** The setup's base environment, read and digest-checked before any container starts (#699). */
+  readonly baseline?: WordPressLabBaseline;
 }
 
 async function verifySource(
@@ -135,6 +151,13 @@ export async function prepareWordPressLab(
     throw new Error(
       "Lab scenarios were removed in #353; restore them from archive/pre-353-deletion",
     );
+  let baseline: WordPressLabBaseline | undefined;
+  if (setup.baseline !== undefined) {
+    const loaded = await loadWordPressLabBaseline(setup.baseline.id);
+    if (loaded.ref.digest !== setup.baseline.digest)
+      throw new Error("Lab baseline digest mismatch");
+    baseline = loaded.baseline;
+  }
   const resolved = await sourceResolver.resolve(snapshot);
   if (resolved.dependencies.length !== snapshot.dependencies.length)
     throw new Error("Dependency count mismatch");
@@ -167,5 +190,6 @@ export async function prepareWordPressLab(
     dependencies,
     coreVersion,
     phpVersion,
+    ...(baseline === undefined ? {} : { baseline }),
   };
 }

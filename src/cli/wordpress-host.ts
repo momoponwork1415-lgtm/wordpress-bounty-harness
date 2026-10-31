@@ -54,7 +54,10 @@ import {
   createWordPressSelection,
   type WordPressSelectionPolicy,
 } from "../profiles/wordpress/selection/index.js";
-import { HandoffVerifier } from "../profiles/wordpress/verification/handoff-verifier.js";
+import {
+  handoffBatchDirectory,
+  HandoffVerifier,
+} from "../profiles/wordpress/verification/handoff-verifier.js";
 import { createWordPressHttpEvidenceReader } from "../profiles/wordpress/verification/http-evidence.js";
 import { createWordPressStateDiffReader } from "../profiles/wordpress/verification/lab-state-diff.js";
 import { createWordPressVerifierRecordReader } from "../profiles/wordpress/verification/verifier-record.js";
@@ -560,6 +563,11 @@ export async function createWordPressHostProfile(options: {
       attachments,
       // The Harness owns the records; the transport hands the Lab to a skill (#352).
       handoffVerifier: (handoff) => ({
+        // #699: the next Finding's setup gets a fresh administrator password;
+        // whatever signed in before it no longer authenticates.
+        readyForNextAttempt: (handle) => lab.finishSetup(handle),
+        attackerOrigin: (handle, finding) =>
+          lab.attackerEntrance(handle, finding.attackerPosition)?.origin,
         attempt: ({
           campaignId,
           finding,
@@ -567,10 +575,18 @@ export async function createWordPressHostProfile(options: {
           record,
           referenceRoute,
           restartObservation,
+          batch,
         }) =>
           new WordPressVerifier({
             transport: new HandoffVerifier({
-              directory: handoff.directory,
+              directory:
+                batch === undefined
+                  ? handoff.directory
+                  : handoffBatchDirectory(
+                      handoff.directory,
+                      batch.position,
+                      finding.findingId,
+                    ),
               ports: { http: handoff.httpPort, database: handoff.databasePort },
               handle,
               lab,

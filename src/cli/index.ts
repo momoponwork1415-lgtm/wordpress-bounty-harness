@@ -261,8 +261,11 @@ export interface CliProfile {
         readonly httpPort: number;
         readonly databasePort: number;
       };
-      /** The one Finding the operator named, outside the queue's retry rules. */
-      readonly findingId?: string;
+      /**
+       * The Findings the operator named, outside the queue's retry rules; two
+       * to five of one Snapshot share one Lab (#699).
+       */
+      readonly findingIds?: readonly string[];
       /**
        * #600: shows a person the attempt's Lab kept up after it was recorded
        * and resolves when it should go; `skipped` says why none was kept.
@@ -376,6 +379,11 @@ export type HeldObservationLab = {
     readonly port: number;
   };
   readonly receipt: { readonly digest: string; readonly path: string };
+  /** #699: the other attempts this Lab served, each with its own receipt. */
+  readonly others?: readonly {
+    readonly ref: HeldObservationLab["ref"];
+    readonly receipt: { readonly digest: string; readonly path: string };
+  }[];
   readonly expiresAt: string;
 };
 
@@ -832,6 +840,18 @@ export async function presentHeldVerificationLab(
     io.stdout(
       `record: review observe --campaign ${ref.campaignId} --finding ${ref.findingId} --receipt ${session.receipt.digest} --result match|mismatch|unavailable --evidence <path> --by <human>`,
     );
+    // #699: the same Lab served these attempts too; each has its own receipt.
+    for (const other of session.others ?? []) {
+      io.stdout(
+        `verified finding ${other.ref.findingId} as ${other.ref.verificationId}: incomplete (awaiting-human-observation)`,
+      );
+      io.stdout(
+        `manual observation receipt: ${other.receipt.digest} (${other.receipt.path})`,
+      );
+      io.stdout(
+        `record: review observe --campaign ${other.ref.campaignId} --finding ${other.ref.findingId} --receipt ${other.receipt.digest} --result match|mismatch|unavailable --evidence <path> --by <human>`,
+      );
+    }
     io.stdout(
       `Run lab down --lab ${session.labId} (or interrupt this command) to remove the Lab once the observation is recorded.`,
     );
@@ -1761,12 +1781,13 @@ const COMMANDS: readonly Command[] = [
     name: "verify next",
     required: ["config"],
     usage: [
-      "verify next --config <path> --handoff <dir> [--campaign <id> [--finding <id>]] [--port <n>] [--db-port <n>] [--hold-minutes <n>]",
+      "verify next --config <path> --handoff <dir> [--campaign <id> [--finding <id>[,<id>...]]] [--port <n>] [--db-port <n>] [--hold-minutes <n>]",
     ],
     options: {
       campaign: STR,
       config: STR,
       "db-port": STR,
+      // #699: two to five comma-separated Findings of one Snapshot share one Lab.
       finding: STR,
       handoff: STR,
       "hold-minutes": STR,
@@ -1780,6 +1801,13 @@ const COMMANDS: readonly Command[] = [
         );
       if (values.finding !== undefined && values.campaign === undefined)
         throw new UsageError("--finding needs --campaign");
+      if (values.finding !== undefined) {
+        const named = values.finding.split(",");
+        if (named.some((findingId) => findingId === ""))
+          throw new UsageError("--finding has an empty Finding id");
+        if (named.length > 5)
+          throw new UsageError("verify next names at most 5 Findings");
+      }
       integerOption(values.port, "port", 0, 65535);
       integerOption(values["db-port"], "db-port", 0, 65535);
       if (integerOption(values["hold-minutes"], "hold-minutes", 30, 1440) < 1)
@@ -1798,7 +1826,9 @@ const COMMANDS: readonly Command[] = [
           httpPort: integerOption(values.port, "port", 0, 65535),
           databasePort: integerOption(values["db-port"], "db-port", 0, 65535),
         },
-        ...(values.finding === undefined ? {} : { findingId: values.finding }),
+        ...(values.finding === undefined
+          ? {}
+          : { findingIds: values.finding.split(",") }),
         // #600: a person observes in this Lab; it stays until lab down or its wall.
         observation: {
           wallMs:
@@ -1816,11 +1846,18 @@ const COMMANDS: readonly Command[] = [
             io.stdout(`verification Lab not kept for observation: ${reason}`),
         },
       });
-      io.stdout(
-        summary === null
-          ? "no verification pending"
-          : `verified finding ${summary.findingId} as ${summary.verificationId}: ${summary.status}`,
-      );
+      if (summary === null) io.stdout("no verification pending");
+      else if (summary.batch === undefined)
+        io.stdout(
+          `verified finding ${summary.findingId} as ${summary.verificationId}: ${summary.status}`,
+        );
+      else
+        for (const item of summary.batch)
+          io.stdout(
+            item.status === "not-attempted"
+              ? `finding ${item.findingId} not attempted: the shared Lab could not be trusted; it stays in the queue`
+              : `verified finding ${item.findingId} as ${item.verificationId}: ${item.status}`,
+          );
       return 0;
     },
   }),

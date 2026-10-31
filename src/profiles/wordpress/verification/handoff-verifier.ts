@@ -15,7 +15,11 @@ import { fileURLToPath } from "node:url";
 
 import { canonicalJson } from "../../../infrastructure/canonical-json.js";
 import type { VerifierRunReceipt } from "../../../verification/index.js";
-import type { WordPressLab, WordPressLabHandle } from "../lab/index.js";
+import type {
+  WordPressAttackerOrigin,
+  WordPressLab,
+  WordPressLabHandle,
+} from "../lab/index.js";
 import {
   WORDPRESS_VERIFIER_FILE_NAMES,
   type WordPressVerifierFiles,
@@ -44,6 +48,8 @@ type HandoffRunReceipt = VerifierRunReceipt & {
   readonly startedAt: string;
   readonly completedAt: string;
   readonly reason?: string;
+  /** #699: the origin the attacker stood at under the Lab's baseline. */
+  readonly attackerOrigin?: WordPressAttackerOrigin;
 };
 
 const exists = (path: string) =>
@@ -88,7 +94,10 @@ export class HandoffVerifier implements WordPressVerifierTransport {
       readonly handle: WordPressLabHandle;
       readonly lab: Pick<
         WordPressLab,
-        "exposeToHost" | "withdrawFromHost" | "reviewAdministrator"
+        | "exposeToHost"
+        | "withdrawFromHost"
+        | "reviewAdministrator"
+        | "attackerEntrance"
       >;
       /** Requested loopback ports; 0 takes a free one. `lab.json` names the bound ports. */
       readonly ports: { readonly http: number; readonly database: number };
@@ -111,6 +120,12 @@ export class HandoffVerifier implements WordPressVerifierTransport {
     );
     const promptDigest = `sha256:${createHash("sha256").update(skill).digest("hex")}`;
     const startedAt = this.options.clock();
+    // #699: a foreign origin is denied the baseline's paths after setup; a
+    // position that logs in stands at the domestic origin.
+    const entrance = lab.attackerEntrance(
+      handle,
+      input.finding.attackerPosition,
+    );
     const deadline =
       startedAt.getTime() + (this.options.wallTimeMs ?? HANDOFF_WALL_MS);
     const finish = (
@@ -118,7 +133,13 @@ export class HandoffVerifier implements WordPressVerifierTransport {
       reason?: string,
     ): WordPressVerifierTransportResult => ({
       promptDigest,
-      receipt: this.#receipt(input, startedAt, outcome, reason),
+      receipt: this.#receipt(
+        input,
+        startedAt,
+        outcome,
+        reason,
+        entrance?.origin,
+      ),
       outcome,
     });
     const incomplete = (reason: string, nextStep: string) =>
@@ -174,7 +195,7 @@ export class HandoffVerifier implements WordPressVerifierTransport {
           "attacker-account",
           "The Lab attacker account for this Finding is unavailable; repeat in a fresh Lab",
         );
-      const exposed = await lab.exposeToHost(handle, {
+      let exposed = await lab.exposeToHost(handle, {
         httpPort: this.options.ports.http,
         ...(input.lab.database === undefined
           ? {}
@@ -245,6 +266,30 @@ export class HandoffVerifier implements WordPressVerifierTransport {
             "setup-boundary",
             "The Harness could not close setup and retake the Lab baseline; repeat in a fresh Lab",
           );
+        // #699: from here the host entrance stands where the baseline puts
+        // the attacker; a foreign origin gets 403 on the denied paths.
+        const deniedPaths = entrance?.deniedPaths ?? [];
+        if (deniedPaths.length > 0) {
+          await lab.withdrawFromHost(handle);
+          const bound = exposed;
+          exposed = await lab.exposeToHost(handle, {
+            httpPort: bound.httpPort,
+            ...(bound.databasePort === null
+              ? {}
+              : { databasePort: bound.databasePort }),
+            via: "recorder",
+            deniedPaths,
+          });
+          if (
+            exposed.status !== "exposed" ||
+            exposed.httpPort !== bound.httpPort ||
+            exposed.databasePort !== bound.databasePort
+          )
+            return incomplete(
+              "exposure",
+              "The Lab could not be published again for the attacker position",
+            );
+        }
         await writeFile(join(directory, "observation-ready"), "", {
           mode: 0o600,
           flag: "wx",
@@ -335,6 +380,7 @@ export class HandoffVerifier implements WordPressVerifierTransport {
     startedAt: Date,
     outcome: WordPressVerifierTransportResult["outcome"],
     reason: string | undefined,
+    attackerOrigin: WordPressAttackerOrigin | undefined,
   ): HandoffRunReceipt {
     const body = {
       transport: "handoff/v1" as const,
@@ -348,10 +394,58 @@ export class HandoffVerifier implements WordPressVerifierTransport {
       startedAt: startedAt.toISOString(),
       completedAt: this.options.clock().toISOString(),
       ...(reason === undefined ? {} : { reason }),
+      ...(attackerOrigin === undefined ? {} : { attackerOrigin }),
     };
     return {
       ...body,
       digest: `sha256:${createHash("sha256").update(canonicalJson(body)).digest("hex")}`,
     };
   }
+}
+
+/**
+ * #699: where the `position`-th Finding of a shared-Lab run exchanges files,
+ * under the handoff directory: `<n>-<first 12 characters of its id>`. A
+ * digest id is named by its hex, without the `sha256:` prefix.
+ */
+export function handoffBatchDirectory(
+  directory: string,
+  position: number,
+  findingId: string,
+): string {
+  const prefix = findingId.replace(/^sha256:/, "").slice(0, 12);
+  if (!/^[A-Za-z0-9_-]+$/.test(prefix))
+    throw new Error("The Finding id cannot name a handoff directory");
+  return join(directory, `${position}-${prefix}`);
+}
+
+/**
+ * #699: writes `batch.json` beside the Findings' directories, in order. The
+ * skill reads one directory at a time; `lab.json` there keeps its schema.
+ */
+export async function writeHandoffBatch(
+  directory: string,
+  findings: readonly {
+    readonly findingId: string;
+    readonly verificationId: string;
+  }[],
+): Promise<void> {
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await writeFile(
+    join(directory, "batch.json"),
+    canonicalJson({
+      schema: "wbh-handoff-batch/v1",
+      findings: findings.map((finding, index) => ({
+        position: index + 1,
+        findingId: finding.findingId,
+        verificationId: finding.verificationId,
+        directory: handoffBatchDirectory(
+          directory,
+          index + 1,
+          finding.findingId,
+        ),
+      })),
+    }),
+    { mode: 0o600, flag: "wx" },
+  );
 }

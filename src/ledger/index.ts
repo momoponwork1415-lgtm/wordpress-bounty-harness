@@ -93,6 +93,17 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       .optional(),
     failureStage: z.enum(["provision", "seed", "probe"]).optional(),
     reason: z.enum(["provision", "precondition", "reachability"]).optional(),
+    /**
+     * The profile's versioned base environment the Lab was built with (#699);
+     * id and digest only, plus the origin this Finding's attacker stood at.
+     */
+    baseline: z
+      .strictObject({
+        id,
+        digest,
+        attackerOrigin: z.enum(["domestic", "foreign"]).optional(),
+      })
+      .optional(),
   }),
   event({
     type: z.literal("discovery-run-started"),

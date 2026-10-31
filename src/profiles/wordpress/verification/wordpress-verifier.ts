@@ -407,6 +407,8 @@ export class WordPressVerifier implements Verifier<
     const runId = `verify-${finding.findingId}-${randomUUID()}`;
     let captureMarker = await this.options.lab.markCapture(lab);
     let setupClosed = false;
+    /** #699: setup ran but could not be closed, so the Lab serves no other Finding. */
+    let setupCloseFailed = false;
     const result = await this.options.transport.run({
       runId,
       finding,
@@ -415,11 +417,18 @@ export class WordPressVerifier implements Verifier<
       // administrator cannot act after it (#430).
       restartObservation: async () => {
         try {
-          if (!(await this.options.lab.finishSetup(lab))) return false;
+          if (!(await this.options.lab.finishSetup(lab))) {
+            setupCloseFailed = true;
+            return false;
+          }
           captureMarker = await this.options.lab.markCapture(lab);
-          if (captureMarker === null) return false;
+          if (captureMarker === null) {
+            setupCloseFailed = true;
+            return false;
+          }
           await restartObservation?.();
         } catch {
+          setupCloseFailed = true;
           return false;
         }
         setupClosed = true;
@@ -476,6 +485,7 @@ export class WordPressVerifier implements Verifier<
         reason:
           code === "abort-precondition-unavailable" ? "precondition" : "recipe",
         nextStep: `${code}:${detailDigest}`,
+        ...(setupCloseFailed ? { labUntrusted: true as const } : {}),
       };
     }
     const data = result.outcome.files;

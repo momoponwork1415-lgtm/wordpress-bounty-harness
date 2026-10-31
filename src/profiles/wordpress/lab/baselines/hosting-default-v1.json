@@ -1,0 +1,38 @@
+{
+  "schema": "wbh-lab-baseline/v1",
+  "id": "hosting-default-v1",
+  "reference": "docs/reviews/2026-10-31-hosting-defaults.md",
+  "settings": [
+    { "target": "wordpress", "name": "bundled-plugins", "value": "absent" },
+    {
+      "target": "wp-config",
+      "name": "AUTOMATIC_UPDATER_DISABLED",
+      "value": null
+    },
+    { "target": "wp-config", "name": "WP_AUTO_UPDATE_CORE", "value": null },
+    { "target": "wp-config", "name": "DISABLE_WP_CRON", "value": null },
+    { "target": "php", "name": "major-version", "value": 8 },
+    { "target": "php-ini", "name": "display_errors", "value": false },
+    { "target": "php-ini", "name": "allow_url_include", "value": false },
+    { "target": "php-ini", "name": "allow_url_fopen", "value": true },
+    { "target": "php-ini", "name": "disable_functions", "value": "" },
+    { "target": "file-mode", "name": "directories", "value": "755" },
+    { "target": "file-mode", "name": "files", "value": "644" },
+    { "target": "web-server", "name": "htaccess", "value": "enabled" }
+  ],
+  "attacker": {
+    "origin": "foreign",
+    "authenticatedOrigin": "domestic",
+    "adminEndpoints": "lenient",
+    "deniedPaths": [
+      {
+        "match": "prefix",
+        "path": "/wp-admin",
+        "except": ["/wp-admin/admin-ajax.php", "/wp-admin/admin-post.php"]
+      },
+      { "match": "exact", "path": "/wp-login.php" },
+      { "match": "exact", "path": "/xmlrpc.php" },
+      { "match": "suffix", "path": "/wlwmanifest.xml" }
+    ]
+  }
+}
