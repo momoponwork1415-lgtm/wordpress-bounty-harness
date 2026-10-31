@@ -58,6 +58,8 @@ node --experimental-strip-types scripts/verification-loop.ts --json > <state>/re
 
 対象（slug と版）ごとにサブエージェントを 1 体立てる。`.claude/skills/wbh-screen/SKILL.md` の現行版を、`要検証` / `除外` の 2 値と報告単位まで行わせる。結果は Private Evidence の `screen-report-<日付>.md` と Finding ごとのメモに残る。台帳への記録は、親（ループのセッション）が上の表のとおりに打つ。
 
+注記が「派生元が reject …。同じ code を打つ」の Finding は、選別にかけない。最新版の派生で自分の印が無く、派生元が段 1 で除外されたものである。除外の理由は Finding の性質で、版を替えても変わらない。親がその code の reject をそのまま打つ。修正版の対照（`fixed-version-control`）は review queue に入らないので、道具は done に数え、派生元も置き換えない。
+
 最初の周だけは、2026-10-31 の `review-notes/exclusion-screen-2026-10-31.json` を取り込む。`verdict: keep` で台帳に印の無い Finding に `screen-v5-verify` を打つ。そのうえで、残った Finding だけを選別する。
 
 ### 3. 段 1b（`next.sourceCheck`）

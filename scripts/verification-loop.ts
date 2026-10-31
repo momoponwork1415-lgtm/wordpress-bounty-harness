@@ -137,6 +137,8 @@ interface FindingFacts {
   /** 最新版の再検証（reverify）で派生した Finding があれば、元の Finding はそちらに任せる。 */
   derivedTo?: string;
   derivedFrom?: string;
+  /** 修正版で消えることを確かめる対照の run（`fixed-version-control`）。review queue に入らない。 */
+  control?: boolean;
 }
 
 const findings = new Map<string, FindingFacts>();
@@ -244,7 +246,10 @@ for (const row of rows) {
       entry.category ??= text("category");
       entry.recordedAt ??= at;
       const origin = text("derivedFromFindingId");
-      if (origin !== undefined) {
+      if (text("derivationKind") === "fixed-version-control") {
+        // 対照は派生元を置き換えない（review queue と同じ。src/review/index.ts）。
+        entry.control = true;
+      } else if (origin !== undefined) {
         facts(origin).derivedTo = findingId;
         entry.derivedFrom = origin;
       }
@@ -513,6 +518,7 @@ function superseded(entry: FindingFacts): string | undefined {
 }
 
 function classify(entry: FindingFacts): { stage: Stage; note: string } {
+  if (entry.control) return { stage: "done", note: "fixed-version control" };
   if (entry.parked) return { stage: "done", note: "parked" };
   if (entry.submitted) return { stage: "done", note: "submitted" };
   if (entry.derivedTo !== undefined)
@@ -580,6 +586,21 @@ function classify(entry: FindingFacts): { stage: Stage; note: string } {
     return { stage: "owner", note: reason };
   if (reason === SCREEN_PASS || reason === "screen-v5-reassessment")
     return { stage: "source-check", note: "" };
+  // 派生した Finding に自分の印が無く、派生元が段 1 で除外されている。除外理由は版を替えても
+  // 変わらないので、段 1 で同じ code を打つ（台帳だけで状態が読めるように。動作確認 2026-10-31）。
+  const origin =
+    entry.derivedFrom === undefined
+      ? undefined
+      : findings.get(entry.derivedFrom);
+  if (
+    entry.decision === undefined &&
+    origin?.decision?.decision === "reject" &&
+    origin.decision.reasonCode.startsWith("screen-v5-")
+  )
+    return {
+      stage: "screen",
+      note: `派生元が reject ${origin.decision.reasonCode}。同じ code を打つ`,
+    };
   return {
     stage: "screen",
     note:

@@ -597,3 +597,30 @@ test("an owner-hold defer does not tear down a Lab that another Finding still aw
   expect(ids(result.next.owner)).toEqual([id("2")]);
   expect(result.labs).toMatchObject({ held: ["lab-shared"], teardown: [] });
 });
+
+test("a fixed-version control is done and does not replace its origin; an unmarked latest-version Finding inherits its origin's stage-1 reject as a screen note", () => {
+  recorded(id("1"));
+  decided(id("1"), "defer", "screen-v5-verify");
+  decided(id("1"), "defer", "source-check-pass", 2);
+  recorded(id("2"), {
+    derivedFromFindingId: id("1"),
+    derivationKind: "fixed-version-control",
+  });
+  verified(id("2"), "v2", { status: "incomplete", reason: "precondition" });
+  recorded(id("3"));
+  decided(id("3"), "reject", "screen-v5-chain-fragile");
+  recorded(id("4"), {
+    derivedFromFindingId: id("3"),
+    derivationKind: "latest-version",
+  });
+  const result = run();
+  expect(ids(result.next.unit)).toEqual([id("1")]);
+  expect(ids(result.next.stalled)).toEqual([]);
+  const screen = result.next.screen as unknown as {
+    findingId: string;
+    note: string;
+  }[];
+  expect(screen.map((item) => item.findingId)).toEqual([id("4")]);
+  expect(screen[0]!.note).toContain("screen-v5-chain-fragile");
+  expect(result.counts.done).toBe(2);
+});
