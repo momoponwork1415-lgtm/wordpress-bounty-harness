@@ -347,6 +347,23 @@ function labOf(entry: FindingFacts): string | undefined {
     : labByVerification.get(verificationId);
 }
 
+/**
+ * 後の attempt に置き換えられたが、観測用に保持したまま生きている Lab。
+ * review observe はこの Lab に記録できない（最新の attempt と照合するため）。
+ */
+function superseded(entry: FindingFacts): string | undefined {
+  if (
+    entry.readyVerificationId === undefined ||
+    entry.observation !== undefined ||
+    entry.readyVerificationId === entry.verification?.verificationId
+  )
+    return undefined;
+  const labId = labByVerification.get(entry.readyVerificationId);
+  return labId !== undefined && runningLabs?.has(labId) === true
+    ? labId
+    : undefined;
+}
+
 function classify(entry: FindingFacts): { stage: Stage; note: string } {
   if (entry.parked) return { stage: "done", note: "parked" };
   if (entry.submitted) return { stage: "done", note: "submitted" };
@@ -360,14 +377,12 @@ function classify(entry: FindingFacts): { stage: Stage; note: string } {
       ? { stage: "report", note: "human match" }
       : { stage: "owner", note: `human ${entry.observation.result}` };
   const verification = entry.verification;
-  // 観測用に保持した Lab が生きている間は、後から別の結果が記録されても観測待ちに数える。
-  if (entry.readyAt !== undefined) {
-    const labId = labOf(entry);
-    if (labId !== undefined && runningLabs?.has(labId) === true)
-      return { stage: "awaiting-human", note: "Lab up" };
-  }
   if (verification !== undefined) {
-    if (verification.reason === AWAITING_HUMAN && entry.readyAt !== undefined) {
+    // 観測を記録できるのは、最新の attempt が観測待ちで、Lab の準備がその attempt のときだけ。
+    if (
+      verification.reason === AWAITING_HUMAN &&
+      entry.readyVerificationId === verification.verificationId
+    ) {
       const labId = labOf(entry);
       const alive =
         runningLabs === undefined || labId === undefined
@@ -390,7 +405,7 @@ function classify(entry: FindingFacts): { stage: Stage; note: string } {
       return { stage: "owner", note: RETRY_EXHAUSTED };
     return {
       stage: "stalled",
-      note: `${verification.status}(${verification.reason ?? ""}) attempts=${entry.verificationAttempts}`,
+      note: `${verification.status}(${verification.reason ?? ""}) attempts=${entry.verificationAttempts}${superseded(entry) === undefined ? "" : " 置き換えられた観測 Lab が生きている（目視だけ、記録不可）"}`,
     };
   }
   if (reason === SOURCE_CHECK_PASS)
@@ -478,6 +493,12 @@ const heldLabs = new Set(
     )
     .map((item) => item.labId as string),
 );
+// 置き換えられた観測 Lab も host の枠を使う。片付けは所有者が見終えてから（手順書 1 節）。
+const viewOnlyLabs = [
+  ...new Set(
+    [...findings.values()].flatMap((entry) => superseded(entry) ?? []),
+  ),
+];
 const teardown = [
   ...new Set(
     items
@@ -490,7 +511,12 @@ const teardown = [
       .map((item) => item.labId as string),
   ),
 ];
-const freeSlots = Math.max(0, labSlots - heldLabs.size);
+const freeSlots = Math.max(
+  0,
+  labSlots -
+    heldLabs.size -
+    viewOnlyLabs.filter((id) => !heldLabs.has(id)).length,
+);
 
 // 測る数字: finding-recorded から最初の observation-ready までの時間（--since 以降に記録した Finding）。
 const hours = [...findings.values()]
@@ -526,6 +552,7 @@ const result = {
   labs: {
     slots: labSlots,
     held: [...heldLabs],
+    viewOnly: viewOnlyLabs,
     free: freeSlots,
     dockerReadable: runningLabs !== undefined,
     teardown,

@@ -47,6 +47,8 @@ node --experimental-strip-types scripts/verification-loop.ts --json > <state>/re
 
 人間が観測を記録した Lab を、`lab down --lab <labId> --config <path>` で落とす。その Lab を保持している `verify next` のプロセスも終わったことを確かめる。ほかの Lab と探索の container には触らない。`lab cleanup --remove` は使わない。
 
+`labs.viewOnly` は、後の attempt に置き換えられたのに観測用に保持したまま生きている Lab である。`review observe` は最新の attempt と照合するので、この Lab には記録できない。所有者が目視を終えたと「検証と提出」が知らせてから落とす。それまでは枠に数える。その Finding は止まった検証として、単位の新しい Lab でやり直す。
+
 ### 2. 段 1（`next.screen`）
 
 対象（slug と版）ごとにサブエージェントを 1 体立てる。`.claude/skills/wbh-screen/SKILL.md` の現行版を、`要検証` / `除外` の 2 値と報告単位まで行わせる。結果は Private Evidence の `screen-report-<日付>.md` と Finding ごとのメモに残る。台帳への記録は、親（ループのセッション）が上の表のとおりに打つ。
