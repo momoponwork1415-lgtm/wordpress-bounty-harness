@@ -294,6 +294,12 @@ for (const unit of units)
       if (findingId.replace(/^sha256:/, "").startsWith(short))
         unitOf.set(findingId, unit);
   }
+// 最新版の再検証で派生した Finding は、元の Finding の単位に入る。
+for (const entry of findings.values()) {
+  const unit = unitOf.get(entry.findingId);
+  if (unit !== undefined && entry.derivedTo !== undefined)
+    unitOf.set(entry.derivedTo, unit);
+}
 
 // ---------------------------------------------------------------- 生きている Lab
 
@@ -428,9 +434,25 @@ interface LabPlan {
   snapshotDigest: string;
   findingIds: string[];
 }
+// 構成員の誰かが観測待ちか報告に進んだ単位は、報告 1 件にまとめるので Lab を立てない。
+const coveredUnits = new Set(
+  items.flatMap((item) =>
+    item.unit !== undefined &&
+    (item.stage.startsWith("awaiting-human") || item.stage === "report")
+      ? [item.unit]
+      : [],
+  ),
+);
+const covered: Item[] = [];
 const plans = new Map<string, LabPlan>();
 for (const item of items) {
-  if (item.stage !== "lab") continue;
+  // 止まった検証は、単位があればその単位の Lab でやり直す（手順書 7 節）。
+  const retry = item.stage === "stalled" && item.unit !== undefined;
+  if (item.stage !== "lab" && !retry) continue;
+  if (item.unit !== undefined && coveredUnits.has(item.unit)) {
+    if (item.stage === "lab") covered.push(item);
+    continue;
+  }
   const key = `${item.unit ?? item.findingId}|${item.campaignId}|${item.snapshotDigest}`;
   const plan = plans.get(key) ?? {
     unit: item.unit ?? "-",
@@ -508,6 +530,8 @@ const result = {
     unit: items.filter((item) => item.stage === "unit"),
     lab: [...plans.values()].slice(0, freeSlots),
     labWaiting: [...plans.values()].slice(freeSlots),
+    /** 同じ単位の構成員がすでに観測待ちか報告にある。Lab を立てずに待つ。 */
+    labCovered: covered,
     stalled: items.filter((item) => item.stage === "stalled"),
     report: items.filter((item) => item.stage === "report"),
     awaitingHuman: items.filter((item) =>
@@ -556,6 +580,9 @@ if (values.json) {
       `  ${plan.unit}  ${plan.campaignId}  ${plan.slug}  ${plan.findingIds.map(short).join(",")}`,
     );
   console.log(`Lab の順番待ち: ${result.next.labWaiting.length}`);
+  console.log(
+    `同じ単位が観測待ちのため Lab を立てない: ${result.next.labCovered.length}`,
+  );
   for (const labId of teardown) console.log(`片付ける Lab: ${labId}`);
   console.log(
     `observation-ready までの中央値（${since} 以降に記録した Finding）: ${result.metric.medianHoursToObservationReady ?? "-"} 時間（${hours.length} 件）`,

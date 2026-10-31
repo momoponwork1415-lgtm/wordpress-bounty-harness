@@ -252,3 +252,55 @@ test("sends a human match to the report step and tears down its Lab; a derived F
   expect(ids(result.next.stalled)).toEqual([]);
   expect(ids(result.next.screen)).toEqual([id("3")]);
 });
+
+test("skips a Lab for a unit already awaiting a human, and retries a stalled member in its unit's Lab", () => {
+  recorded(id("1"));
+  verified(id("1"), "v-held", {
+    status: "incomplete",
+    reason: "awaiting-human-observation",
+  });
+  events.push({
+    type: "manual-observation-lab-ready",
+    findingId: id("1"),
+    verificationId: "v-held",
+    occurredAt: at(10),
+  });
+  recorded(id("2"));
+  decided(id("2"), "defer", "source-check-pass");
+  // 単位の代表 5 から派生した 6 が観測待ちなら、単位 derived も Lab を立てない。
+  recorded(id("5"));
+  recorded(id("6"), { derivedFromFindingId: id("5") });
+  verified(id("6"), "v-held2", {
+    status: "incomplete",
+    reason: "awaiting-human-observation",
+  });
+  events.push({
+    type: "manual-observation-lab-ready",
+    findingId: id("6"),
+    verificationId: "v-held2",
+    occurredAt: at(10),
+  });
+  recorded(id("7"));
+  decided(id("7"), "defer", "source-check-pass");
+  recorded(id("3"));
+  verified(id("3"), "v-stalled", {
+    status: "incomplete",
+    reason: "precondition",
+  });
+  recorded(id("4"));
+  decided(id("4"), "defer", "source-check-pass");
+  mkdirSync(join(state, "review-notes"));
+  writeFileSync(
+    join(state, "review-notes", "report-units-2026-10-30.json"),
+    JSON.stringify([
+      { groupId: "held", representative: "11111111", members: ["22222222"] },
+      { groupId: "retry", representative: "33333333", members: ["44444444"] },
+      { groupId: "derived", representative: "55555555", members: ["77777777"] },
+    ]),
+  );
+  const result = run();
+  expect(ids(result.next.labCovered)).toEqual([id("2"), id("7")]);
+  expect(result.next.lab).toEqual([
+    expect.objectContaining({ unit: "retry", findingIds: [id("3"), id("4")] }),
+  ]);
+});
