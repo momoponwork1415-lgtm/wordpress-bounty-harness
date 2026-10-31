@@ -1,0 +1,38 @@
+[
+  {
+    "id": "fixture-1",
+    "title": "Example Gallery <= 2.1.0 - Fixture Record In Range",
+    "published": "2026-01-01 00:00:00",
+    "software": [
+      {
+        "slug": "example-gallery",
+        "affected_versions": {
+          "* - 2.1.0": {
+            "from_version": "*",
+            "from_inclusive": true,
+            "to_version": "2.1.0",
+            "to_inclusive": true
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "fixture-2",
+    "title": "Example Gallery <= 1.9 - Fixture Record Out Of Range",
+    "published": "2025-01-01 00:00:00",
+    "software": [
+      {
+        "slug": "example-gallery",
+        "affected_versions": {
+          "* - 1.9": {
+            "from_version": "*",
+            "from_inclusive": true,
+            "to_version": "1.9",
+            "to_inclusive": true
+          }
+        }
+      }
+    ]
+  }
+]

@@ -1,0 +1,87 @@
+[
+  {
+    "type": "target-selected",
+    "selectionId": "wporg:example-gallery@2.1.0",
+    "snapshotDigest": "sha256:snap-gallery"
+  },
+  {
+    "type": "target-selected",
+    "selectionId": "wporg:sample-forms@1.0.1",
+    "snapshotDigest": "sha256:snap-forms"
+  },
+  {
+    "type": "target-selected",
+    "selectionId": "wporg:other-widgets@0.5",
+    "snapshotDigest": "sha256:snap-widgets"
+  },
+  {
+    "type": "finding-recorded",
+    "findingId": "sha256:aaaa1111000000000000000000000000000000000000000000000000000000aa",
+    "category": "stored-xss",
+    "snapshotDigest": "sha256:snap-gallery",
+    "occurredAt": "2026-01-01T00:00:00Z"
+  },
+  {
+    "type": "finding-recorded",
+    "findingId": "sha256:aaaa2222000000000000000000000000000000000000000000000000000000aa",
+    "category": "stored-xss",
+    "snapshotDigest": "sha256:snap-gallery",
+    "occurredAt": "2026-01-01T00:00:00Z"
+  },
+  {
+    "type": "finding-recorded",
+    "findingId": "sha256:cccc3333000000000000000000000000000000000000000000000000000000cc",
+    "category": "arbitrary-file-download",
+    "snapshotDigest": "sha256:snap-forms",
+    "occurredAt": "2026-01-01T00:00:00Z"
+  },
+  {
+    "type": "finding-recorded",
+    "findingId": "sha256:dddd4444000000000000000000000000000000000000000000000000000000dd",
+    "category": "stored-xss",
+    "snapshotDigest": "sha256:snap-gallery",
+    "occurredAt": "2026-01-01T00:00:00Z"
+  },
+  {
+    "type": "finding-parked",
+    "findingId": "sha256:eeee5555000000000000000000000000000000000000000000000000000000ee",
+    "category": "options-update",
+    "snapshotDigest": "sha256:snap-gallery",
+    "occurredAt": "2026-01-01T00:00:00Z"
+  },
+  {
+    "type": "finding-recorded",
+    "findingId": "sha256:ffff6666000000000000000000000000000000000000000000000000000000ff",
+    "category": "sqli",
+    "snapshotDigest": "sha256:snap-widgets",
+    "occurredAt": "2026-01-01T00:00:00Z"
+  },
+  {
+    "type": "review-decided",
+    "findingId": "sha256:aaaa1111000000000000000000000000000000000000000000000000000000aa",
+    "decision": "reject",
+    "snapshotDigest": "sha256:snap-gallery",
+    "occurredAt": "2026-01-02T00:00:00Z"
+  },
+  {
+    "type": "review-decided",
+    "findingId": "sha256:aaaa1111000000000000000000000000000000000000000000000000000000aa",
+    "decision": "defer",
+    "snapshotDigest": "sha256:snap-gallery",
+    "occurredAt": "2026-01-03T00:00:00Z"
+  },
+  {
+    "type": "manual-observation-lab-ready",
+    "findingId": "sha256:aaaa2222000000000000000000000000000000000000000000000000000000aa",
+    "snapshotDigest": "sha256:snap-gallery",
+    "occurredAt": "2026-01-04T00:00:00Z"
+  },
+  {
+    "type": "submission-recorded-externally",
+    "findingId": "sha256:cccc3333000000000000000000000000000000000000000000000000000000cc",
+    "destination": "wordfence",
+    "submittedOn": "2026-01-05",
+    "snapshotDigest": "sha256:snap-forms",
+    "occurredAt": "2026-01-06T00:00:00Z"
+  }
+]
