@@ -582,11 +582,11 @@ const teardown = [
       .map((item) => item.labId as string),
   ),
 ];
-// 所有者 2026-10-31: 資源に余裕があれば Lab を絞らない。ただし探索の campaign 設定は
-// 名目で約 52 GiB（memoryBudgetMiB 10752 × 同時 5 対象）を持つので、当面は探索に 24 GiB を残す。
-// 2 周分の docker stats の実測で決め直す（「動作確認」2026-10-31）。検証中の Lab 1 台
-// （Lab browser を含む）を 1.5 GiB と見込む。保持中は 1 台約 0.5 GiB。
-const MEMORY_RESERVE_GIB = 24;
+// 所有者 2026-10-31: 資源に余裕があれば Lab を絞らない。探索に 16 GiB を残す。2 周分の実測で
+// 24 から戻した（「動作確認」2026-10-31）。gVisor の sandbox は docker stats に乗らないことが
+// あるので、runsc の RSS（ps）も並べて出す。検証中の Lab 1 台（Lab browser を含む）を
+// 1.5 GiB と見込む。保持中は 1 台約 0.5 GiB。今効いているのは枠（既定 8）で、メモリではない。
+const MEMORY_RESERVE_GIB = 16;
 const GIB_PER_ACTIVE_LAB = 1.5;
 function memAvailableGib(): number | undefined {
   if (values["mem-available-gib"] !== undefined)
@@ -645,6 +645,44 @@ function containerMemoryGib():
   }
 }
 const containerGib = containerMemoryGib();
+
+/** runsc（gVisor）の process の RSS を、container 名で探索と Lab に分けて合計する（ps）。 */
+function runscRssGib(): { exploration: number; labs: number } | undefined {
+  if (values["running-labs"] !== undefined) return undefined; // 試験では読まない。
+  try {
+    const names = new Map(
+      execFileSync(
+        "docker",
+        ["ps", "--no-trunc", "--format", "{{.ID}} {{.Names}}"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+      )
+        .split("\n")
+        .flatMap((line) => {
+          const [id, name] = line.trim().split(" ");
+          return id === undefined || name === undefined ? [] : [[id, name]];
+        }) as [string, string][],
+    );
+    const total = { exploration: 0, labs: 0 };
+    for (const line of execFileSync("ps", ["-eo", "rss=,args="], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).split("\n")) {
+      const match = /^\s*(\d+)\s+(.*runsc.*)$/.exec(line);
+      if (match === null) continue;
+      const id = /[0-9a-f]{64}/.exec(match[2] as string)?.[0];
+      const name = id === undefined ? undefined : names.get(id);
+      const gib = Number(match[1]) / 1024 ** 2;
+      if (name === undefined) continue;
+      if (/^(codex-agent|claude-agent|provider-egress-broker)-/.test(name))
+        total.exploration += gib;
+      else if (name.startsWith("wbh-")) total.labs += gib;
+    }
+    return total;
+  } catch {
+    return undefined;
+  }
+}
+const runscGib = runscRssGib();
 const slotsByMemory =
   memoryGib === undefined
     ? Number.POSITIVE_INFINITY
@@ -706,6 +744,13 @@ const result = {
       containerGib === undefined
         ? null
         : Math.round(containerGib.exploration * 10) / 10,
+    /** runsc の RSS（ps）。docker stats が gVisor を拾わないときの照合用。 */
+    explorationRssGib:
+      runscGib === undefined
+        ? null
+        : Math.round(runscGib.exploration * 10) / 10,
+    labsRssGib:
+      runscGib === undefined ? null : Math.round(runscGib.labs * 10) / 10,
     labsUsedGib:
       containerGib === undefined
         ? null

@@ -333,8 +333,8 @@ test("a later attempt supersedes a held observation Lab: the Finding retries, th
 });
 
 test("caps the free Lab slots by the host's available memory", () => {
-  const result = run(["--lab-slots", "12", "--mem-available-gib", "28"]);
-  // 探索に 24 GiB を残す。(28 - 24) / 1.5 → 2 台。
+  const result = run(["--lab-slots", "12", "--mem-available-gib", "20"]);
+  // 探索に 16 GiB を残す。(20 - 16) / 1.5 → 2 台。
   expect(result.labs).toMatchObject({ slots: 12, free: 2 });
 });
 
