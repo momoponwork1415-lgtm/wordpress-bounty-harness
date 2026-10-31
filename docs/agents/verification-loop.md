@@ -116,7 +116,7 @@ Lab の待ち時間の上限は 30 分である。それを超えたときと `a
 ### 9. 一覧と周の記録
 
 1. `node --experimental-strip-types scripts/submission-board.ts` で一覧を作り直し、`/mnt/d/wordfence/harness-labs-<日付>/submission-board-<日付>.html` に上書きで写す。
-2. Issue #701 に、周の件数だけをコメントする。書くのは、各段の件数、Lab を立てた数、`observation-ready` に届いた数、止まった数とその理由コード、`metric.medianHoursToObservationReady`、メモリの 1 行（`memAvailableGib` / `explorationUsedGib` / `labsUsedGib`）である。Finding ID は先頭 12 文字までにし、本文は書かない。
+2. Issue #701 に、周の件数だけをコメントする。書くのは、各段の件数、Lab を立てた数、`observation-ready` に届いた数、止まった数とその理由コード、`metric.medianHoursToObservationReady`、日数の 1 行（観測待ちの各件の `ageDays` と `metric.medianDaysRecordedToSubmitted`。どちらも派生元をたどった発見の日から数える。重複は発見から提出までの遅れで増えるので、どこで止まっているかを示す）、メモリの 1 行（`memAvailableGib` / `explorationUsedGib` / `labsUsedGib`）である。Finding ID は先頭 12 文字までにし、本文は書かない。
 
 ## 測る数字
 

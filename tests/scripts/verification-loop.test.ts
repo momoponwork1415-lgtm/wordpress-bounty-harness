@@ -521,3 +521,50 @@ test("an owner-hold defer after a judge-era runtime-confirmed keeps it out of th
     expect.objectContaining({ findingIds: [id("2")] }),
   ]);
 });
+
+test("reports days since discovery for awaiting Findings and the median discovery-to-submission days, both from the derivation root", () => {
+  // 1 は派生元。2 は 1 から派生し、観測待ち。経過日数は 1 の記録から数える。
+  recorded(id("1"), { occurredAt: "2026-10-20T03:00:00.000Z" });
+  recorded(id("2"), {
+    occurredAt: "2026-10-30T03:00:00.000Z",
+    derivedFromFindingId: id("1"),
+  });
+  verified(id("2"), "v2", {
+    status: "incomplete",
+    reason: "awaiting-human-observation",
+  });
+  events.push({
+    type: "manual-observation-lab-ready",
+    findingId: id("2"),
+    verificationId: "v2",
+    occurredAt: at(10),
+  });
+  // 3 と 4 は提出済み。日本時間の日付で 2 日と 5 日。
+  recorded(id("3"), { occurredAt: "2026-10-20T16:00:00.000Z" }); // 日本時間 10-21
+  events.push({
+    type: "submission-recorded-externally",
+    findingId: id("3"),
+    submittedOn: "2026-10-23",
+    occurredAt: at(20),
+  });
+  recorded(id("4"), { occurredAt: "2026-10-20T03:00:00.000Z" });
+  events.push({
+    type: "submission-recorded-externally",
+    findingId: id("4"),
+    submittedOn: "2026-10-25",
+    occurredAt: at(21),
+  });
+  const result = run(["--running-labs", "lab-v2"]);
+  const awaiting = result.next.awaitingHuman as unknown as {
+    findingId: string;
+    ageDays: number;
+  }[];
+  expect(awaiting.map((item) => item.findingId)).toEqual([id("2")]);
+  const expected =
+    (Date.now() - Date.parse("2026-10-20T03:00:00.000Z")) / 86_400_000;
+  expect(Math.abs(awaiting[0]!.ageDays - expected)).toBeLessThan(0.2);
+  expect(result.metric).toMatchObject({
+    findingsSubmitted: 2,
+    medianDaysRecordedToSubmitted: 3.5,
+  });
+});

@@ -121,6 +121,8 @@ interface FindingFacts {
   recordedAt?: string | undefined;
   parked: boolean;
   submitted: boolean;
+  /** 提出日（`submittedOn`、無ければ記録した時刻の日付）。 */
+  submittedOn?: string;
   decision?: { decision: string; reasonCode: string; at: string };
   verification?: {
     status: string;
@@ -134,6 +136,7 @@ interface FindingFacts {
   observation?: { result: string; verificationId: string };
   /** 最新版の再検証（reverify）で派生した Finding があれば、元の Finding はそちらに任せる。 */
   derivedTo?: string;
+  derivedFrom?: string;
 }
 
 const findings = new Map<string, FindingFacts>();
@@ -241,7 +244,10 @@ for (const row of rows) {
       entry.category ??= text("category");
       entry.recordedAt ??= at;
       const origin = text("derivedFromFindingId");
-      if (origin !== undefined) facts(origin).derivedTo = findingId;
+      if (origin !== undefined) {
+        facts(origin).derivedTo = findingId;
+        entry.derivedFrom = origin;
+      }
       break;
     }
     case "finding-parked":
@@ -284,6 +290,7 @@ for (const row of rows) {
     case "submission-recorded":
     case "submission-recorded-externally":
       entry.submitted = true;
+      entry.submittedOn ??= text("submittedOn") ?? at.slice(0, 10);
       break;
   }
 }
@@ -473,6 +480,8 @@ interface Item {
   category: string;
   snapshotDigest: string;
   recordedAt: string;
+  /** 発見（派生元をたどった finding-recorded）からこの出力までの日数。 */
+  ageDays: number;
   note: string;
   unit?: string;
   labId?: string;
@@ -580,6 +589,20 @@ function classify(entry: FindingFacts): { stage: Stage; note: string } {
   };
 }
 
+const now = Date.now();
+const DAY_MS = 86_400_000;
+/** 発見の時刻。版や依存を替えて派生した Finding は、派生元をたどった最初の記録の時刻にする。 */
+function discoveredAt(entry: FindingFacts): string | undefined {
+  const seen = new Set<string>();
+  let current = entry;
+  while (current.derivedFrom !== undefined && !seen.has(current.findingId)) {
+    seen.add(current.findingId);
+    const origin = findings.get(current.derivedFrom);
+    if (origin?.recordedAt === undefined) break;
+    current = origin;
+  }
+  return current.recordedAt;
+}
 const items: Item[] = [];
 for (const entry of findings.values()) {
   if (entry.recordedAt === undefined) continue; // finding-recorded の無い記録は扱わない
@@ -595,6 +618,11 @@ for (const entry of findings.values()) {
     category: entry.category ?? "?",
     snapshotDigest: entry.snapshotDigest ?? "?",
     recordedAt: entry.recordedAt,
+    ageDays:
+      Math.round(
+        ((now - Date.parse(discoveredAt(entry) ?? entry.recordedAt)) / DAY_MS) *
+          10,
+      ) / 10,
     note,
     ...(unit === undefined ? {} : { unit: unit.groupId }),
     ...(labId === undefined ? {} : { labId }),
@@ -814,12 +842,34 @@ const hours = [...findings.values()]
       3_600_000,
   )
   .sort((a, b) => a - b);
-const median =
-  hours.length === 0
+function medianOf(sorted: number[]): number | null {
+  return sorted.length === 0
     ? null
-    : hours.length % 2 === 1
-      ? hours[(hours.length - 1) / 2]!
-      : (hours[hours.length / 2 - 1]! + hours[hours.length / 2]!) / 2;
+    : sorted.length % 2 === 1
+      ? sorted[(sorted.length - 1) / 2]!
+      : (sorted[sorted.length / 2 - 1]! + sorted[sorted.length / 2]!) / 2;
+}
+const median = medianOf(hours);
+
+// 測る数字: 提出済みの Finding の、発見（派生元をたどった finding-recorded、日本時間の日付）から提出日までの日数。
+// 重複は発見から提出までの遅れで増えるので、どこで止まっているかを所有者に示す（動作確認 2026-10-31）。
+const jstDate = (iso: string) =>
+  new Date(Date.parse(iso) + 9 * 3_600_000).toISOString().slice(0, 10);
+const submitDays = [...findings.values()]
+  .filter(
+    (entry) =>
+      entry.recordedAt !== undefined &&
+      entry.submittedOn !== undefined &&
+      !excludedCampaign.test(entry.campaignId ?? ""),
+  )
+  .map(
+    (entry) =>
+      (Date.parse(entry.submittedOn as string) -
+        Date.parse(jstDate(discoveredAt(entry) as string))) /
+      DAY_MS,
+  )
+  .sort((a, b) => a - b);
+const submitMedian = medianOf(submitDays);
 
 const counts: Record<string, number> = {};
 for (const item of items) counts[item.stage] = (counts[item.stage] ?? 0) + 1;
@@ -882,6 +932,8 @@ const result = {
     findingsReady: hours.length,
     medianHoursToObservationReady:
       median === null ? null : Math.round(median * 10) / 10,
+    findingsSubmitted: submitDays.length,
+    medianDaysRecordedToSubmitted: submitMedian,
   },
 };
 
@@ -906,11 +958,16 @@ if (values.json) {
     ["報告単位を作る", result.next.unit],
     ["止まった検証", result.next.stalled],
     ["照合と報告書", result.next.report],
-    ["観測待ち", result.next.awaitingHuman],
+    ["観測待ち（発見からの経過日数つき）", result.next.awaitingHuman],
     ["所有者の判断待ち", result.next.owner],
   ] as const) {
     console.log(`${title}: ${list.length}`);
-    for (const item of list) console.log(line(item));
+    for (const item of list)
+      console.log(
+        item.stage.startsWith("awaiting-human")
+          ? `${line(item)}  経過 ${item.ageDays} 日`
+          : line(item),
+      );
   }
   console.log(`Lab に回す（この周）: ${result.next.lab.length}`);
   for (const plan of result.next.lab)
@@ -924,5 +981,8 @@ if (values.json) {
   for (const labId of teardown) console.log(`片付ける Lab: ${labId}`);
   console.log(
     `observation-ready までの中央値（${since} 以降に記録した Finding）: ${result.metric.medianHoursToObservationReady ?? "-"} 時間（${hours.length} 件）`,
+  );
+  console.log(
+    `発見から提出までの中央値（提出済み、派生元の記録から、日本時間の日付）: ${submitMedian ?? "-"} 日（${submitDays.length} 件）`,
   );
 }
