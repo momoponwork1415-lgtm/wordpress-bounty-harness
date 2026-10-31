@@ -1988,7 +1988,7 @@ describe("harness CLI vertical slice", () => {
     ).toMatchObject({
       setupDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
       baseline: {
-        id: "hosting-default-v1",
+        id: "hosting-default-v2",
         digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
       },
     });
@@ -6152,7 +6152,7 @@ describe("harness CLI vertical slice", () => {
       snapshotDigest: derived.snapshotDigest,
       setupDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
       baseline: {
-        id: "hosting-default-v1",
+        id: "hosting-default-v2",
         digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
       },
     });

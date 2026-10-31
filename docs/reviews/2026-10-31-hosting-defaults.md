@@ -164,6 +164,15 @@
    さくらの SiteGuard の分類（ディレクトリトラバーサル、改行コードインジェクション、XXE など）は、製品ページにはあるが、さくらが使う版で有効かは不明である。模擬規則は製品のシグネチャを再現しない。このため、変種で通っても「実 WAF を通る」証拠にはしない。結果は参考列として残す。
 5. 置き場所: これらの規則と変種名は WordPress 固有なので `profiles/wordpress/` の Lab 供給側に置く（AGENTS.md の ADR 0011 の規則）。Harness の判定には使わない。人間の観測（`review observe`）で、どの変種の Lab で観測したかを記録する属性として扱う。
 
+### 4.3a `hosting-default-v2`（2026-10-31 追記、#706）
+
+v1 の Lab はパーマリンクが「基本」（`permalink_structure` が空）のままで、投稿名の URL や oEmbed の埋め込み URL のような、pretty パーマリンクを前提にする経路が 404 になった。2026-10-31 には BuddyPress の 1 単位がこれで `incomplete(precondition)` に止まった。v2 は v1 に次の 2 点だけを足す。
+
+- パーマリンク構造を `/%postname%/` にする。サイトを作るときに WP-CLI の `rewrite structure` で 1 回だけ設定し、`permalink_structure` を読み戻す。両社のクイックインストール後の既定は、上の 4.2 の 5 と 4.4 の 5 のとおり一次資料では確かめられていない。v2 は「よく使われる設定」として決めたもので、ホストの既定を確かめた値ではない。
+- `.htaccess` に WordPress 標準の書き換えブロック（`# BEGIN WordPress` から `# END WordPress` まで）を置く。Lab の WordPress image は、このブロックを持つ `.htaccess` を最初から置いている。v2 では、ブロックが無いときだけ追記し、プラグインが有効化のときに書いたブロックは上書きしない。読み戻しでは、ブロックの行がそろっているかを確かめる。ファイル権限は v1 と同じ 644 である。
+
+国外 403 の 4 パス、認証済みの攻撃者を国内に置く扱い、PHP の値、同梱プラグインを置かないことは v1 と同じである。v1 のファイルと digest は変えない。`verify next --handoff` は v2 を使い、`lab-provisioned.baseline.id` に `hosting-default-v2` を記録する。
+
 ### 4.4 実機確認が要る残りの問い（推測で埋めなかったもの）
 
 1. `/wp-admin/admin-ajax.php`・`admin-post.php` は、両社の `/wp-admin` 国外制限の対象か。

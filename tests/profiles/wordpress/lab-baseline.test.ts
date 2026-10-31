@@ -23,6 +23,7 @@ import type { Snapshot } from "../../../src/snapshot/index.js";
 import { baselineDockerAnswers } from "../../support/lab-baseline-docker.js";
 
 // #699: 検証 Lab の基準環境（hosting-default-v1）の置き場、版、記録、読み戻し。
+// #706: v2 はパーマリンク /%postname%/ と WordPress 標準の書き換えブロックを足す。
 
 const sha = (value: string) => `sha256:${value.repeat(64)}`;
 const directories: string[] = [];
@@ -101,11 +102,14 @@ async function labFixture(options: { readonly drift?: readonly string[] }) {
 }
 
 describe("the verification Lab baseline (#699)", () => {
-  it("loads hosting-default-v1 by its profile constant and digests the file's content", async () => {
-    const { baseline, ref } = await loadWordPressLabBaseline(
-      CURRENT_WORDPRESS_LAB_BASELINE_ID,
-    );
+  it("loads hosting-default-v1 and digests the file's content", async () => {
+    const { baseline, ref } =
+      await loadWordPressLabBaseline("hosting-default-v1");
     expect(ref.id).toBe("hosting-default-v1");
+    // #706: v1 stays as recorded; a new value is a new file.
+    expect(ref.digest).toBe(
+      "sha256:e909f7950403e25bc988dcd9b7920a27fb599c822bbc3ca611e6d26d85a21e2c",
+    );
     expect(baseline.reference).toBe(
       "docs/reviews/2026-10-31-hosting-defaults.md",
     );
@@ -128,6 +132,99 @@ describe("the verification Lab baseline (#699)", () => {
       "/wlwmanifest.xml",
     ]);
   });
+
+  it("makes hosting-default-v2 current: v1 plus /%postname%/ permalinks and the standard rewrite block (#706)", async () => {
+    expect(CURRENT_WORDPRESS_LAB_BASELINE_ID).toBe("hosting-default-v2");
+    const v1 = await loadWordPressLabBaseline("hosting-default-v1");
+    const v2 = await loadWordPressLabBaseline(
+      CURRENT_WORDPRESS_LAB_BASELINE_ID,
+    );
+    expect(v2.ref.id).toBe("hosting-default-v2");
+    expect(v2.ref.digest).not.toBe(v1.ref.digest);
+    expect(v2.baseline.attacker).toEqual(v1.baseline.attacker);
+    expect(v2.baseline.settings).toEqual([
+      ...v1.baseline.settings.filter((item) => item.target !== "web-server"),
+      {
+        target: "wordpress",
+        name: "permalink-structure",
+        value: "/%postname%/",
+      },
+      { target: "web-server", name: "htaccess", value: "wordpress-rewrite" },
+    ]);
+  });
+
+  it("sets /%postname%/ and writes the rewrite block only when .htaccess has none, before files go to 644 (#706)", async () => {
+    const f = await labFixture({});
+    const { ref } = await loadWordPressLabBaseline("hosting-default-v2");
+    const ready = await f.lab.provision(
+      f.snapshot,
+      { ...f.setup, baseline: ref },
+      { purpose: "verification" },
+    );
+    expect(ready.status).toBe("ready");
+    const commands = f.commands.map(({ args }) => args);
+    const lines = commands.map((args) => args.join(" "));
+    const activated = lines.findIndex((line) =>
+      line.endsWith("wp plugin activate example"),
+    );
+    const structure = lines.findIndex((line) =>
+      line.endsWith("wp rewrite structure /%postname%/"),
+    );
+    const htaccess = commands.findIndex((args) =>
+      args.some((arg) => arg.startsWith("WBH_BASELINE_HTACCESS=")),
+    );
+    const chmod = lines.findIndex((line) => line.includes("chmod 644 {} +"));
+    expect(structure).toBeGreaterThan(activated);
+    expect(htaccess).toBeGreaterThan(activated);
+    expect(htaccess).toBeLessThan(chmod);
+    const write = commands[htaccess]!;
+    const block = write
+      .find((arg) => arg.startsWith("WBH_BASELINE_HTACCESS="))!
+      .slice("WBH_BASELINE_HTACCESS=".length);
+    expect(block.split("\n")).toEqual(
+      expect.arrayContaining([
+        "# BEGIN WordPress",
+        "RewriteEngine On",
+        "RewriteBase /",
+        "RewriteRule . /index.php [L]",
+        "# END WordPress",
+      ]),
+    );
+    // The block travels as data and is appended only when none is there.
+    const script = write.at(-1)!;
+    expect(script).not.toContain("RewriteRule");
+    expect(script).toContain("grep -q '^# BEGIN WordPress'");
+    expect(script).toContain(">>");
+    expect(script).toContain("chown www-data:www-data");
+    // Both read back: the option and the block's lines in the file.
+    expect(
+      lines.some((line) => line.endsWith("wp option get permalink_structure")),
+    ).toBe(true);
+    expect(
+      commands.some((args) =>
+        args.some((arg) => arg.startsWith("WBH_BASELINE_HTACCESS_LINES=")),
+      ),
+    ).toBe(true);
+  });
+
+  it.each([["permalink-structure"], ["rewrite-block"]])(
+    "stops a v2 Lab at the seed stage when %s does not read back (#706)",
+    async (setting) => {
+      const f = await labFixture({ drift: [setting] });
+      const { ref } = await loadWordPressLabBaseline("hosting-default-v2");
+      const result = await f.lab.provision(
+        f.snapshot,
+        { ...f.setup, baseline: ref },
+        { purpose: "verification" },
+      );
+      expect(result).toMatchObject({
+        status: "incomplete",
+        reason: "provision",
+        stage: "seed",
+        baseline: ref,
+      });
+    },
+  );
 
   it("refuses an unknown kind of setting and an unknown baseline id", async () => {
     const text = await readFile(BASELINE_FILE, "utf8");
