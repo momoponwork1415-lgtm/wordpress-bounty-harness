@@ -426,7 +426,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
   {
     id: "wp2shell-bounty-v19-wide",
     digest:
-      "sha256:2d1e15a3d358841847c1354ddd9d1a3697d75b066779ad2b551d6fca472aa97b",
+      "sha256:21ade74ca94a70c57083b48ce6325803e5f00f7b5c7f6ae417f04a132241e9aa",
     outputContract: "v4",
     status: "candidate",
     mode: "wide",
@@ -435,7 +435,9 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     // wbh-tools hook listing read and remaining, and the Root does not close
     // while rows remain; the Trial wall still ends the Trial normally. Root
     // closures at a median of about 16 of 120 minutes have not changed since
-    // v14-wide. Runs only when named; alternated with v18-wide, 20 Trials each.
+    // v14-wide. Runs only when named, and the campaign config must name both
+    // wbh-recon-v1 and wbh-tools-v1 in discovery.skills; alternated with
+    // v18-wide, 20 Trials each.
     fragments: [
       TASK,
       { section: "objective", file: "first-principles-v11" },

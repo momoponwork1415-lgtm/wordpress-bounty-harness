@@ -282,12 +282,13 @@ Lead は v14-wide の水準に戻ったが、Finding は戻らなかった。10-
 
 ## 2026-10-31 追記 16: `wide` の比較候補 v19-wide（停止条件を tools の一覧に結び付ける、#714）
 
-wide の Trial は、Root が登録簿に「全 sink の対象エントリ群を消化」と書いた時点で閉じる（`coordination/stop-wide-v13`）。2026-10-31 の本番 30 Trial では、Root の分は中央値で約 16 分だった。子は 1 体あたり 2〜4 分で 15〜30 file を読み、PHP 230 file のプラグインで実際に開いた固有 file は 2 割程度だった。制限時間 120 分のうち 100 分以上が毎回使われていない。この形は 2026-10-26 の v14-wide から変わっていない（数字は #714）。探索スキル `wbh-tools` が保存する hook 登録の一覧（`/workspace/research/tools/hooks.tsv`、同じプラグインで 169 行）は、終了の根拠に使われていない。終わり方を決めるのは停止文で、「消化した」は Root の自己申告のままである。
+wide の Trial は、Root が登録簿に「全 sink の対象エントリ群を消化」と書いた時点で閉じる（`coordination/stop-wide-v13`）。2026-10-31 の本番 30 Trial では、Root の分は中央値で約 16 分だった。子は 1 体あたり 2〜4 分で 15〜30 file を読み、PHP 230 file のプラグインで実際に開いた固有 file は 2 割程度だった。制限時間 120 分のうち 100 分以上が毎回使われていない。この形は 2026-10-26 の v14-wide から変わっていない（数字の出典は [2026-10-31 の構造調査](../reviews/2026-10-31-exploration-structure-investigation.md)、#714）。探索スキル `wbh-tools` が保存する hook 登録の一覧（`/workspace/research/tools/hooks.tsv`、同じプラグインで 169 行）は、終了の根拠に使われていない。終わり方を決めるのは停止文で、「消化した」は Root の自己申告のままである。
 
 決定:
 
-- `wp2shell-bounty-v19-wide` を `wide` の `candidate`（`mode: "wide"`）として足す。campaign 設定の `promptId` で名指ししたときだけ走る。本文は v18-wide とバイト単位で同じで、最後の fragment だけを `coordination/stop-wide-v13` から `coordination/stop-wide-v14` に替える。digest は `sha256:2d1e15a3d358841847c1354ddd9d1a3697d75b066779ad2b551d6fca472aa97b`、契約は v4。
-- `stop-wide-v14` は、登録簿に sink 種別ごとに「tools の一覧のうち読んだ行の数と残りの行の数」を書かせ、残りがある間は閉じないことを求める。一覧が保存されていないときは、登録簿の入口の数で代える。制限時間に達したら従来どおり正常に閉じる。最後の 2 文（経過時間を作らない、候補 0 件も正常な終わり）は v13 のまま。制限時間と子の数は書かない（追記 4）。対象固有の名前も書かない。
+- `wp2shell-bounty-v19-wide` を `wide` の `candidate`（`mode: "wide"`）として足す。campaign 設定の `promptId` で名指ししたときだけ走る。本文は v18-wide とバイト単位で同じで、最後の fragment だけを `coordination/stop-wide-v13` から `coordination/stop-wide-v14` に替える。digest は `sha256:21ade74ca94a70c57083b48ce6325803e5f00f7b5c7f6ae417f04a132241e9aa`、契約は v4。
+- `stop-wide-v14` は、登録簿に sink 種別ごとに「tools の一覧のうち読んだ行の数と残りの行の数」を書かせ、残りがある間は閉じないことを求める。制限時間に達したら従来どおり正常に閉じる。最後の 2 文（経過時間を作らない、候補 0 件も正常な終わり）は v13 のまま。制限時間と子の数は書かない（追記 4）。対象固有の名前も書かない。
+- v19-wide を名指しする campaign 設定は、`discovery.skills` に `wbh-recon-v1` と `wbh-tools-v1` の両方を名指ししなければならない。
 - Harness は変えない。制限時間と子の数の強制だけが Harness の仕事で、終了の判断はプロンプト側に置く（AGENTS.md「Harness と AI の責務」）。一覧の行数を Harness が数えて止めることもしない。
 - 変えないもの: v18-wide の行、本文、digest。`wide` の `current`（v14-wide）、比較候補の v15-wide、`deep` の v11、`src/profiles/wordpress/policy/campaign.json`、`examples/campaign-wide-20.json`、`stop-wide-v13`、探索スキルの本文。
 - 測り方: 本番の同じ選定帯で、v18-wide と v19-wide を交互に 20 Trial ずつ回す。子の上限、契約 v4、探索スキル（`wbh-recon` と `wbh-tools`）は両方で同じにする。台帳の `configuration.promptVariant` で分け、次の 4 つを並べる（DEVELOPMENT 第 5 節の 6 段）。
@@ -296,5 +297,5 @@ wide の Trial は、Root が登録簿に「全 sink の対象エントリ群を
   - 段 1 を通った Finding / Trial
   - Lead の 5 項目を通った数 / Trial
 - 採否はこの 4 つの数字で決め、採る版を `current`、もう一方を `archived` にして `candidate` の行を残さない（追記 8）。
-- 測った数字: 上の 30 Trial の構造だけ。v19-wide の数字は 20 Trial の後に #714 に書く。採否の判断は所有者委任の AI が行う（ADR 0032 の 2026-10-18 節）。agent に渡る文章なので `owner-approved` が要る。
+- 測った数字: 上の 30 Trial の構造だけ（[構造調査](../reviews/2026-10-31-exploration-structure-investigation.md)）。v19-wide の数字は 20 Trial の後に #714 に書く。採否の判断は所有者委任の AI が行う（ADR 0032 の 2026-10-18 節）。agent に渡る文章なので `owner-approved` が要る。
 - 消し方: Trial が走る前なら、v19-wide の行、`wp2shell-bounty-v19-wide.md`、`sections/coordination/stop-wide-v14.md` を消す。走った後なら、v19-wide の行を `archived` にして `mode` を外し、本文と fragment は照合用に残す。

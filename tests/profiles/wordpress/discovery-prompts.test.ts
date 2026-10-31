@@ -191,7 +191,7 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
         "sha256:1ffb15f4f3f7ad6de70e330e10fd24c31513e41d250c8e0d6885b760a0a5c1f3",
       // v18-wide with the stop fragment replaced (ADR 0039 addendum 16, #714).
       "wp2shell-bounty-v19-wide":
-        "sha256:2d1e15a3d358841847c1354ddd9d1a3697d75b066779ad2b551d6fca472aa97b",
+        "sha256:21ade74ca94a70c57083b48ce6325803e5f00f7b5c7f6ae417f04a132241e9aa",
     } as const;
     for (const row of composed) {
       const bytes = (await promptBytes(row.id)).toString("utf8");
