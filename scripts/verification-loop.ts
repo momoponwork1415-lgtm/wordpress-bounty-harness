@@ -83,8 +83,16 @@ const SCREEN_PASS = "screen-v5-verify";
 const SOURCE_CHECK_PASS = "source-check-pass";
 const SOURCE_CHECK_UNKNOWN = "source-check-unknown";
 const AWAITING_HUMAN = "awaiting-human-observation";
-/** 止まった検証を 1 回やり直しても止まったとき、ループが打つ印。所有者の判断待ちになる。 */
-const RETRY_EXHAUSTED = "loop-retry-exhausted";
+/**
+ * 先へ進めてよい defer の理由。これ以外の defer（loop-retry-exhausted、dependency-unpinnable、
+ * owner-excluded-heavy-precondition など）は、所有者の判断待ちとして Lab の計画から外す。
+ */
+const PROCEED = new Set([
+  "screen-v5-verify",
+  "screen-v5-reassessment",
+  "source-check-pass",
+  "lab-image-fixed",
+]);
 /** Lab image の欠落で検証できない印。image が直ったら同じ Finding に lab-image-fixed を足して解く。 */
 const LAB_IMAGE_BLOCKED = "lab-image-blocked";
 
@@ -468,10 +476,11 @@ function classify(entry: FindingFacts): { stage: Stage; note: string } {
     )
       return { stage: "blocked", note: LAB_IMAGE_BLOCKED };
     if (
-      reason === RETRY_EXHAUSTED &&
-      (entry.decision?.at ?? "") >= verification.at
+      entry.decision?.decision === "defer" &&
+      !PROCEED.has(reason) &&
+      entry.decision.at >= verification.at
     )
-      return { stage: "owner", note: RETRY_EXHAUSTED };
+      return { stage: "owner", note: reason };
     return {
       stage: "stalled",
       note: `${verification.status}(${verification.reason ?? ""}) attempts=${entry.verificationAttempts}${superseded(entry) === undefined ? "" : " 置き換えられた観測 Lab が生きている（目視だけ、記録不可）"}`,
@@ -483,6 +492,14 @@ function classify(entry: FindingFacts): { stage: Stage; note: string } {
       : { stage: "unit", note: "" };
   if (reason === SOURCE_CHECK_UNKNOWN)
     return { stage: "owner", note: SOURCE_CHECK_UNKNOWN };
+  // 段の印より後に、所有者の判断待ちの defer が付いた未検証の Finding。
+  if (
+    entry.decision?.decision === "defer" &&
+    !PROCEED.has(reason) &&
+    reason !== LAB_IMAGE_BLOCKED &&
+    unitOf.has(entry.findingId)
+  )
+    return { stage: "owner", note: reason };
   if (reason === SCREEN_PASS || reason === "screen-v5-reassessment")
     return { stage: "source-check", note: "" };
   return {

@@ -457,3 +457,22 @@ test("a live Lab that no list accounts for, such as a submitted Finding's, still
     free: 2,
   });
 });
+
+test("an owner-hold defer keeps a unit out of the Lab plan, verified or not", () => {
+  recorded(id("1"));
+  verified(id("1"), "v1", { status: "incomplete", reason: "precondition" });
+  decided(id("1"), "defer", "dependency-unpinnable", 5);
+  recorded(id("2"));
+  decided(id("2"), "defer", "source-check-pass");
+  decided(id("2"), "defer", "dependency-unpinnable", 5);
+  mkdirSync(join(state, "review-notes"));
+  writeFileSync(
+    join(state, "review-notes", "report-units-2026-10-30.json"),
+    JSON.stringify([
+      { groupId: "u", representative: "11111111", members: ["22222222"] },
+    ]),
+  );
+  const result = run();
+  expect(ids(result.next.owner)).toEqual([id("1"), id("2")]);
+  expect(result.next.lab).toEqual([]);
+});
