@@ -11,6 +11,7 @@
 当面は Wordfence 向けに、AI 操作役が `review export --campaign <id> --finding <id>` の参照を読み、screen、skill による検証、重複照合、最新版での再検証、scope 評価、提出先選択、英語の暫定文案までを順に進める（SPEC §3、ADR 0038）。Patchstack 向けの追加自動化は報告が増えてから扱う。6 段を起動・引き継ぐ自動 orchestrator はまだ無い。AI 操作役は所有者に代わって中間記録を実行するが、各 skill の判断方法は変えない。旧運用を記す skill 本文の版更新は別 PR で行う。AI の中間判断は `review decide --by ai` として記録し、`--minutes` を付けて人間の作業時間に混ぜない。`incomplete` や根拠のない重複・scope 判定を提出可能な文案として扱わない。`incomplete(observation)` に攻撃要求との marker 一致と順序、別の被害者での Lab browser dialog 観測がある場合、`wbh-report` v7 は因果関係の確認待ちの内部プレビューだけを Private Evidence に作れる。各 skill と CLI の操作順は [OPERATIONS 第 3 節](../../docs/OPERATIONS.md)にある。
 
 1. `review reverify --campaign <id> --finding <id> --config <path>` で、対象の最新版を新しい Target Snapshot に固定し、同じ Finding を新しい Lab で再検証する。
+   - 未確定 Finding の固定 Snapshot に必要なプラグイン依存が欠けていた場合は、選定方針に依存の版を pin して `--resnapshot-dependencies --handoff <dir>` を付ける。対象の版・ソースと既存の依存を維持し、新しい依存ソースだけを追加できるときに限り、新しい Snapshot の派生 Finding を記録する。検証結果は人間の観測待ちの `incomplete` であり、旧 Finding を確定扱いにしない。
    - 旧 digest の検証結果を最新版の証拠として流用しない。
    - 新しい Snapshot では派生 Finding ID が作られ、CLI の `as <findingId>` に出る。同じ Snapshot なら元 ID のままになる。結果は `basis: latest-version` 付きの検証として台帳に残る。scope 評価が「最新版で成立」とみなすのは、この検証が `runtime-confirmed` または `reproduced` のときだけ。
    - 元 Finding の暫定 `accept` と重複結果は派生 ID に継承されない。以後は出力された ID を使い、最新版の証拠でレビュー列の判断をやり直す。元 Finding の文案は、派生 ID ができた時点で承認できない。

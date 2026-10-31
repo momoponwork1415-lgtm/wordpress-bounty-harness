@@ -990,7 +990,7 @@ export async function verifyNextFinding<
 
 /**
  * Freezes the selected version. A new Snapshot gets a derived Finding; an
- * unconfirmed Finding can be retried only on its original Snapshot.
+ * unconfirmed Finding can add pinned dependencies only through an explicit handoff.
  */
 export async function reverifyOnSelectedVersion<
   Target extends TargetSelection,
@@ -1005,6 +1005,7 @@ export async function reverifyOnSelectedVersion<
   /** Reuse a separately recorded, immutable Snapshot for a real Lab smoke. */
   readonly snapshotCampaignId?: string;
   readonly version?: string;
+  readonly resnapshotDependencies?: boolean;
   readonly ledger: Ledger;
   readonly store: PrivateArtifactStore;
   readonly pipeline: Pick<
@@ -1234,9 +1235,53 @@ export async function reverifyOnSelectedVersion<
       );
   }
   const originalSnapshot = snapshot.digest === finding.snapshotDigest;
+  if (options.resnapshotDependencies === true) {
+    if (
+      observed !== undefined ||
+      options.version !== undefined ||
+      originalSnapshot
+    )
+      throw new Error(
+        "Dependency resnapshot requires an unconfirmed Finding and a changed Snapshot at the same target version",
+      );
+    if (pipeline.loadSnapshot === undefined)
+      throw new Error(
+        "The original Snapshot is unavailable for dependency comparison",
+      );
+    const original = await pipeline.loadSnapshot(finding.snapshotDigest);
+    const originalDependencies = new Map(
+      original.dependencies.map((dependency) => [
+        dependency.identity,
+        dependency,
+      ]),
+    );
+    const added = snapshot.dependencies.filter(
+      (dependency) => !originalDependencies.has(dependency.identity),
+    );
+    if (
+      original.digest !== finding.snapshotDigest ||
+      snapshot.target.identity !== original.target.identity ||
+      snapshot.target.version !== original.target.version ||
+      snapshot.target.sourceDigest !== original.target.sourceDigest ||
+      added.length === 0 ||
+      snapshot.dependencies.length !==
+        originalDependencies.size + added.length ||
+      snapshot.dependencies.some((dependency) => {
+        const prior = originalDependencies.get(dependency.identity);
+        return (
+          prior !== undefined &&
+          (dependency.version !== prior.version ||
+            dependency.sourceDigest !== prior.sourceDigest)
+        );
+      })
+    )
+      throw new Error(
+        "Dependency resnapshot may only add pinned sources to the original target and dependencies",
+      );
+  }
   // An unconfirmed Finding was rechecked only with a changed Lab scenario;
   // scenarios were removed in #353, so it goes back through `verify next`.
-  if (observed === undefined)
+  if (observed === undefined && options.resnapshotDependencies !== true)
     throw new Error(
       originalSnapshot
         ? "An unconfirmed Finding is retried through verify next; Lab scenario retry was removed in #353"
@@ -1246,7 +1291,7 @@ export async function reverifyOnSelectedVersion<
     );
   const setup = pipeline.setupFor(snapshot);
   if (
-    observed.type === "verification-finished" &&
+    observed?.type === "verification-finished" &&
     options.version !== undefined
   ) {
     const observedLab = ledger

@@ -184,6 +184,8 @@ async function harness(
     readonly dependencySources?: boolean;
     /** Plugin sources sealed in the original and control Snapshots. */
     readonly snapshotPluginDependencies?: Readonly<Record<string, string>>;
+    /** Use the selection's pins so a later reverify can add a dependency. */
+    readonly useSelectionPluginDependencies?: boolean;
     /** While it returns an error, the Lab's source resolution throws it inside provision. */
     readonly labProvisionError?: () => Error | undefined;
   } = {},
@@ -542,6 +544,7 @@ async function harness(
       listings: options.listingObservations ?? [],
     }),
   });
+  let selectionPluginDependencies: Readonly<Record<string, string>> = {};
   const snapshots = openSnapshot({
     storageDirectory: join(root, "snapshots"),
     source: {
@@ -561,7 +564,9 @@ async function harness(
           readFile: (path: string) => readFile(join(sourceDirectory, path)),
         },
         dependencies: Object.entries(
-          options.snapshotPluginDependencies ?? {},
+          options.useSelectionPluginDependencies === true
+            ? selectionPluginDependencies
+            : (options.snapshotPluginDependencies ?? {}),
         ).map(([slug, version]) => ({
           identity: `wporg:${slug}`,
           version,
@@ -604,6 +609,7 @@ async function harness(
     selection,
     freeze: async (target) => {
       frozenSelections.push(target);
+      selectionPluginDependencies = target.pluginDependencyPins ?? {};
       if (target.slug === options.failFreeze)
         throw new SourceAcquisitionError("connect-timeout", {
           code: "ETIMEDOUT",
@@ -6035,6 +6041,134 @@ describe("harness CLI vertical slice", () => {
     expect(ledger().read({ campaignId: "campaign-1" })).toHaveLength(
       beforeEvents,
     );
+  });
+
+  it("rechecks an unconfirmed Finding on the same source after adding a pinned dependency", async () => {
+    const { run, configPath, ledger, root, docker, frozenSelections } =
+      await harness({ pinned: false, useSelectionPluginDependencies: true });
+    const campaign = ["--campaign", "campaign-dependency-resnapshot"];
+    expect(
+      (
+        await run(
+          "campaign",
+          "run",
+          "--all",
+          ...campaign,
+          "--config",
+          configPath,
+        )
+      ).code,
+    ).toBe(0);
+    const original = ledger()
+      .read({
+        campaignId: "campaign-dependency-resnapshot",
+        type: "finding-recorded",
+      })
+      .at(0)?.event;
+    expect(original?.type).toBe("finding-recorded");
+    if (original?.type !== "finding-recorded") return;
+    const args = [
+      "review",
+      "reverify",
+      ...campaign,
+      "--finding",
+      original.findingId,
+      "--config",
+      configPath,
+      "--resnapshot-dependencies",
+      "--handoff",
+      join(root, "handoff"),
+    ];
+    const before = ledger().read({
+      campaignId: "campaign-dependency-resnapshot",
+    }).length;
+    const noAddition = await run(...args);
+    expect(noAddition.code).not.toBe(0);
+    expect(noAddition.stderr).toContain("changed Snapshot");
+    expect(
+      ledger().read({ campaignId: "campaign-dependency-resnapshot" }),
+    ).toHaveLength(before);
+
+    const policyPath = join(root, "selection.json");
+    const policy = JSON.parse(await readFile(policyPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    policy.pluginDependencyPins = {
+      "synthetic-plugin": { elementor: "3.34.4" },
+    };
+    await writeFile(policyPath, JSON.stringify(policy));
+    const rechecked = await run(...args);
+    expect(rechecked).toMatchObject({ code: 0, stderr: "" });
+    expect(frozenSelections.at(-1)).toMatchObject({
+      version: "9.9.9",
+      pluginDependencyPins: { elementor: "3.34.4" },
+    });
+    const derived = ledger()
+      .read({
+        campaignId: "campaign-dependency-resnapshot",
+        type: "finding-recorded",
+      })
+      .map(({ event }) => event)
+      .find(
+        (event) =>
+          event.type === "finding-recorded" &&
+          event.derivedFromFindingId === original.findingId,
+      );
+    expect(derived).toMatchObject({
+      type: "finding-recorded",
+      derivationKind: "latest-version",
+    });
+    if (derived?.type !== "finding-recorded") return;
+    expect(derived?.snapshotDigest).not.toBe(original.snapshotDigest);
+    const verification = ledger()
+      .read({
+        campaignId: "campaign-dependency-resnapshot",
+        type: "verification-finished",
+      })
+      .at(-1)?.event;
+    expect(verification).toMatchObject({
+      findingId: derived?.findingId,
+      snapshotDigest: derived?.snapshotDigest,
+      result: { status: "incomplete", reason: "awaiting-human-observation" },
+    });
+    // #699: the same single-Finding Lab as `verify next`, on the base environment.
+    expect(
+      ledger()
+        .read({
+          campaignId: "campaign-dependency-resnapshot",
+          type: "lab-provisioned",
+        })
+        .map(({ event }) => event)
+        .find(
+          (event) =>
+            event.type === "lab-provisioned" &&
+            verification?.type === "verification-finished" &&
+            event.identity ===
+              `verification-lab-${verification.verificationId}`,
+        ),
+    ).toMatchObject({
+      purpose: "verification",
+      snapshotDigest: derived.snapshotDigest,
+      setupDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      baseline: {
+        id: "hosting-default-v1",
+        digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      },
+    });
+    expect(
+      docker.some(
+        (request) =>
+          request.args[0] === "network" && request.args[1] === "create",
+      ),
+    ).toBe(true);
+
+    const noHandoff = await run(...args.slice(0, -2));
+    expect(noHandoff.code).not.toBe(0);
+    expect(noHandoff.stderr).toContain("requires --handoff");
+    const fixedVersion = await run(...args, "--version", "9.9.9");
+    expect(fixedVersion.code).not.toBe(0);
+    expect(fixedVersion.stderr).toContain("cannot be combined with --version");
   });
 
   it("reconfirms a legacy route on the same Snapshot before a fixed-version control", async () => {
