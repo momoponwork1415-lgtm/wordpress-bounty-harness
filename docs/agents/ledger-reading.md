@@ -64,6 +64,25 @@ node scripts/trial-timeline.mjs --state <state> --campaign <id> --trial <trialId
 - Codex の委任文は暗号化されていて、委任文の digest は `unavailable`。`task_name` と暗号文の長さだけ出す。
 - 読み方の注意: 出力末尾の「Not derivable today」に、その Trial で取れなかったものを列挙する。取れなかったものを 0 と読まない。
 
+## Lead の群を出す
+
+同じ Snapshot の Lead と Finding を、sourceTrace の端点（入口と効果の file と関数）で群にまとめる読取器（#715、`scripts/lead-groups.mjs`）。#424 の review group と同じ重なりの規則を Lead に広げたもので、台帳は変えない。
+
+```bash
+node scripts/lead-groups.mjs --state <state> --campaign <id>                     # 1 campaign（--campaign は繰り返せる）
+node scripts/lead-groups.mjs --state <state> --campaign-like 'prod-v18-20261031-%'
+node scripts/lead-groups.mjs --state <state> --snapshot <sha256:...> --json      # 1 Snapshot を全 campaign から
+node scripts/lead-groups.mjs --state <state> --campaign <id> --rule pair         # 入口と効果の両方が一致したときだけ束ねる
+```
+
+`--state` を省くと `WBH_STATE_DIRECTORY` を読む。
+
+- 端点: sourceTrace から WordPress core、PHP、依存プラグインの行を除き、残った最初の行を入口、最後の行を効果とする。全行が依存側なら、元の最初と最後の行を使う。行番号は見ない。
+- 規則: 既定の `overlap` は、入口か効果のどちらかが同じなら束ね、連結成分を群にする。`pair` は両方が同じときだけ束ねる。群は Snapshot をまたがない。入口と効果は別の鍵として扱う。ある Lead の効果が別の Lead の入口と同じでも、束ねない。
+- 代表: 群で最初に記録された Lead。Lead の無い群では、最初の Finding。
+- 出すもの: 群の id、Snapshot と代表の digest、件数（Lead / Finding）、Trial の数、impact と primitive の種別、攻撃者位置。末尾に総数（Lead、Finding、群、2 件以上の群、2 Trial 以上の群）。
+- 出さないもの: Lead / Finding の本文、file と関数の名前、URL、payload。出力は stdout だけに出す。Git で管理するファイルへは書かない（不変条件 8）。
+
 ## 開かないもの
 
 `<state>/private-evidence/` の `content/` 以下（候補本文、HTTP 記録、payload、画面、認証情報）。台帳の分類・reason・digest と、`manifest.json` の一覧だけで足りる。Issue や PR に貼るのも分類と件数だけ。
