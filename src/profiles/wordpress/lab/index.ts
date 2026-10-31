@@ -71,6 +71,8 @@ import {
 import { closeWordPressSetup } from "./setup-close.js";
 import {
   WordPressLabBaselineMismatch,
+  attackerEntranceFor,
+  type WordPressAttackerEntrance,
   type WordPressDeniedPath,
 } from "./baseline.js";
 import {
@@ -101,6 +103,8 @@ export type {
 export { WORDPRESS_CORE_IDENTITY } from "./provision-input.js";
 export {
   CURRENT_WORDPRESS_LAB_BASELINE_ID,
+  type WordPressAttackerEntrance,
+  type WordPressAttackerOrigin,
   type WordPressDeniedPath,
 } from "./baseline.js";
 export {
@@ -183,12 +187,14 @@ export interface WordPressLab extends LabProvisioner<
     },
   ): Promise<HostExposure>;
   /**
-   * #699: the attacker position's denied paths under the Lab's baseline; null
-   * when the Lab has no baseline or its attacker stands at a domestic origin.
+   * #699: where one Finding's attacker position stands under the Lab's
+   * baseline and which paths the host entrance denies it; null when the Lab
+   * has no baseline.
    */
-  attackerDeniedPaths(
+  attackerEntrance(
     handle: WordPressLabHandle,
-  ): readonly WordPressDeniedPath[] | null;
+    attackerPosition: string,
+  ): WordPressAttackerEntrance | null;
   /**
    * Exploration Labs only: recreates WordPress, its database and the site
    * volume and initializes them from the same setup, so the handle's setup
@@ -711,12 +717,12 @@ export function openWordPressLab(options: {
           : { deniedPaths: input.deniedPaths }),
       });
     },
-    attackerDeniedPaths(handle) {
+    attackerEntrance(handle, attackerPosition) {
       const lab = sessionFor(handle);
       const baseline = lab === undefined ? undefined : baselines.get(lab.id);
-      return baseline === undefined || baseline.attacker.origin !== "foreign"
+      return baseline === undefined
         ? null
-        : baseline.attacker.deniedPaths;
+        : attackerEntranceFor(baseline, attackerPosition);
     },
     async withdrawFromHost(handle) {
       const lab = sessionFor(handle);

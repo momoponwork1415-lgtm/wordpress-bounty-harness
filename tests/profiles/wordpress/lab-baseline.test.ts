@@ -209,9 +209,39 @@ describe("the verification Lab baseline (#699)", () => {
       commands.some((line) => line.includes("chmod 755 {} +")) &&
         commands.some((line) => line.includes("chmod 644 {} +")),
     ).toBe(true);
-    expect(based.lab.attackerDeniedPaths(ready.handle)).toHaveLength(4);
-    expect(plain.lab.attackerDeniedPaths(without.handle)).toBeNull();
+    expect(
+      based.lab.attackerEntrance(ready.handle, "unauthenticated"),
+    ).toMatchObject({ origin: "foreign", deniedPaths: { length: 4 } });
+    expect(
+      plain.lab.attackerEntrance(without.handle, "unauthenticated"),
+    ).toBeNull();
   });
+
+  it.each(["subscriber", "customer", "contributor"])(
+    "puts a %s attacker at the domestic origin, so /wp-login.php stays open",
+    async (position) => {
+      const f = await labFixture({});
+      const { baseline, ref } =
+        await loadWordPressLabBaseline("hosting-default-v1");
+      const ready = await f.lab.provision(
+        f.snapshot,
+        { ...f.setup, baseline: ref },
+        { purpose: "verification" },
+      );
+      if (ready.status !== "ready") throw new Error("Lab not ready");
+      // The default stays foreign; only a logged-in position is domestic.
+      expect(baseline.attacker.origin).toBe("foreign");
+      const signedIn = f.lab.attackerEntrance(ready.handle, position);
+      expect(signedIn).toEqual({ origin: "domestic", deniedPaths: [] });
+      expect(deniedToAttacker(signedIn!.deniedPaths, "/wp-login.php")).toBe(
+        false,
+      );
+      const visitor = f.lab.attackerEntrance(ready.handle, "unauthenticated");
+      expect(deniedToAttacker(visitor!.deniedPaths, "/wp-login.php")).toBe(
+        true,
+      );
+    },
+  );
 
   it.each([
     ["display_errors"],

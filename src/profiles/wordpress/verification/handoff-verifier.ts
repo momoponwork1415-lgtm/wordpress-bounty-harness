@@ -15,7 +15,11 @@ import { fileURLToPath } from "node:url";
 
 import { canonicalJson } from "../../../infrastructure/canonical-json.js";
 import type { VerifierRunReceipt } from "../../../verification/index.js";
-import type { WordPressLab, WordPressLabHandle } from "../lab/index.js";
+import type {
+  WordPressAttackerOrigin,
+  WordPressLab,
+  WordPressLabHandle,
+} from "../lab/index.js";
 import {
   WORDPRESS_VERIFIER_FILE_NAMES,
   type WordPressVerifierFiles,
@@ -44,6 +48,8 @@ type HandoffRunReceipt = VerifierRunReceipt & {
   readonly startedAt: string;
   readonly completedAt: string;
   readonly reason?: string;
+  /** #699: the origin the attacker stood at under the Lab's baseline. */
+  readonly attackerOrigin?: WordPressAttackerOrigin;
 };
 
 const exists = (path: string) =>
@@ -91,7 +97,7 @@ export class HandoffVerifier implements WordPressVerifierTransport {
         | "exposeToHost"
         | "withdrawFromHost"
         | "reviewAdministrator"
-        | "attackerDeniedPaths"
+        | "attackerEntrance"
       >;
       /** Requested loopback ports; 0 takes a free one. `lab.json` names the bound ports. */
       readonly ports: { readonly http: number; readonly database: number };
@@ -114,6 +120,12 @@ export class HandoffVerifier implements WordPressVerifierTransport {
     );
     const promptDigest = `sha256:${createHash("sha256").update(skill).digest("hex")}`;
     const startedAt = this.options.clock();
+    // #699: a foreign origin is denied the baseline's paths after setup; a
+    // position that logs in stands at the domestic origin.
+    const entrance = lab.attackerEntrance(
+      handle,
+      input.finding.attackerPosition,
+    );
     const deadline =
       startedAt.getTime() + (this.options.wallTimeMs ?? HANDOFF_WALL_MS);
     const finish = (
@@ -121,7 +133,13 @@ export class HandoffVerifier implements WordPressVerifierTransport {
       reason?: string,
     ): WordPressVerifierTransportResult => ({
       promptDigest,
-      receipt: this.#receipt(input, startedAt, outcome, reason),
+      receipt: this.#receipt(
+        input,
+        startedAt,
+        outcome,
+        reason,
+        entrance?.origin,
+      ),
       outcome,
     });
     const incomplete = (reason: string, nextStep: string) =>
@@ -250,8 +268,8 @@ export class HandoffVerifier implements WordPressVerifierTransport {
           );
         // #699: from here the host entrance stands where the baseline puts
         // the attacker; a foreign origin gets 403 on the denied paths.
-        const deniedPaths = lab.attackerDeniedPaths(handle);
-        if (deniedPaths !== null) {
+        const deniedPaths = entrance?.deniedPaths ?? [];
+        if (deniedPaths.length > 0) {
           await lab.withdrawFromHost(handle);
           const bound = exposed;
           exposed = await lab.exposeToHost(handle, {
@@ -362,6 +380,7 @@ export class HandoffVerifier implements WordPressVerifierTransport {
     startedAt: Date,
     outcome: WordPressVerifierTransportResult["outcome"],
     reason: string | undefined,
+    attackerOrigin: WordPressAttackerOrigin | undefined,
   ): HandoffRunReceipt {
     const body = {
       transport: "handoff/v1" as const,
@@ -375,6 +394,7 @@ export class HandoffVerifier implements WordPressVerifierTransport {
       startedAt: startedAt.toISOString(),
       completedAt: this.options.clock().toISOString(),
       ...(reason === undefined ? {} : { reason }),
+      ...(attackerOrigin === undefined ? {} : { attackerOrigin }),
     };
     return {
       ...body,

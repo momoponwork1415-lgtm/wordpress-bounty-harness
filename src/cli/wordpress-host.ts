@@ -566,6 +566,8 @@ export async function createWordPressHostProfile(options: {
         // #699: the next Finding's setup gets a fresh administrator password;
         // whatever signed in before it no longer authenticates.
         readyForNextAttempt: (handle) => lab.finishSetup(handle),
+        attackerOrigin: (handle, finding) =>
+          lab.attackerEntrance(handle, finding.attackerPosition)?.origin,
         attempt: ({
           campaignId,
           finding,

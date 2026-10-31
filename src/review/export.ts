@@ -165,7 +165,13 @@ export const reviewExportV1Schema = z.strictObject({
       labSetupDigest: digest,
       scenario: z.strictObject({ id: z.string(), digest }).nullable(),
       /** #699: the Lab's versioned base environment; null for a Lab without one. */
-      baseline: z.strictObject({ id: z.string(), digest }).nullable(),
+      baseline: z
+        .strictObject({
+          id: z.string(),
+          digest,
+          attackerOrigin: z.enum(["domestic", "foreign"]).optional(),
+        })
+        .nullable(),
       attempts: z.number().int().positive(),
       verifierRuns: z.array(
         z.strictObject({

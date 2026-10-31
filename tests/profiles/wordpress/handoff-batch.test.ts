@@ -268,6 +268,8 @@ describe("one handoff Lab for two Findings of one Snapshot (#699)", () => {
       promptVersion: WBH_VERIFY_SKILL_ID,
       verifier: {
         readyForNextAttempt: (handle) => lab.finishSetup(handle),
+        attackerOrigin: (handle, finding) =>
+          lab.attackerEntrance(handle, finding.attackerPosition)?.origin,
         attempt: (input) =>
           new WordPressVerifier({
             transport: new HandoffVerifier({
@@ -342,6 +344,13 @@ describe("one handoff Lab for two Findings of one Snapshot (#699)", () => {
       ).size,
     ).toBe(1);
     expect(labs[0]).toMatchObject({ baseline: ref });
+    // Both attackers log in as a subscriber, so they stand at the domestic origin.
+    expect(
+      labs.map(
+        (event) =>
+          event.type === "lab-provisioned" && event.baseline?.attackerOrigin,
+      ),
+    ).toEqual(["domestic", "domestic"]);
     expect(
       ledger
         .readAll({ type: "verification-finished" })
@@ -391,10 +400,10 @@ describe("one handoff Lab for two Findings of one Snapshot (#699)", () => {
       seen.first.lab.administrator.password,
     );
 
-    // The host entrance turns foreign after each setup-done: plain, then filtered.
+    // A logged-in attacker is domestic: no 403 entrance after either setup-done.
     const filtered = exposures.map((args) =>
       args.some((arg) => arg.startsWith("WBH_DENIED_PATHS=")),
     );
-    expect(filtered).toEqual([false, true, false, true]);
+    expect(filtered).toEqual([false, false]);
   });
 });

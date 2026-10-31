@@ -78,6 +78,14 @@ export interface Verifier<Finding, Handle extends LabHandle> {
     lab: Handle,
     next: { readonly findingId: string },
   ): Promise<boolean>;
+  /**
+   * #699: the origin this Finding's attacker stands at under the Lab's
+   * baseline, recorded on its `lab-provisioned`; undefined without one.
+   */
+  attackerOrigin?(
+    lab: Handle,
+    finding: Finding,
+  ): "domestic" | "foreign" | undefined;
 }
 
 /** The transport receipt fields the ledger needs; the whole receipt goes to Private Evidence. */
@@ -509,6 +517,10 @@ export class Verification<
           trace.recipeDigest = recipe;
         },
       };
+      const attackerOrigin = this.#options.verifier.attackerOrigin?.(
+        current,
+        finding,
+      );
       try {
         const labEvent = await this.#options.ledger.append({
           schemaVersion: 1,
@@ -527,6 +539,7 @@ export class Verification<
                 baseline: {
                   id: current.baseline.id,
                   digest: current.baseline.digest,
+                  ...(attackerOrigin === undefined ? {} : { attackerOrigin }),
                 },
               }),
         });

@@ -72,9 +72,14 @@ export const wordPressLabBaselineSchema = z.strictObject({
    * Where the attacker position stands. `foreign` gets 403 on `deniedPaths`
    * at the Lab's host entrance after setup; `lenient` keeps admin-ajax and
    * admin-post open (a `strict` variant is reserved by name only).
+   * `origin` is for an unauthenticated attacker. A position that logs in
+   * (attack.json carries its account) stands at `authenticatedOrigin`: a
+   * host's foreign-access block guards the unauthenticated entrances, and
+   * someone who can log in is treated as a domestic user (decided 2026-10-31).
    */
   attacker: z.strictObject({
     origin: z.enum(["domestic", "foreign"]),
+    authenticatedOrigin: z.enum(["domestic", "foreign"]),
     adminEndpoints: z.literal("lenient"),
     deniedPaths: z.array(pathRule).max(50),
   }),
@@ -82,6 +87,33 @@ export const wordPressLabBaselineSchema = z.strictObject({
 export type WordPressLabBaseline = z.output<typeof wordPressLabBaselineSchema>;
 export type WordPressDeniedPath =
   WordPressLabBaseline["attacker"]["deniedPaths"][number];
+
+export type WordPressAttackerOrigin =
+  WordPressLabBaseline["attacker"]["origin"];
+/** Where one Finding's attacker stands and what the host entrance denies it. */
+export type WordPressAttackerEntrance = {
+  readonly origin: WordPressAttackerOrigin;
+  readonly deniedPaths: readonly WordPressDeniedPath[];
+};
+
+/**
+ * The attacker's origin for one Finding: `origin` when unauthenticated,
+ * `authenticatedOrigin` for a position that logs in. Only a foreign origin
+ * is denied the baseline's paths.
+ */
+export function attackerEntranceFor(
+  baseline: WordPressLabBaseline,
+  attackerPosition: string,
+): WordPressAttackerEntrance {
+  const origin =
+    attackerPosition === "unauthenticated"
+      ? baseline.attacker.origin
+      : baseline.attacker.authenticatedOrigin;
+  return {
+    origin,
+    deniedPaths: origin === "foreign" ? baseline.attacker.deniedPaths : [],
+  };
+}
 
 /** A baseline file read and checked against its schema; an unknown item stops here. */
 export function parseWordPressLabBaseline(text: string): {
