@@ -154,3 +154,15 @@ amended-by: 本文末尾の 2026-10-19 追記（公開統計による重みの�
 - Harness に足したのは比較関数の切替だけで、判断は方針 file（人間が所有）にある。
 
 消し方: `selection.json` から `ordering` を外して id を戻す。schema の鍵と比較関数は、過去の方針 digest を読めるように残してよい。
+
+## 2026-11-01 追記 4: インストール数の帯を先に、帯の中は公開日順（所有者決定）
+
+所有者は追記 3 の直後、「インストール数 100 万以上のような多いものを優先しないか」と問い、AI の推奨（帯を先に、帯の中は公開日順）に「帯優先で切り替えて」と答えた。追記 3 の `version-published` はこの追記で `install-band-then-published` に置き換える。
+
+- `selection.json` に `ordering: "install-band-then-published"` と `orderingBands: [1000000, 100000, 10000]` を置き、id を `wordpress-selection-2026-11-01-install-band` にする。順序は帯（100 万以上 → 10 万以上 → 1 万以上 → それ未満）の高い方を先に、帯の中では stable 版の公開日の新しい順、同日はインストール数の降順、同点は slug。
+- 根拠は 2 つ。Wordfence の報酬額はインストール数の帯で決まる。帯ごとに記録を持つ plugin の割合は ≥1M 64%、100k〜1M 60%、50k〜100k 52%、10k〜50k 38%、5k〜10k 27% で単調。
+- 公開日順を帯の中に残す理由は追記 3 のまま（却下 40 件中 29 件が重複）。100 万以上の plugin は数十本で版を頻繁に上げるので、この順序では新版が出るたびに列の先頭へ戻る。
+- 履歴の件数は選定に戻さない（2026-10-31 の決定のまま）。2025 年以降に記録が最も多い plugin は 100 万未満の中型（user-registration、tutor、learnpress、forminator、give、latepoint など）なので、帯だけで絞らず、下の帯も順に回す。
+- 母集団、1 batch 10 件、版上昇の再訪、同版 1 Trial は変えない。`version-published` と `installs` の値は残し、過去の方針 digest を読めるままにする。
+
+消し方: `selection.json` の `ordering` を `version-published` に戻して `orderingBands` を外す。
