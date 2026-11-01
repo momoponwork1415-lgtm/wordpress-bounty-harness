@@ -275,7 +275,7 @@ describe("WordPress selection public interface", () => {
     expect(
       "candidateSource" in policy ? policy.candidateSource.tags : null,
     ).toEqual([]);
-    expect(policy.maximumUpdateAgeDays).toBe(365);
+    expect(policy.maximumUpdateAgeDays).toBe(180);
     expect(policy.revisitPolicy).toEqual({ kind: "version-increased" });
     for (const [field, value] of Object.entries({
       cascade: [{ minimumActiveInstallations: 50_000 }],
@@ -618,6 +618,34 @@ describe("install queue (#533)", () => {
     expect(
       (await selection.select(queuePolicy)).map(({ slug }) => slug),
     ).toEqual(["popular", "small"]);
+  });
+});
+
+describe("freshness 180 days (#742)", () => {
+  it("excludes an update 181 days old and keeps one 179 days old with the shipped policy", async () => {
+    const stale = observation("stale", [], 100_000);
+    stale.observation.lastUpdated = "2026-04-10T00:00:00Z";
+    const fresh = observation("fresh", [], 50_000);
+    fresh.observation.lastUpdated = "2026-04-12T00:00:00Z";
+    const candidates = harness({ observations: { stale, fresh } });
+    const selection = openWordPressSelection({
+      candidates,
+      ledger: ledgerOf([]),
+    });
+    const shipped = await loadWordPressSelectionPolicy();
+    const policy = {
+      ...basePolicy,
+      maximumUpdateAgeDays: shipped.maximumUpdateAgeDays,
+      candidateSlugs: ["stale", "fresh"],
+    };
+    const decision = await selection.decide(policy);
+    expect(
+      decision.inspections.map(({ slug, reasons }) => ({ slug, reasons })),
+    ).toEqual([
+      { slug: "stale", reasons: ["update-stale"] },
+      { slug: "fresh", reasons: [] },
+    ]);
+    expect(decision.selected.map(({ slug }) => slug)).toEqual(["fresh"]);
   });
 });
 

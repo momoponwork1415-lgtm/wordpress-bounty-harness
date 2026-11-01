@@ -1,7 +1,7 @@
 {
   "kind": "wordpress-selection-policy",
   "schemaVersion": 1,
-  "id": "wordpress-selection-2026-11-01",
+  "id": "wordpress-selection-2026-11-01-180d",
   "promptVariant": "wp2shell-bounty-v11",
   "pluginDependencySlugs": {
     "unlimited-elements-for-elementor": ["elementor"]
@@ -18,7 +18,7 @@
   },
   "minimumActiveInstallations": 5000,
   "maximumObservationAgeDays": 2,
-  "maximumUpdateAgeDays": 365,
+  "maximumUpdateAgeDays": 180,
   "maximumTargets": 10,
   "excludedAuthors": [
     "Automattic",
