@@ -452,6 +452,11 @@ export function openWordPressSelection(input: {
       inspectWordPressLedgerExclusions({
         ledger: input.ledger,
         now: (input.clock ?? (() => new Date()))().getTime(),
+        ...(policy.revisitPolicy?.countTrialsFrom === undefined
+          ? {}
+          : {
+              countTrialsFrom: Date.parse(policy.revisitPolicy.countTrialsFrom),
+            }),
         candidates: eligible.map(({ slug, version }) => ({ slug, version })),
         reservedBatches: new Set(options.reservedBatches ?? []),
       }).map((item) => [item.slug, item]),

@@ -344,6 +344,82 @@ describe("WordPress ledger exclusions", () => {
     ]);
   });
 
+  it("does not count a Trial started before countTrialsFrom as explored (ADR 0037 addendum 6)", () => {
+    const cutoff = Date.parse("2026-11-01T12:40:00Z");
+    const trialAt = (
+      slug: string,
+      version: string,
+      campaignId: string,
+      snapshotDigest: string,
+      at: string,
+    ) =>
+      trial(slug, version, campaignId, snapshotDigest).map((event) =>
+        ledgerEventV1Schema.parse({ ...event, occurredAt: at }),
+      );
+    const ledger = reader([
+      // Explored by the old method only: back in the queue.
+      ...trialAt(
+        "old-method",
+        "1.0.0",
+        "campaign-1",
+        digest("a"),
+        "2026-10-20T00:00:00Z",
+      ),
+      // Explored by the new method: stays out until the version increases.
+      ...trialAt(
+        "new-method",
+        "1.0.0",
+        "campaign-2",
+        digest("b"),
+        "2026-11-01T13:00:00Z",
+      ),
+      // Explored by both: the new Trial decides.
+      ...trialAt(
+        "both",
+        "1.0.0",
+        "campaign-3",
+        digest("c"),
+        "2026-10-20T00:00:00Z",
+      ),
+      ...trialAt(
+        "both",
+        "1.0.0",
+        "campaign-4",
+        digest("d"),
+        "2026-11-01T14:00:00Z",
+      ),
+    ]);
+    const candidates = [
+      { slug: "old-method", version: "1.0.0" },
+      { slug: "new-method", version: "1.0.0" },
+      { slug: "new-method", version: "1.0.1" },
+      { slug: "both", version: "1.0.0" },
+    ];
+    expect(
+      inspectWordPressLedgerExclusions({
+        ledger,
+        candidates,
+        countTrialsFrom: cutoff,
+      }).map(({ slug, version, reasons }) => [slug, version, reasons]),
+    ).toEqual([
+      ["old-method", "1.0.0", []],
+      ["new-method", "1.0.0", ["previously-selected"]],
+      ["new-method", "1.0.1", []],
+      ["both", "1.0.0", ["previously-selected"]],
+    ]);
+    // Without the cutoff every counted Trial excludes its version.
+    expect(
+      inspectWordPressLedgerExclusions({ ledger, candidates }).map(
+        ({ reasons }) => reasons,
+      ),
+    ).toEqual([
+      ["previously-selected"],
+      ["previously-selected"],
+      [],
+      ["previously-selected"],
+    ]);
+  });
+
   it("excludes every slug a batch held by another runner selected, until that batch is no longer held (#604)", () => {
     const ledger = reader([
       // Another prefix's runner holds this batch; neither target has started.

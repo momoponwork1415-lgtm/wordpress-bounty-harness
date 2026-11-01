@@ -297,6 +297,25 @@ describe("WordPress selection public interface", () => {
         revisitPolicy: { kind: "version-increased", minimumDaysSinceTrial: 90 },
       }).success,
     ).toBe(false);
+    // The method-change cutoff is an ISO instant (ADR 0037 addendum 6).
+    expect(
+      wordPressSelectionPolicySchema.safeParse({
+        ...policy,
+        revisitPolicy: {
+          kind: "version-increased",
+          countTrialsFrom: "2026-11-01T12:40:00Z",
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      wordPressSelectionPolicySchema.safeParse({
+        ...policy,
+        revisitPolicy: {
+          kind: "version-increased",
+          countTrialsFrom: "2026-11-01",
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it("writes no legacy surface fields and rejects a policy that still carries them", async () => {

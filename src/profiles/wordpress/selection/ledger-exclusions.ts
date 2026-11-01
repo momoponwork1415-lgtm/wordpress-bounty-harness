@@ -11,6 +11,14 @@ import { parseWordPressOrgSelectionId } from "../target-identity.js";
 /** New queues revisit only when the stable version increases (#533). */
 export const wordPressRevisitPolicySchema = z.strictObject({
   kind: z.literal("version-increased"),
+  /**
+   * Trials started before this instant do not count as "explored" (owner
+   * decision 2026-11-01, ADR 0037 addendum 6): when the exploration method
+   * changes, the operator sets it to the restart time and every version
+   * explored only by the old method returns to the queue. Failures (Lab,
+   * freeze) keep their own rules.
+   */
+  countTrialsFrom: z.string().datetime({ offset: true }).optional(),
 });
 
 export type WordPressLedgerExclusionReason =
@@ -66,6 +74,8 @@ export function inspectWordPressLedgerExclusions(input: {
   readonly ledger: Pick<Ledger, "readAll">;
   /** Epoch milliseconds the deferral window is measured against; defaults to the wall clock. */
   readonly now?: number;
+  /** Epoch milliseconds; Trials started earlier are not "previously-selected" (ADR 0037 addendum 6). */
+  readonly countTrialsFrom?: number;
   readonly candidates: readonly {
     readonly slug: string;
     readonly version: string;
@@ -154,6 +164,12 @@ export function inspectWordPressLedgerExclusions(input: {
         finished?.outcome === "provider-limited" &&
         terminalLimitedSnapshots.has(key)
       )
+    )
+      continue;
+    // The method changed since: the old Trial no longer counts as explored.
+    if (
+      input.countTrialsFrom !== undefined &&
+      Date.parse(event.occurredAt) < input.countTrialsFrom
     )
       continue;
     const slug = selectedBySnapshot.get(key);
