@@ -1561,17 +1561,17 @@ describe("harness CLI vertical slice", () => {
           .update(prompts[0]!)
           .digest("hex")}`,
         wallMinutes: 120,
-        minimumActiveMinutes: 60,
+        minimumActiveMinutes: 0,
         maxChildren: 4,
         lab: { mode: "none", maxResets: 2 },
       },
     });
-    // The generated section follows the contract and states the deep floor.
+    // The generated section follows the contract; no mode has a floor by default (#686).
     expect(prompts[0]).toContain(
       `${contract.text}\n\n## Run parameters\n\nThe Harness sets and enforces these values for this Trial.\n`,
     );
     expect(prompts[0]).toContain(
-      "- Wall time: 120 minutes.\n- Minimum active exploration time: 60 minutes.\n- Maximum concurrent child agents: 4.\n- Lab: none.",
+      "- Wall time: 120 minutes.\n- Minimum active exploration time: 0 minutes (no minimum).\n- Maximum concurrent child agents: 4.\n- Lab: none.",
     );
     expect(Object.keys(objective.sectionDigests ?? {})).toEqual([
       "objective",
@@ -1773,7 +1773,8 @@ describe("harness CLI vertical slice", () => {
     expect(
       transportRuns[0]?.dependencySources?.map((source) => source.path),
     ).toEqual(["/workspace/php", "/workspace/dependencies/elementor"]);
-    expect(transportRuns[0]?.minimumActiveMs).toBe(60 * 60_000);
+    // No mode has a floor by default (ADR 0039 addendum 20); the resume paragraph is still passed.
+    expect(transportRuns[0]?.minimumActiveMs).toBe(0);
     expect(transportRuns[0]?.resumePrompt).toBeTruthy();
     expect(prompts[0]).toContain(transportRuns[0]?.resumePrompt);
   });
@@ -2803,7 +2804,7 @@ describe("harness CLI vertical slice", () => {
       lab: { mode: "none", maxResets: 2, maxObservations: 20 },
       mode: "deep",
       maxChildren: 4,
-      minimumActiveMinutes: 60,
+      minimumActiveMinutes: 0,
       priorResearch: "none",
     });
     expect(
@@ -2947,8 +2948,14 @@ describe("harness CLI vertical slice", () => {
       { discovery: wide, promptId: "wp2shell-bounty-v12-wide" },
       { discovery: deep, promptId: "wp2shell-bounty-v10" },
       { promptId: "wp2shell-bounty-v10" },
-      { discovery: deep, runWallTimeMinutes: 60 },
-      { discovery: deep, runWallTimeMinutes: 20 },
+      {
+        discovery: { ...deep, minimumActiveMinutes: 60 },
+        runWallTimeMinutes: 60,
+      },
+      {
+        discovery: { ...deep, minimumActiveMinutes: 60 },
+        runWallTimeMinutes: 20,
+      },
       { discovery: wide, runWallTimeMinutes: 121 },
       { discovery: { lab: "none", mode: "screening" } },
       {
@@ -3915,7 +3922,8 @@ describe("harness CLI vertical slice", () => {
       zeroFindings: true,
       config: {
         promptId: undefined,
-        discovery: { lab: "none" },
+        // A floor is set here so that the segment carries the remaining minimum (ADR 0039 addendum 20 made the default 0).
+        discovery: { lab: "none", minimumActiveMinutes: 60 },
       },
     });
     const campaign = "campaign-resume";

@@ -84,9 +84,13 @@ const runnablePrompt = z.enum(WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS);
  * owner's 2026-10-25 decision (ADR 0039 addendum 3).
  */
 const WORDPRESS_DEFAULT_WALL_MINUTES = 120;
-/** ADR 0033 / 0039: the active floor by mode unless discovery.minimumActiveMinutes sets one. */
+/**
+ * ADR 0033 / 0039: the active floor by mode unless discovery.minimumActiveMinutes
+ * sets one. ADR 0039 addendum 20 (#686): no mode has a floor by default; the
+ * ending is the skill's judgment (wbh-recon v3 step 9).
+ */
 const WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES = {
-  deep: 60,
+  deep: 0,
   wide: 0,
 } as const;
 
