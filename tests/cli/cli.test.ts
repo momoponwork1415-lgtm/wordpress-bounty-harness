@@ -2765,7 +2765,7 @@ describe("harness CLI vertical slice", () => {
       wordpressCampaignConfigSchema.parse({ ...base, discovery: wide }),
     ).toMatchObject({
       discovery: { mode: "wide", minimumActiveMinutes: 0 },
-      promptId: "wp2shell-bounty-v14-wide",
+      promptId: "wp2shell-bounty-v20-wide",
       runWallTimeMinutes: 120,
     });
     expect(
@@ -2778,19 +2778,19 @@ describe("harness CLI vertical slice", () => {
       wordpressCampaignConfigSchema.parse({
         ...base,
         discovery: wide,
-        promptId: "wp2shell-bounty-v14-wide",
+        promptId: "wp2shell-bounty-v20-wide",
         runWallTimeMinutes: 20,
       }).runWallTimeMinutes,
     ).toBe(20);
-    // DEVELOPMENT §5 (#599): the wide candidate launches only when named; the
-    // wide default stays the current v14-wide.
-    expect(
+    // An archived version cannot be named (ADR 0039 addendum 18: no wide
+    // candidate since 2026-11-01).
+    expect(() =>
       wordpressCampaignConfigSchema.parse({
         ...base,
         discovery: wide,
         promptId: "wp2shell-bounty-v15-wide",
-      }).promptId,
-    ).toBe("wp2shell-bounty-v15-wide");
+      }),
+    ).toThrow();
     // Phase D1: an attached exploration Lab, its reset budget defaulting to 2.
     expect(
       wordpressCampaignConfigSchema.parse({
@@ -2882,7 +2882,7 @@ describe("harness CLI vertical slice", () => {
     expect(started[0]?.event.type).toBe("discovery-run-started");
     if (started[0]?.event.type === "discovery-run-started")
       expect(started[0].event.configuration).toMatchObject({
-        promptVariant: "wp2shell-bounty-v14-wide",
+        promptVariant: "wp2shell-bounty-v20-wide",
         mode: "wide",
         wallMinutes: 120,
         minimumActiveMinutes: 0,
@@ -3993,7 +3993,7 @@ describe("harness CLI vertical slice", () => {
       refusalSession: true,
       zeroFindings: true,
       config: {
-        promptId: "wp2shell-bounty-v15-wide",
+        promptId: "wp2shell-bounty-v20-wide",
         discovery: { lab: "none", mode: "wide", maxChildren: 3 },
       },
     });
@@ -4001,10 +4001,11 @@ describe("harness CLI vertical slice", () => {
     const command = ["--campaign", campaign, "--config", configPath];
     expect((await run("campaign", "run", "--all", ...command)).code).toBe(0);
     const first = transportRuns[0]!;
-    // Between the segments the campaign moves to the current wide version and 6 children.
+    // Between the segments the campaign moves to the deep objective and 6 children
+    // (since ADR 0039 addendum 18 the wide mode has one launchable version).
     const written = JSON.parse(await readFile(configPath, "utf8"));
-    written.promptId = "wp2shell-bounty-v14-wide";
-    written.discovery = { lab: "none", mode: "wide", maxChildren: 6 };
+    written.promptId = "wp2shell-bounty-v11";
+    written.discovery = { lab: "none", mode: "deep", maxChildren: 6 };
     await writeFile(configPath, JSON.stringify(written));
 
     const resumed = await run(
@@ -4025,16 +4026,16 @@ describe("harness CLI vertical slice", () => {
     const original = starts[0];
     if (original?.type !== "discovery-run-started")
       throw new Error("Missing recorded run");
-    const v15 = await loadWordPressDiscoveryAsset("wp2shell-bounty-v15-wide");
+    const v20 = await loadWordPressDiscoveryAsset("wp2shell-bounty-v20-wide");
     expect(original.configuration).toMatchObject({
-      promptVariant: "wp2shell-bounty-v15-wide",
-      promptDigest: v15.digest,
+      promptVariant: "wp2shell-bounty-v20-wide",
+      promptDigest: v20.digest,
     });
     expect(starts[1]).toMatchObject({
       resumesRun: first.runId,
       configuration: {
-        promptVariant: "wp2shell-bounty-v15-wide",
-        promptDigest: v15.digest,
+        promptVariant: "wp2shell-bounty-v20-wide",
+        promptDigest: v20.digest,
         maxChildren: 3,
       },
     });

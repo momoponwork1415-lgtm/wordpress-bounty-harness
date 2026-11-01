@@ -53,6 +53,8 @@ const MAIN_PLANS: Record<string, Plan> = {
   "wp2shell-bounty-v18-wide": inline("v4"),
   // ADR 0039 addendum 16: v18-wide with the stop tied to the tools listing (Issue #714).
   "wp2shell-bounty-v19-wide": inline("v4"),
+  // ADR 0039 addendum 18: one file, the v19-wide text plus the skill-routing paragraph.
+  "wp2shell-bounty-v20-wide": inline("v4"),
   "wp2shell-whitebox-v1.7": inline("v2"),
 };
 
