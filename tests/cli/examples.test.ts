@@ -23,7 +23,7 @@ const example = async (file: string, version = "3.3.1"): Promise<unknown> =>
     ),
   ) as unknown;
 
-it("starts the checked-in wide v14 campaign with one concurrent target on the Lab image's WordPress (owner decision 2026-10-26; #741 unpinned)", async () => {
+it("starts the checked-in wide v20 campaign with one concurrent target on the Lab image's WordPress (owner decision 2026-10-26; #741 unpinned)", async () => {
   const source = JSON.parse(
     await readFile(
       join(
@@ -41,7 +41,7 @@ it("starts the checked-in wide v14 campaign with one concurrent target on the La
   ) as unknown;
   const config = wordpressCampaignConfigSchema.parse(source);
   expect(config).toMatchObject({
-    promptId: "wp2shell-bounty-v14-wide",
+    promptId: "wp2shell-bounty-v20-wide",
     runWallTimeMinutes: 120,
   });
   expect(config.resources.maxConcurrentTargets).toBe(1);
@@ -122,7 +122,7 @@ it("rejects every removed partitioned campaign setting at parse time", () => {
   }
 });
 
-it("runs the wide example as a 20-minute v14-wide Trial on the production selection policy (ADR 0039)", async () => {
+it("runs the wide example as a 20-minute v20-wide Trial on the production selection policy (ADR 0039)", async () => {
   const config = wordpressCampaignConfigSchema.parse(
     JSON.parse(
       await readFile(
@@ -144,7 +144,7 @@ it("runs the wide example as a 20-minute v14-wide Trial on the production select
       mode: "wide",
       minimumActiveMinutes: 0,
     },
-    promptId: "wp2shell-bounty-v14-wide",
+    promptId: "wp2shell-bounty-v20-wide",
     runWallTimeMinutes: 20,
   });
   // The production selection policy names the deep objective; both modes select from it.

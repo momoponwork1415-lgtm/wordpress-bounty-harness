@@ -309,3 +309,20 @@ wide の Trial は、Root が登録簿に「全 sink の対象エントリ群を
 
 消し方: この追記の PR を revert する。v19-wide は再び起動できなくなる。
 
+
+## 2026-11-01 追記 18: `wide` の目的文を 1 file の v20-wide にし、スキルへの routing を書く（所有者決定、計測なし）
+
+所有者は 2026-11-01 に「分割方式はいらない。常に読む 1 枚に目的を置き、長くなるなら WordPress 固有知識やスキルへの routing を書く」と決め、同日夜に「トライアルがもういらなさそうで、いったんすべてが完成して私のチェックを通してから探索」と、v19-wide の 20 Trial の計測を取りやめた（[開発計画](../reviews/2026-11-01-development-plan.md) §2.2）。これは ADR 0045 の「設計の変更は月 1 回」「言い換えの新版は出さない」「v19 の 20 Trial を分母の基準線にする」を所有者自身が改めた決定で、ADR 0045 追記 1 に記録する。
+
+決定:
+
+- `wp2shell-bounty-v20-wide` を `wide` の `current` にする。本文は 1 file（`prompts/wp2shell-bounty-v20-wide.md`）で、fragment から組まない。digest は `sha256:4674ab42d8e64b2349045ef6b3622363dcf409d3782db1dae2fdd7d0b7b3356b`、契約は v4。
+- 本文は v19-wide の 10 段落をそのまま保ち（語を足さず、消さない）、登録簿の数え方の段落の直前に 1 段落を足す。足した段落は、Trial に置かれた探索スキル `wbh-recon`、`wbh-tools`、`wbh-setup` をいつ読むかと、それぞれが書く file（`/workspace/research/recon-map.md`、`/workspace/research/tools`、`/workspace/research/lab-setup.md`）を、各スキルの description にある語だけで述べる。「末尾に足す」と計画に書いたが、Harness は最後の段落を再開の指示として読み、`wide` では「Stop when」で始まることを求める（追記 17、#731）ので、停止段落の前に置く。
+- v14-wide、v15-wide、v18-wide、v19-wide は `archived` にして `mode` を外す。比較せずに下ろす。本文と fragment と digest は過去 Trial の照合用に残す。`wide` の起動できる版は v20-wide だけになり、`candidate` の行は無くなる。
+- fragment の仕組み（`fragments`、`composeFragments`、`sections/`、`sectionDigests`）は消さない。v11（`deep` の current）と archived の版がそれで組まれ、過去 Trial の `configuration.sectionDigests` の照合に要る。v20 以降の版は 1 file で持ち、`sectionDigests` を記録しない。
+- `src/profiles/wordpress/policy/campaign.json` と `examples/campaign-wide-20.json` の `promptId` を v20-wide にする。v20-wide の campaign 設定は、`discovery.skills` に `wbh-recon-v2`、`wbh-tools-v1`、`wbh-setup-v1` を名指しする（Lab を付けない Trial では `wbh-setup` は条件が成立せず読まれない）。Harness は名指しを強制しない（ADR 0043 の置き方）。
+- Harness の code は変えない。v19-wide の stale な 2 文（Harness 所有の判定器と nonce canary。ADR 0040 と食い違う）は、この決定が「文を消さない」なので残す。消す PR は別に立てる（ADR 0045 は消す方向の変更を許す）。
+
+測った数字: 無し。所有者の決定で、比較の Trial を置かない。v20-wide の Trial は、所有者のチェックの後に本番で始め、ADR 0045 の分母（Codex 1 時間あたりの Lab 発火数と Wordfence の結果）で読む。agent に渡る文章なので `owner-approved` が要る（本文と日本語訳と出典対照表は [review 文書](../reviews/2026-11-01-wp2shell-bounty-v20-wide.md)）。
+
+消し方: v20-wide の行と file を消し、v14-wide の行を `current`（`mode: "wide"`）に戻し、2 つの campaign 設定の `promptId` を戻す。走った後なら v20-wide の行を `archived` にして本文を照合用に残す。

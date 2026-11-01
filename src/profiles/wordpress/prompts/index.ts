@@ -300,8 +300,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:42ec734364d93492bf9b936e415b94796da21fb154d3b29033cafbd58596229d",
     outputContract: "v4",
-    status: "current",
-    mode: "wide",
+    status: "archived",
     // v13-wide with only the sink strategy and fixed coordination fragments
     // replaced (owner guidance 2026-10-26, ADR 0039 addendum). Restored as the
     // wide current on 2026-10-27 (ADR 0039 addendum 12): v16-wide's vendor
@@ -326,8 +325,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:3e82116ebdd32e4e863d7daacf7a87d90c43f6c4e73efe49333668883fcf680d",
     outputContract: "v4",
-    status: "candidate",
-    mode: "wide",
+    status: "archived",
     // v14-wide plus one sentence: the root agent copies the Harness `## Lab`
     // section to every agent it starts (Issue #599). Both judge sentences now
     // name the human's recorded observation in a review Lab (#555, ADR 0040).
@@ -397,8 +395,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:1ffb15f4f3f7ad6de70e330e10fd24c31513e41d250c8e0d6885b760a0a5c1f3",
     outputContract: "v4",
-    status: "candidate",
-    mode: "wide",
+    status: "archived",
     // The v16-wide body, byte for byte (same fragments, same digest), on the
     // v4 contract (Issue #639, ADR 0039 addendum 13). v16-wide only ever ran
     // under v5, which cut Findings on its own (ADR 0038 addendum 15), so the
@@ -428,8 +425,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:a8a73ba7ed5def43d6a0abd0a6f8ff9738ac9b2b84d1b7fa00cbeee06cb5e119",
     outputContract: "v4",
-    status: "candidate",
-    mode: "wide",
+    status: "archived",
     // v18-wide with only the stop fragment replaced (Issue #714, ADR 0039
     // addendum 16): the registry counts, per sink class, the rows of the
     // wbh-tools hook listing read and remaining, and the Root does not close
@@ -449,6 +445,22 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
       { section: "coordination", file: "fixed-v14" },
       { section: "coordination", file: "stop-wide-v14" },
     ],
+  },
+  {
+    id: "wp2shell-bounty-v20-wide",
+    digest:
+      "sha256:4674ab42d8e64b2349045ef6b3622363dcf409d3782db1dae2fdd7d0b7b3356b",
+    outputContract: "v4",
+    status: "current",
+    mode: "wide",
+    // One file, no fragments (owner decision 2026-11-01, ADR 0039 addendum 18,
+    // ADR 0045 addendum 1): the v19-wide paragraphs unchanged, plus one
+    // paragraph before the registry-count paragraph that says when the Root
+    // reads each installed exploration skill (wbh-recon, wbh-tools,
+    // wbh-setup). The fragment files stay for the digests of past Trials;
+    // versions from v20 on are kept as whole files. The v19 20-Trial
+    // measurement was dropped with the same decision; v14-wide, v15-wide,
+    // v18-wide and v19-wide are archived without a comparison.
   },
   {
     id: "wp2shell-whitebox-v1.7",

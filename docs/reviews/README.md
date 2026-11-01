@@ -10,7 +10,8 @@ AI に「調べて報告」を頼んだときの成果物を、日付付きで�
 
 設計と方針の出典:
 - [2026-10-31-exploration-structure-investigation.md](2026-10-31-exploration-structure-investigation.md): 探索の構造調査。Root が中央値約 16 分で閉じ、120 分の大半を使わない構造を本番台帳と実行記録から示した。ADR 0039 追記 16（#714）の数字の出典。
-- [2026-10-31-wp2shell-bounty-v19-wide.md](2026-10-31-wp2shell-bounty-v19-wide.md): wp2shell-bounty-v19-wide（v18-wide の停止文を tools の一覧に結び付けた比較候補、#714）の本文と出典対照表。
+- [2026-10-31-wp2shell-bounty-v19-wide.md](2026-10-31-wp2shell-bounty-v19-wide.md): wp2shell-bounty-v19-wide（v18-wide の停止文を tools の一覧に結び付けた比較候補、#714）の本文と出典対照表。2026-11-01 に計測せず archived（ADR 0039 追記 18）。
+- [2026-11-01-wp2shell-bounty-v20-wide.md](2026-11-01-wp2shell-bounty-v20-wide.md): wp2shell-bounty-v20-wide（`wide` の現行。v19-wide の本文に探索スキルへの routing の 1 段落を足した 1 file）の全文、日本語訳、出典対照表。
 - [2026-10-31-wbh-screen-v5-source-table.md](2026-10-31-wbh-screen-v5-source-table.md): `wbh-screen` v5 の各項目と、Wordfence の決定・規則の写し・所有者決定との対応。
 - [2026-10-31-hosting-defaults.md](2026-10-31-hosting-defaults.md): エックスサーバーとさくらの WordPress 既定の堅牢化を公式マニュアルで調べた。検証 Lab の基準環境 `hosting-default-v1`（#699）の出典。v2（#706、パーマリンク `/%postname%/` と標準の書き換えブロック）の差分は 4.3a に追記した。
 
@@ -164,7 +165,7 @@ Codex への依頼文:
 
 - `2026-10-14-final-design.md`: 探索の Lab、即時の検証、`owner-approved` の付け手、Step 1 の「人手 0」の範囲は、2026-10-18〜19 の決定（ADR 0033〜0037、#238 の comment）で変わった。
 - `2026-10-17-thorough-search-v6-plan.md`: 入口索引と coverage は ADR 0034 で削除した。
-- prompt v4〜v7 の草案と対照表: 旧版の記録。新規探索は `deep` の `wp2shell-bounty-v11` と `wide` の `wp2shell-bounty-v14-wide` だけで、`wide` の比較候補 v15-wide は名指しで走る。v18-wide（[本文と数字](2026-10-28-wp2shell-bounty-v18-wide.md)）は 2026-10-28 の 20 Trial で一度 archived にし、2026-10-31 に名指しで走る候補へ戻した（[出典対照](2026-10-26-wp2shell-bounty-v14-wide-source-table.md)、ADR 0039 の 2026-10-27 追記 12。v16-wide と v17-wide は同日に archived にした（[v16-wide](2026-10-26-wp2shell-bounty-v16-wide.md)、[v17-wide](2026-10-27-wp2shell-bounty-v17-wide.md)）。v10、v12-wide、v13-wide は archived、v8 は ADR 0033 で入り、照合用に残す）。`wide` の比較候補 `wp2shell-bounty-v15-wide` は名指しのときだけ走る（[本文と出典対照](2026-10-26-wp2shell-bounty-v15-wide.md)、ADR 0039 の 2026-10-26 追記 8）。
+- prompt v4〜v7 の草案と対照表: 旧版の記録。新規探索は `deep` の `wp2shell-bounty-v11` と `wide` の `wp2shell-bounty-v20-wide` だけ（2026-11-01、[本文と訳](2026-11-01-wp2shell-bounty-v20-wide.md)）。それまでは v14-wide が `wide` の既定で、比較候補 v15-wide は名指しで走った。v18-wide（[本文と数字](2026-10-28-wp2shell-bounty-v18-wide.md)）は 2026-10-28 の 20 Trial で一度 archived にし、2026-10-31 に名指しで走る候補へ戻した（[出典対照](2026-10-26-wp2shell-bounty-v14-wide-source-table.md)、ADR 0039 の 2026-10-27 追記 12。v16-wide と v17-wide は同日に archived にした（[v16-wide](2026-10-26-wp2shell-bounty-v16-wide.md)、[v17-wide](2026-10-27-wp2shell-bounty-v17-wide.md)）。v10、v12-wide、v13-wide は archived、v8 は ADR 0033 で入り、照合用に残す）。`wide` の比較候補 `wp2shell-bounty-v15-wide` は名指しのときだけ走る（[本文と出典対照](2026-10-26-wp2shell-bounty-v15-wide.md)、ADR 0039 の 2026-10-26 追記 8）。
 
 ## archive/
 
