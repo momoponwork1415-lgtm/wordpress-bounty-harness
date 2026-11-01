@@ -43,9 +43,20 @@ const commonSelectionPolicy = {
    * 2026-11-01 addendum 3). `installs` (the default when absent): active
    * installations descending, then the stable version's publication date
    * descending. `version-published`: the stable version's publication date
-   * descending, then installations descending. Both end on the slug.
+   * descending, then installations descending. `install-band-then-published`
+   * (owner decision 2026-11-01 night, addendum 4): the installation band
+   * from `orderingBands` first (highest band first), then the publication
+   * date descending inside the band, then installations. All end on the slug.
    */
-  ordering: z.enum(["installs", "version-published"]).optional(),
+  ordering: z
+    .enum(["installs", "version-published", "install-band-then-published"])
+    .optional(),
+  /**
+   * Lower bounds of the installation bands for `install-band-then-published`,
+   * any order; a candidate below every bound is in the lowest band. Default
+   * 1,000,000 / 100,000 / 10,000.
+   */
+  orderingBands: z.array(z.number().int().positive()).min(1).max(8).optional(),
   minimumActiveInstallations: z.number().int().nonnegative(),
   maximumObservationAgeDays: z.number().positive(),
   maximumUpdateAgeDays: z.number().positive(),

@@ -120,22 +120,45 @@ const bySlug = (
   right: WordPressTargetSelection,
 ): number => left.slug.localeCompare(right.slug);
 
+const DEFAULT_ORDERING_BANDS = [1_000_000, 100_000, 10_000] as const;
+
+/** Band index of an install count: 0 is the highest band. */
+const bandIndex = (
+  bounds: readonly number[],
+  activeInstallations: number,
+): number => {
+  const index = bounds.findIndex((bound) => activeInstallations >= bound);
+  return index === -1 ? bounds.length : index;
+};
+
 /** The policy's queue order (`ordering`, default `installs`); one order for every caller. */
 const queueOrder = (
-  policy: Pick<WordPressSelectionPolicy, "ordering">,
+  policy: Pick<WordPressSelectionPolicy, "ordering" | "orderingBands">,
 ): ((
   left: WordPressTargetSelection,
   right: WordPressTargetSelection,
-) => number) =>
-  policy.ordering === "version-published"
-    ? (left, right) =>
-        byVersionPublished(left, right) ||
-        byInstallCount(left, right) ||
-        bySlug(left, right)
-    : (left, right) =>
-        byInstallCount(left, right) ||
-        byVersionPublished(left, right) ||
-        bySlug(left, right);
+) => number) => {
+  if (policy.ordering === "version-published")
+    return (left, right) =>
+      byVersionPublished(left, right) ||
+      byInstallCount(left, right) ||
+      bySlug(left, right);
+  if (policy.ordering === "install-band-then-published") {
+    const bounds = [...(policy.orderingBands ?? DEFAULT_ORDERING_BANDS)].sort(
+      (a, b) => b - a,
+    );
+    return (left, right) =>
+      bandIndex(bounds, left.activeInstallations) -
+        bandIndex(bounds, right.activeInstallations) ||
+      byVersionPublished(left, right) ||
+      byInstallCount(left, right) ||
+      bySlug(left, right);
+  }
+  return (left, right) =>
+    byInstallCount(left, right) ||
+    byVersionPublished(left, right) ||
+    bySlug(left, right);
+};
 
 const eligibleTargets = (
   inspections: readonly { readonly selection?: WordPressTargetSelection }[],

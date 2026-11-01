@@ -668,10 +668,53 @@ describe("queue ordering (ADR 0037 追記 3)", () => {
     ).toEqual(["mid", "fresh", "big"]);
   });
 
-  it("ships version-published as the production order", async () => {
+  it("puts the higher install band first and the newest publication first inside a band (ADR 0037 追記 4)", async () => {
+    const giantOld = observation("giant-old", [], 2_000_000);
+    giantOld.observation.lastUpdated = "2026-06-01T00:00:00Z";
+    const giantNew = observation("giant-new", [], 1_200_000);
+    giantNew.observation.lastUpdated = "2026-10-07T00:00:00Z";
+    const midNew = observation("mid-new", [], 300_000);
+    midNew.observation.lastUpdated = "2026-10-07T00:00:00Z";
+    const smallNew = observation("small-new", [], 20_000);
+    smallNew.observation.lastUpdated = "2026-10-07T00:00:00Z";
+    const candidates = harness({
+      observations: {
+        "giant-old": giantOld,
+        "giant-new": giantNew,
+        "mid-new": midNew,
+        "small-new": smallNew,
+      },
+    });
+    const selection = openWordPressSelection({
+      candidates,
+      ledger: ledgerOf([]),
+    });
+    const policy = {
+      ...basePolicy,
+      candidateSlugs: ["giant-old", "giant-new", "mid-new", "small-new"],
+      minimumActiveInstallations: 10_000,
+      maximumTargets: 4,
+      ordering: "install-band-then-published" as const,
+    };
+    expect((await selection.select(policy)).map(({ slug }) => slug)).toEqual([
+      "giant-new",
+      "giant-old",
+      "mid-new",
+      "small-new",
+    ]);
+    // A single bound makes two bands; order inside the lower band is by date.
+    expect(
+      (await selection.select({ ...policy, orderingBands: [1_500_000] })).map(
+        ({ slug }) => slug,
+      ),
+    ).toEqual(["giant-old", "giant-new", "mid-new", "small-new"]);
+  });
+
+  it("ships install-band-then-published as the production order", async () => {
     const shipped = await loadWordPressSelectionPolicy();
-    expect(shipped.ordering).toBe("version-published");
-    expect(shipped.id).toBe("wordpress-selection-2026-11-01-version-published");
+    expect(shipped.ordering).toBe("install-band-then-published");
+    expect(shipped.orderingBands).toEqual([1_000_000, 100_000, 10_000]);
+    expect(shipped.id).toBe("wordpress-selection-2026-11-01-install-band");
   });
 });
 
