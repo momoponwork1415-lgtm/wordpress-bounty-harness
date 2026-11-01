@@ -1,0 +1,1064 @@
+<title>Bounty Harness 全体解説</title>
+<meta name="claude:viewport-fit-sides" content="cover" />
+<link
+  rel="stylesheet"
+  href="https://fonts.googleapis.com/css2?family=Shippori+Mincho+B1:wght@600;700&family=Noto+Sans+JP:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+/>
+<style>
+  /* Layout: one reading column (68ch) with a vertical stage rail; each stage card splits into Harness / AI / 人間 */
+  :root {
+    --bg: #f5f7fa;
+    --surface: #ffffff;
+    --fg: #1b2430;
+    --muted: #5b6878;
+    --line: #d6dde6;
+    --accent: #0f6e73;
+    --accent-soft: #dff0f0;
+    --harness: #2b4d7a;
+    --ai: #6d4c9a;
+    --human: #a0531c;
+    --display: "Shippori Mincho B1", "Hiragino Mincho ProN", "Yu Mincho", serif;
+    --body: "Noto Sans JP", "Hiragino Sans", "Yu Gothic", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #111720;
+      --surface: #192230;
+      --fg: #e4e9f0;
+      --muted: #9aa7b8;
+      --line: #2c3848;
+      --accent: #5cc3c6;
+      --accent-soft: #15353a;
+      --harness: #8fb3e6;
+      --ai: #c1a4ea;
+      --human: #e7a26b;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #111720;
+    --surface: #192230;
+    --fg: #e4e9f0;
+    --muted: #9aa7b8;
+    --line: #2c3848;
+    --accent: #5cc3c6;
+    --accent-soft: #15353a;
+    --harness: #8fb3e6;
+    --ai: #c1a4ea;
+    --human: #e7a26b;
+    color-scheme: dark;
+  }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--body);
+    font-size: 15px;
+    line-height: 1.85;
+    padding-block: 32px 80px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  main {
+    max-width: 760px;
+    margin: 0 auto;
+  }
+  h1,
+  h2,
+  h3 {
+    font-family: var(--display);
+    font-weight: 700;
+    line-height: 1.35;
+    text-wrap: balance;
+    margin: 0;
+  }
+  h1 {
+    font-size: 2rem;
+  }
+  h2 {
+    font-size: 1.4rem;
+    margin-top: 3.2rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--line);
+  }
+  h3 {
+    font-size: 1.1rem;
+    margin-top: 1.8rem;
+  }
+  p {
+    margin: 0.9rem 0;
+    max-width: 68ch;
+  }
+  .eyebrow {
+    font-size: 0.78rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 500;
+  }
+  .lede {
+    color: var(--muted);
+    font-size: 1.02rem;
+    margin-top: 0.6rem;
+  }
+  header .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.4rem;
+    font-size: 0.85rem;
+    color: var(--muted);
+    margin-top: 1rem;
+  }
+  code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    background: var(--accent-soft);
+    padding: 0.05em 0.35em;
+    border-radius: 3px;
+  }
+  pre {
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    line-height: 1.6;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    padding: 0.9rem 1rem;
+    overflow-x: auto;
+    border-radius: 4px;
+  }
+  pre code {
+    background: none;
+    padding: 0;
+  }
+  ul,
+  ol {
+    padding-left: 1.4rem;
+    max-width: 68ch;
+  }
+  li {
+    margin: 0.3rem 0;
+  }
+  strong {
+    font-weight: 700;
+  }
+  a {
+    color: var(--accent);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
+  }
+
+  /* Flow strip */
+  .strip {
+    display: flex;
+    gap: 0;
+    overflow-x: auto;
+    padding: 1rem 0 0.6rem;
+    margin-top: 1.4rem;
+  }
+  .strip .node {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+  }
+  .strip .box {
+    border: 1px solid var(--line);
+    background: var(--surface);
+    padding: 0.5rem 0.8rem;
+    border-radius: 4px;
+    min-width: 7.5rem;
+  }
+  .strip .box b {
+    display: block;
+    font-family: var(--display);
+    font-size: 1rem;
+  }
+  .strip .box span {
+    display: block;
+    font-size: 0.74rem;
+    color: var(--muted);
+    line-height: 1.4;
+  }
+  .strip .arrow {
+    width: 1.6rem;
+    height: 1px;
+    background: var(--line);
+    position: relative;
+  }
+  .strip .arrow::after {
+    content: "";
+    position: absolute;
+    right: -1px;
+    top: -4px;
+    border: 4px solid transparent;
+    border-left-color: var(--line);
+  }
+
+  /* Legend + stage cards */
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem 1.4rem;
+    font-size: 0.85rem;
+    margin-top: 1rem;
+    color: var(--muted);
+  }
+  .legend i {
+    display: inline-block;
+    width: 0.7rem;
+    height: 0.7rem;
+    border-radius: 50%;
+    margin-right: 0.4rem;
+    vertical-align: -1px;
+  }
+  .rail {
+    position: relative;
+    margin-top: 1.6rem;
+    padding-left: 1.6rem;
+  }
+  .rail::before {
+    content: "";
+    position: absolute;
+    left: 0.45rem;
+    top: 0.6rem;
+    bottom: 0.6rem;
+    width: 2px;
+    background: var(--line);
+  }
+  .stage {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 1.1rem 1.2rem 1rem;
+    margin-bottom: 1.3rem;
+  }
+  .stage::before {
+    content: "";
+    position: absolute;
+    left: -1.6rem;
+    top: 1.35rem;
+    width: 0.9rem;
+    height: 0.9rem;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 2px solid var(--bg);
+    transform: translateX(0.05rem);
+  }
+  .stage h3 {
+    margin-top: 0;
+  }
+  .stage .q {
+    color: var(--muted);
+    font-size: 0.9rem;
+    margin: 0.2rem 0 0.8rem;
+  }
+  .cols {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.9rem;
+    margin-top: 0.4rem;
+  }
+  .col {
+    min-width: 0;
+    font-size: 0.88rem;
+    line-height: 1.7;
+    border-top: 3px solid var(--line);
+    padding-top: 0.5rem;
+  }
+  .col .who {
+    font-size: 0.74rem;
+    letter-spacing: 0.1em;
+    font-weight: 700;
+    display: block;
+    margin-bottom: 0.3rem;
+  }
+  .col.harness {
+    border-top-color: var(--harness);
+  }
+  .col.harness .who {
+    color: var(--harness);
+  }
+  .col.ai {
+    border-top-color: var(--ai);
+  }
+  .col.ai .who {
+    color: var(--ai);
+  }
+  .col.human {
+    border-top-color: var(--human);
+  }
+  .col.human .who {
+    color: var(--human);
+  }
+  .col ul {
+    padding-left: 1.1rem;
+    margin: 0;
+  }
+  .col li {
+    margin: 0.15rem 0;
+  }
+  .record {
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin-top: 0.9rem;
+    padding-top: 0.6rem;
+    border-top: 1px dashed var(--line);
+  }
+  .record code {
+    font-size: 0.8rem;
+  }
+  @media (max-width: 640px) {
+    .cols {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  /* Tables */
+  .tbl {
+    overflow-x: auto;
+    margin: 1rem 0;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 0.88rem;
+  }
+  th,
+  td {
+    text-align: left;
+    vertical-align: top;
+    padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--line);
+  }
+  th {
+    font-weight: 700;
+    font-size: 0.78rem;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+  }
+  td.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-family: var(--mono);
+    font-size: 0.84rem;
+    white-space: nowrap;
+  }
+  .note {
+    background: var(--accent-soft);
+    border-left: 3px solid var(--accent);
+    padding: 0.7rem 1rem;
+    margin: 1.2rem 0;
+    font-size: 0.9rem;
+    max-width: 68ch;
+  }
+  .note p {
+    margin: 0.3rem 0;
+  }
+  footer {
+    margin-top: 3rem;
+    font-size: 0.82rem;
+    color: var(--muted);
+  }
+</style>
+
+<main>
+  <header>
+    <div class="eyebrow">探索再開前の読み物 · 2026-11-01</div>
+    <h1>Bounty Harness 全体解説</h1>
+    <p class="lede">
+      WordPress plugin の脆弱性を見つけて Wordfence
+      に報告し、報酬を得るための仕組み全体を、今日 main
+      に入った状態で説明する。正本は <code>docs/SPEC.md</code> と
+      <code>docs/adr/</code> で、この文書は読むためのもの。
+    </p>
+    <div class="meta">
+      <span>対象: 所有者</span><span>状態: 探索は停止中、再開の準備は完了</span
+      ><span>数字: 本番台帳 2026-11-01 20:40 JST 時点</span>
+    </div>
+  </header>
+
+  <h2>1. 一言でいうと</h2>
+  <p>
+    この仕組みは
+    <strong
+      >「WordPress.org の plugin を install 数の多い順に 1
+      つずつ取り、隔離環境の中で Codex
+      のエージェント群にソースを読ませ、出てきた候補を人間が Lab で確かめて
+      Wordfence に送る」</strong
+    >
+    ための工場である。
+  </p>
+  <p>設計の軸は 3 つの役割分担にある。</p>
+  <ul>
+    <li>
+      <strong>Harness（コード）</strong
+      >は<em>制御</em>だけを持つ。何を対象にするか、ソースをどう固定するか、どこで動かすか、何分で止めるか、出てきたものをどう保存するか。判断はしない。
+    </li>
+    <li>
+      <strong>AI（目的文とスキル）</strong
+      >が<em>中身</em>を持つ。どこを読むか、何を仮説にするか、Lab
+      でどう再現するか、提出規則に照らしてどう読むか。
+    </li>
+    <li>
+      <strong>人間（所有者）</strong
+      >が<em>確定</em>と<em>外部行動</em>を持つ。Lab
+      で自分の目で見た観測だけが「本物」の根拠になり、送信は人間が自分の手で行う。
+    </li>
+  </ul>
+  <p>
+    過去 4 世代と 2026 年 10 月前半の失敗は、「探し方」を Harness
+    のコードに入れて肥大させたことだった。いまの設計はその逆で、Harness
+    から判断を削り、判断はプロンプトとスキルと人間に置く（AGENTS.md「Harness と
+    AI の責務」、LESSONS 14）。
+  </p>
+
+  <h2>2. 全体の流れ</h2>
+  <div class="strip">
+    <div class="node">
+      <div class="box">
+        <b>選定</b><span>WordPress.org から<br />install 順に 1 版ずつ</span>
+      </div>
+      <div class="arrow"></div>
+    </div>
+    <div class="node">
+      <div class="box">
+        <b>Snapshot</b
+        ><span>plugin・本体・PHP・依存を<br />版と digest で固定</span>
+      </div>
+      <div class="arrow"></div>
+    </div>
+    <div class="node">
+      <div class="box">
+        <b>探索</b><span>gVisor の中で Codex<br />Root + 子 ≤ 8、≤ 120 分</span>
+      </div>
+      <div class="arrow"></div>
+    </div>
+    <div class="node">
+      <div class="box">
+        <b>出口</b><span>全件保存、範囲外は park、<br />Lead は一覧へ</span>
+      </div>
+      <div class="arrow"></div>
+    </div>
+    <div class="node">
+      <div class="box">
+        <b>検証</b><span>6 段のスキル + Lab、<br />人間の観測で確定</span>
+      </div>
+      <div class="arrow"></div>
+    </div>
+    <div class="node">
+      <div class="box">
+        <b>提出</b><span>人間が送る、台帳に記録、<br />転帰は規則へ戻す</span>
+      </div>
+    </div>
+  </div>
+  <p>各段で誰が何を持つかを、次の縦の列で示す。色は上の 3 役に対応する。</p>
+  <div class="legend">
+    <span
+      ><i style="background: var(--harness)"></i>Harness が強制・記録する</span
+    ><span
+      ><i style="background: var(--ai)"></i>AI（目的文・スキル）が決める</span
+    ><span><i style="background: var(--human)"></i>人間が決める</span>
+  </div>
+
+  <div class="rail">
+    <section class="stage">
+      <h3>選定</h3>
+      <p class="q">問い: どの plugin のどの版を、どの順で見るか。</p>
+      <div class="cols">
+        <div class="col harness">
+          <span class="who">HARNESS</span>
+          <ul>
+            <li>
+              母集団は WordPress.org の一覧。install 5,000 以上、180
+              日以内に更新、除外著者（Automattic、Yoast など 7 社）以外
+            </li>
+            <li>
+              install の多い順に 1 batch 10 件。同じ版は 1 回だけ。版が上がった
+              slug は列に戻す（<code>version-increased</code>）
+            </li>
+            <li>操作者が名指しした候補も同じ列に入る</li>
+            <li>公開履歴（Wordfence mirror）は選定では見ない</li>
+          </ul>
+        </div>
+        <div class="col ai">
+          <span class="who">AI</span>
+          <ul>
+            <li>無し。報酬の有無は選定で判断しない</li>
+          </ul>
+        </div>
+        <div class="col human">
+          <span class="who">人間</span>
+          <ul>
+            <li>
+              方針の数値（下限、鮮度、除外）を決める。対象ごとの承認は置かない（不変条件
+              6）
+            </li>
+          </ul>
+        </div>
+      </div>
+      <div class="record">
+        台帳: <code>target-selected</code>（理由 <code>initial</code> /
+        <code>version-increased</code
+        >）、<code>selection-batch-bound</code>、<code>target-skipped</code>。方針を変えて再起動すると最初の
+        batch に <code>selection-batch-discarded</code> が 1 行出る。
+      </div>
+    </section>
+
+    <section class="stage">
+      <h3>Snapshot</h3>
+      <p class="q">
+        問い: エージェントに何を渡すか。渡すものを後から同じ形で再現できるか。
+      </p>
+      <div class="cols">
+        <div class="col harness">
+          <span class="who">HARNESS</span>
+          <ul>
+            <li>
+              対象 plugin、WordPress 本体（最新安定版、ADR 0047）、実行 image
+              に合う PHP ソース、依存 plugin を版と digest で固定
+            </li>
+            <li>
+              依存は <code>Requires Plugins</code> ヘッダ、WooCommerce
+              の版ヘッダ、方針の明示指定から決める。欠けたら黙って無視せず記録する
+            </li>
+            <li>
+              渡すのはソース、trust 境界宣言、Programme
+              Boundary、Lab、時点で切った公開履歴のカタログだけ（不変条件
+              1）。答え、PoC、ペイロードは渡さない
+            </li>
+          </ul>
+        </div>
+        <div class="col ai">
+          <span class="who">AI</span>
+          <ul>
+            <li>無し</li>
+          </ul>
+        </div>
+        <div class="col human">
+          <span class="who">人間</span>
+          <ul>
+            <li>
+              trust 境界宣言の文（contributor
+              以上と管理者が意図して与える権限は境界の内側）
+            </li>
+          </ul>
+        </div>
+      </div>
+      <div class="record">
+        台帳: <code>snapshot-frozen</code>。Finding と検証結果は同じ Snapshot
+        digest のときだけ結び付ける（不変条件 5）。
+      </div>
+    </section>
+
+    <section class="stage">
+      <h3>探索</h3>
+      <p class="q">
+        問い: 固定したソースの中に、未認証か Subscriber / Customer
+        から届く対象範囲内の影響があるか。
+      </p>
+      <div class="cols">
+        <div class="col harness">
+          <span class="who">HARNESS</span>
+          <ul>
+            <li>
+              gVisor（runsc）の使い捨て
+              sandbox。外向き通信は認証ブローカー経由の provider API
+              だけ（不変条件 2）
+            </li>
+            <li>
+              対象 1 件につき 1 Trial。同時に生きる子は
+              <code>maxChildren</code>（本番 8）まで。制限時間 120 分。5
+              対象並列
+            </li>
+            <li>
+              目的文の末尾に
+              <code>## Run parameters</code>（時間・子の数）、<code
+                >## Prior research</code
+              >（同じ plugin
+              の前の版の地図があれば場所と版）、出力契約（スキーマから生成）を
+              Harness が付ける
+            </li>
+            <li>
+              sandbox にスキル file を置く。いま
+              <code>wbh-recon</code> v2、<code>wbh-tools</code> v1、<code
+                >wbh-setup</code
+              >
+              v1
+            </li>
+            <li>
+              出力は全件保存し、契約 v4 で正規化する。棄却しない。止まった Root
+              は同じ Snapshot で再開できる（ADR 0036）
+            </li>
+          </ul>
+        </div>
+        <div class="col ai">
+          <span class="who">AI（Codex）</span>
+          <ul>
+            <li>
+              目的文 <code>wp2shell-bounty-v21-wide</code>（1 file、12
+              段落）。sink の種類ごとに専門エージェントを 1
+              体ずつ並列に走らせ、入口から sink へ、sink
+              から入口へ辿る。脆弱性があるとは仮定しない
+            </li>
+            <li>
+              <code>wbh-recon</code>: 最初に plugin
+              の地図（部分系、入口、認可の門、共有 helper、保存先、JS 境界）を
+              <code>recon-map.md</code> に書く。子は親の会話を引き継がずに始める
+            </li>
+            <li>
+              <code>wbh-tools</code>: hook
+              登録と効果の呼び出しを一覧にして地図と突き合わせる
+            </li>
+            <li>どこを読むか、何体使うか、いつ止めるかは Root が決める</li>
+          </ul>
+        </div>
+        <div class="col human">
+          <span class="who">人間</span>
+          <ul>
+            <li>
+              目的文とスキルの文は
+              <code>owner-approved</code> が付くまで渡らない（採否と付与は AI
+              に委任、所有者の in-chat 決定を根拠にする）
+            </li>
+            <li>目的文の版は月 1 回まで、消す方向だけ（ADR 0045）</li>
+          </ul>
+        </div>
+      </div>
+      <div class="record">
+        台帳: <code>discovery-run-started</code> / <code>-finished</code>（Root
+        と子の両方。本番の累計 6,820
+        run）、<code>discovery-concluded</code>、<code>candidate-normalized</code>、<code>finding-recorded</code>、<code>lead-recorded</code>。地図と
+        tsv は <code>research</code> として Git 外の attachment store に封じる。
+      </div>
+    </section>
+
+    <section class="stage">
+      <h3>出口</h3>
+      <p class="q">
+        問い:
+        出てきた候補のうち、どれを検証列に流し、どれを人間の一覧に留めるか。
+      </p>
+      <div class="cols">
+        <div class="col harness">
+          <span class="who">HARNESS</span>
+          <ul>
+            <li>
+              Programme Boundary 外の impact 10
+              種（CSRF、missing-authz、IDOR、reflected XSS、options-update
+              など）は <code>finding-parked</code>。検証列に入れず
+              <code>review parked</code> で見る
+            </li>
+            <li>
+              Lead は検証列に入れない。<code>review leads</code>
+              で人間が全件見る
+            </li>
+            <li>
+              同じ対象の別の版で同じ経路を見ていれば
+              <code>seen before: group …</code> を表示する。判定はしない
+            </li>
+          </ul>
+        </div>
+        <div class="col ai">
+          <span class="who">AI</span>
+          <ul>
+            <li>
+              無し。文言からの判定は置かない（「広く出して、落とすのはレビュー側」所有者決定
+              2026-10-26）
+            </li>
+          </ul>
+        </div>
+        <div class="col human">
+          <span class="who">人間</span>
+          <ul>
+            <li>
+              park の 10 種の一覧を決めた（2026-10-17）。<code
+                >review restore</code
+              >
+              で戻せる
+            </li>
+          </ul>
+        </div>
+      </div>
+      <div class="record">
+        台帳: <code>finding-parked</code>（累計
+        104）、<code>finding-park-restored</code>、<code>candidate-held</code>。
+      </div>
+    </section>
+
+    <section class="stage">
+      <h3>検証（6 段 + 1b）</h3>
+      <p class="q">問い: この Finding は本物か、提出して報酬が出る形か。</p>
+      <div class="cols">
+        <div class="col harness">
+          <span class="who">HARNESS</span>
+          <ul>
+            <li>
+              Lab の供給: gVisor の中の WordPress + MySQL。基線 v3 = 素の
+              WordPress に管理ホスティング（Sakura / Xserver
+              級）の既定設定を重ねる。Wordfence が受け付ける入口は塞がない
+            </li>
+            <li>
+              外部サービス（Facebook など）の経路は、宛先ごとの中継 container
+              を立てて前提作りのときだけ通し、<code>setup-done</code>
+              で閉じて届かないことを確かめる（ADR 0046）。公開入口の開閉と API
+              キー入力は人間
+            </li>
+            <li>
+              HTTP 捕捉と Lab browser の記録。人間の観測（<code
+                >review observe</code
+              >、<code>review decide --reproduced</code>）の記録
+            </li>
+            <li>判定器も canary も持たない（ADR 0040）</li>
+          </ul>
+        </div>
+        <div class="col ai">
+          <span class="who">AI（スキル）</span>
+          <ul>
+            <li>
+              段 1 <code>wbh-screen</code>: 規則の写しで明白に除外されるか
+            </li>
+            <li>
+              段 1b <code>wbh-source-check</code>:
+              固定ソースだけで「低権限が入力を握れるか」「既定かもっともらしい設定で
+              sink に届くか」
+            </li>
+            <li>段 2: 同じ Snapshot の同じ経路を群にし、代表から見る</li>
+            <li>
+              段 3 <code>wbh-verify</code> v12: Lab
+              の通常機能で前提を作り、<code>setup-done</code>
+              後は攻撃者の位置だけで route を実行して 6 file
+              を書く。判定はしない
+            </li>
+            <li>
+              段 4 <code>wbh-dedupe</code>、段 5
+              <code>wbh-destination</code>、段 6
+              <code>wbh-report</code>（英語報告書と form JSON）
+            </li>
+            <li>
+              段 1・1b・4 の中間判断は
+              <code>--by ai</code> で記録し、人間が覆せる
+            </li>
+          </ul>
+        </div>
+        <div class="col human">
+          <span class="who">人間</span>
+          <ul>
+            <li>
+              Lab で自分の目で見た観測だけが確定の根拠。AI
+              が会話の中で所有者の言葉を受けて
+              <code>--by yuto</code> で記録する。人間はコマンドを打たない
+            </li>
+            <li>
+              検証の失敗（環境、手順、観測不足）は
+              <code>incomplete</code>。棄却にはしない（不変条件 4）
+            </li>
+          </ul>
+        </div>
+      </div>
+      <div class="record">
+        台帳: <code>lab-provisioned</code>（基線と egress
+        の宛先を含む）、<code>verification-finished</code>、<code>review-decided</code>（理由コードで段の印を打つ）、<code>human-effort-recorded</code>、<code>manual-observation-lab-ready</code>。ペイロード、HTTP
+        記録、画面画像は Git 外の Private Evidence（不変条件 8）。
+      </div>
+    </section>
+
+    <section class="stage">
+      <h3>提出と転帰</h3>
+      <p class="q">問い: 送るか、どこへ送るか、結果をどこへ戻すか。</p>
+      <div class="cols">
+        <div class="col harness">
+          <span class="who">HARNESS</span>
+          <ul>
+            <li>
+              送信はしない（不変条件 7）。<code>review submitted</code>
+              で提出を、<code>review outcome</code> で転帰（paid / CVE のみ /
+              重複 / 却下）を台帳に記録する
+            </li>
+          </ul>
+        </div>
+        <div class="col ai">
+          <span class="who">AI</span>
+          <ul>
+            <li>
+              <code>wbh-submit</code> の会話で、選別 → 検証 → 説明 →
+              報告書までを順に進める
+            </li>
+            <li>
+              転帰は <code>wbh-screen</code> の規則と Lab
+              の基線に戻す。探索の目的文には戻さない（契約 v5 で出力が 76 → 8
+              に減った教訓）
+            </li>
+          </ul>
+        </div>
+        <div class="col human">
+          <span class="who">人間</span>
+          <ul>
+            <li>
+              自分の拡張機能で Wordfence
+              のフォームに入れて送る。提出前のレビューと外部行動の承認が人間の 2
+              つの判断点（不変条件 6）
+            </li>
+          </ul>
+        </div>
+      </div>
+      <div class="record">
+        台帳: <code>submission-recorded-externally</code>（18
+        Finding）、<code>submission-outcome-recorded</code>（7 件: 範囲外
+        4、受理 1、却下 2）。
+      </div>
+    </section>
+  </div>
+
+  <h2>3. 守っているもの</h2>
+  <p>
+    設計・実装・レビューのすべてで見る不変条件 8 つ（SPEC 第 2
+    節）を、短く言い直す。
+  </p>
+  <ol>
+    <li>
+      エージェントに渡すのは固定ソースと境界の宣言と時点で切ったカタログだけ。答えや
+      PoC は渡さない。
+    </li>
+    <li>
+      対象は gVisor の中でだけ動かす。外向きはブローカー経由の provider API
+      だけ。
+    </li>
+    <li>
+      Harness は判定器を持たない。確定は人間の <code>review observe</code> の
+      match と <code>review decide --reproduced match</code> だけ。
+    </li>
+    <li>検証の失敗は <code>incomplete</code>。棄却にも否定にもしない。</li>
+    <li>Finding と検証の Snapshot digest が同じときだけ判定する。</li>
+    <li>
+      人間の判断点は提出前レビューと外部行動の承認の 2
+      つ。対象選定の承認は置かない。
+    </li>
+    <li>
+      外部送信は、正確な候補と文案の版と送信先に結び付いた承認があるときだけ。Harness
+      は送らない。
+    </li>
+    <li>
+      台帳は追記専用で digest 参照だけ。中身は Git 外の Private Evidence。
+    </li>
+  </ol>
+  <p>
+    加えて ADR 0045 の「凍結 5」がある。人間の観測だけが確定、Harness
+    は制御だけ、台帳は追記専用、分母は 1 つ（Codex 1 時間あたりの Lab 発火数と
+    Wordfence の結果）、目的文の変更は月 1 回で消す方向だけ。今日の v20 → v21
+    は「消すだけ」なので範囲内である。
+  </p>
+
+  <h2>4. データの置き場所</h2>
+  <div class="tbl">
+    <table>
+      <tr>
+        <th>何</th>
+        <th>どこ</th>
+        <th>Git</th>
+      </tr>
+      <tr>
+        <td>コード、目的文（全版）、スキル、ADR、SPEC</td>
+        <td><code>wordpress-bounty-harness</code> の main</td>
+        <td>入る</td>
+      </tr>
+      <tr>
+        <td>台帳（追記専用 SQLite）</td>
+        <td>
+          <code>~/.local/state/wordpress-bounty-harness/ledger.sqlite</code>
+        </td>
+        <td>入らない</td>
+      </tr>
+      <tr>
+        <td>
+          探索の地図・tsv・子の報告・診断（research / diagnostic attachment）
+        </td>
+        <td>
+          host の <code>workDirectory</code> 配下
+          <code>provider-attachments/</code>
+        </td>
+        <td>入らない</td>
+      </tr>
+      <tr>
+        <td>Private Evidence（ペイロード、HTTP 記録、画面、報告書の下書き）</td>
+        <td><code>~/.local/share/wordpress-bounty-harness/</code> 配下</td>
+        <td>入らない</td>
+      </tr>
+      <tr>
+        <td>campaign / selection / host の設定、認証情報</td>
+        <td><code>~/.config/wordpress-bounty-harness/</code></td>
+        <td>入らない</td>
+      </tr>
+      <tr>
+        <td>Wordfence 履歴 mirror、却下の分類</td>
+        <td>
+          <code>~/.local/state/wordpress-bounty-harness-evaluation/</code>
+        </td>
+        <td>入らない</td>
+      </tr>
+      <tr>
+        <td>作業 Issue、進行中の状態、PR の 5 項目</td>
+        <td>GitHub Issues / PRs</td>
+        <td>—</td>
+      </tr>
+    </table>
+  </div>
+
+  <h2>5. いまの数字（本番台帳）</h2>
+  <p>
+    これは累計で、v14 から v19 までの目的文と、廃止した区画分配型の run
+    も含む。再開後の v21 とは対になっていない。
+  </p>
+  <div class="tbl">
+    <table>
+      <tr>
+        <th>項目</th>
+        <th>件数</th>
+        <th>備考</th>
+      </tr>
+      <tr>
+        <td>選定した対象（slug / slug@版）</td>
+        <td class="num">579 / 713</td>
+        <td><code>target-selected</code> の distinct</td>
+      </tr>
+      <tr>
+        <td>探索 run（Root + 子、再開区間を含む）</td>
+        <td class="num">6,820</td>
+        <td>completed 6,234 / failed 438 / provider-limited 135</td>
+      </tr>
+      <tr>
+        <td>受理した Finding</td>
+        <td class="num">511</td>
+        <td>うち出口 park 104</td>
+      </tr>
+      <tr>
+        <td>Lead</td>
+        <td class="num">3,951</td>
+        <td>検証列に入らない。<code>review leads</code> で見る</td>
+      </tr>
+      <tr>
+        <td>review の最新判断（Finding 単位）</td>
+        <td class="num">reject 426 / defer 49 / accept 1</td>
+        <td>段 1・1b・4 の AI の中間判断を含む</td>
+      </tr>
+      <tr>
+        <td>Lab を立てた回数</td>
+        <td class="num">545</td>
+        <td>探索付き Lab と検証 Lab の両方</td>
+      </tr>
+      <tr>
+        <td>人間の観測パッケージ</td>
+        <td class="num">37</td>
+        <td><code>manual-observation-lab-ready</code></td>
+      </tr>
+      <tr>
+        <td>提出を記録した Finding</td>
+        <td class="num">18</td>
+        <td><code>submission-recorded-externally</code></td>
+      </tr>
+      <tr>
+        <td>転帰を記録した提出</td>
+        <td class="num">7</td>
+        <td>範囲外 4 / 受理 1 / 却下 2。Gmail 側の未記録分は含まない</td>
+      </tr>
+    </table>
+  </div>
+  <div class="note">
+    <p>
+      読み方の注意: 「受理した
+      Finding」は探索エージェントの申告を正規化しただけの数で、本物の数ではない。本物と言えるのは人間の観測で
+      match が付いたものだけで、それは
+      <code>review-decided</code> の理由コードで追う。
+    </p>
+  </div>
+
+  <h2>6. 今日までに揃えたもの、再開で変わるもの</h2>
+  <p>
+    開発計画 §2 の 5 項目と並走項目はすべて main に入った（<a
+      href="2026-11-01-owner-check.md"
+      >所有者チェック文書</a
+    >
+    §1）。再開で本番の設定が変わるのは 3 か所だけで、file は
+    <code
+      >~/.config/wordpress-bounty-harness/campaign-production-codex-wide-5-skills-v21-latest-core-20261101.json</code
+    >
+    に書いてある。
+  </p>
+  <div class="tbl">
+    <table>
+      <tr>
+        <th>鍵</th>
+        <th>いま（v19 で止めたとき）</th>
+        <th>再開後</th>
+      </tr>
+      <tr>
+        <td><code>promptId</code></td>
+        <td>wp2shell-bounty-v19-wide</td>
+        <td>
+          <strong>wp2shell-bounty-v21-wide</strong>（v20 から判定器と canary
+          の古い 2 文を消しただけ）
+        </td>
+      </tr>
+      <tr>
+        <td><code>discovery.skills</code></td>
+        <td>wbh-recon-v1, wbh-tools-v1</td>
+        <td><strong>wbh-recon-v2, wbh-tools-v1, wbh-setup-v1</strong></td>
+      </tr>
+      <tr>
+        <td><code>discovery.priorResearch</code></td>
+        <td>（無し）</td>
+        <td>
+          <strong>same-target</strong>（同じ plugin の前の版の地図を 2 file
+          だけ渡す）
+        </td>
+      </tr>
+    </table>
+  </div>
+  <p>
+    変えないもの: <code>mode: wide</code>、子 8、120 分、5 並列、Lab
+    なし、Programme Boundary、選定の母集団（5,000 / 180 日 / batch 10）。
+  </p>
+  <p>
+    再開の手順は、停止マーカーを消して <code>prod28</code>（main 106652a を
+    build 済み、起動時検査は通過）から <code>continuous run</code> を
+    <code>--campaign-prefix prod-v20 --resume</code>
+    で起動するだけである。最初の batch で方針変更による
+    <code>selection-batch-discarded</code> が 1
+    行出るので、それと最初の選定報告を Issue #739 / #741 に書く。
+  </p>
+
+  <h2>7. 再開後に見るもの</h2>
+  <ul>
+    <li>
+      <strong>分母は 1 つ</strong>: Codex 1 時間あたりの Lab 発火数と、Wordfence
+      の結果。Finding と Lead の数は観測として読むが採否の基準にしない。
+    </li>
+    <li>
+      <strong>Trial の健全性</strong>: <code>discovery-run-started</code> の
+      prompt 版が v21-wide か、Root ごとの子の数、wall、読んだ file
+      数、トークン。失敗は
+      <code>incomplete</code>
+      の理由コードで見る（<code>docs/agents/production-monitoring.md</code>）。
+    </li>
+    <li>
+      <strong>prior research の効き</strong>:
+      <code>configuration.priorResearch</code> が passed になった Trial と none
+      の Trial で、Finding の数と重複の表示を比べる（ADR 0048
+      は「数字を見てから」スキルに足すと決めている）。
+    </li>
+    <li>
+      <strong>検証列</strong>: 新しい Finding は段 1 → 1b → 群 → Lab
+      の順に進める。Lab は plugin 単位でまとめ、人間の観測が付いたものだけ段 4
+      以降へ。
+    </li>
+  </ul>
+  <p>
+    所有者が見るのは、AI がこの会話に持ってくる要約と、GitHub の Issue
+    コメントである。コマンドを打つ必要はない。
+  </p>
+
+  <footer>
+    出典: <code>docs/SPEC.md</code> 第 2・3・6・7 節、AGENTS.md、ADR 0029 / 0035
+    / 0038 / 0039（追記 18・19）/ 0040 / 0043 / 0045 / 0046 / 0047 /
+    0048、<code>docs/reviews/2026-10-31-pipeline-overview.md</code>、<code>docs/reviews/2026-11-01-owner-check.md</code>、本番台帳の読み取り専用集計。この文書は正本ではない。
+  </footer>
+</main>
