@@ -1,5 +1,17 @@
 import { canonicalJson } from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
+import type { LabEgressPlan } from "./egress-plan.js";
+
+export type {
+  LabEgressDestination,
+  LabEgressPlan,
+  LabEgressPlanFile,
+} from "./egress-plan.js";
+export {
+  labEgressPlanFileSchema,
+  readLabEgressPlanFile,
+  MAX_LAB_EGRESS_DESTINATIONS,
+} from "./egress-plan.js";
 
 /** A profile owns target-specific setup; the generic Lab boundary only carries receipts. */
 export interface LabHandle {
@@ -7,6 +19,11 @@ export interface LabHandle {
   readonly snapshotDigest: string;
   readonly setupDigest: string;
   readonly endpoint: string;
+  /**
+   * ADR 0046: the fixed destinations this Lab's outbound relay forwards to,
+   * recorded on `lab-provisioned`; absent when the Lab has no relay.
+   */
+  readonly egress?: LabEgressPlan;
   /**
    * The versioned base environment the profile applied before handing the Lab
    * over (#699); its id and digest go to `lab-provisioned`, the values stay in
@@ -93,7 +110,11 @@ export interface LabProvisioner<Setup, Handle extends LabHandle> {
   provision(
     snapshot: unknown,
     setup: Setup,
-    context?: { readonly purpose: "discovery" | "verification" },
+    context?: {
+      readonly purpose: "discovery" | "verification";
+      /** ADR 0046: a verification Lab's relay destinations; none without a plan. */
+      readonly egress?: LabEgressPlan;
+    },
   ): Promise<ProvisionResult<Handle>>;
   probe?(handle: Handle): Promise<LabReachability>;
   teardown(handle: Handle): Promise<

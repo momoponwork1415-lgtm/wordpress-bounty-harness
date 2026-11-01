@@ -1,4 +1,11 @@
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import {
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -31,8 +38,8 @@ const PINNED_USAGE = [
   "  review decide --campaign <id> --finding <id> --decision accept|reject|defer --reason <code> [--opened <digest>]... [--duplicate no-match|unavailable[:<reason>]|possible-match:<ref> [--duplicate-note <path>]] [--reproduced match|mismatch|unavailable [--reproduce-minutes <n>]] [--by <name>] [--minutes <n>]",
   "  review dedupe --campaign <id> --finding <id>",
   "  review scope --campaign <id> --finding <id>",
-  "  review reverify --campaign <id> --finding <id> --config <path> [--version <target-version>] [--resnapshot-dependencies] [--handoff <dir> [--port <n>] [--db-port <n>]]",
-  "  verify next --config <path> --handoff <dir> [--campaign <id> [--finding <id>[,<id>...]]] [--port <n>] [--db-port <n>] [--hold-minutes <n>]",
+  "  review reverify --campaign <id> --finding <id> --config <path> [--version <target-version>] [--resnapshot-dependencies] [--handoff <dir> [--port <n>] [--db-port <n>] [--egress-plan <path>]]",
+  "  verify next --config <path> --handoff <dir> [--campaign <id> [--finding <id>[,<id>...]]] [--port <n>] [--db-port <n>] [--hold-minutes <n>] [--egress-plan <path>]",
   "  review draft --campaign <id> --finding <id> --programme <id> --file <path> [--prepared-by human|ai]",
   "  review authorize --candidate <id> --draft <digest> --to <destination> --by <name>",
   "  review submitted --candidate <id> --draft <digest> --to <destination>",
@@ -156,6 +163,121 @@ describe("command table", () => {
     expect((await stat(accessPath)).mode & 0o777).toBe(0o600);
     expect(lines.join("\n")).not.toContain("admin-secret");
     expect(lines.join("\n")).not.toContain("attacker-secret");
+  });
+
+  it("binds --egress-plan to the one named Finding and hands the destinations to the profile (ADR 0046)", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "wbh-egress-plan-cli-"));
+    directories.push(directory);
+    const planPath = join(directory, "plan.json");
+    const plan = {
+      schema: "wbh-egress-plan/v1",
+      campaignId: "c",
+      findingId: "f",
+      destinations: [{ host: "api.example.test", port: 443 }],
+      reason: "ordinary use connects to the service",
+    };
+    await writeFile(planPath, JSON.stringify(plan));
+    const received: unknown[] = [];
+    const lines: string[] = [];
+    const io = {
+      stdout: (line: string) => lines.push(line),
+      stderr: (line: string) => lines.push(line),
+    };
+    const environment = {
+      stateDirectory: directory,
+      profile: {
+        verifyNext: async (
+          _state: unknown,
+          input: Parameters<NonNullable<CliProfile["verifyNext"]>>[1],
+        ) => {
+          received.push(input.handoff);
+          return null;
+        },
+        reverify: async (
+          _state: unknown,
+          input: Parameters<CliProfile["reverify"]>[1],
+        ) => {
+          received.push(input.handoff);
+          return {
+            findingId: "f2",
+            targetId: "wporg:x",
+            version: "1.0",
+            snapshotDigest: `sha256:${"b".repeat(64)}`,
+            verificationId: "v",
+            status: "incomplete",
+          };
+        },
+      },
+    } as unknown as CliEnvironment;
+    const base = [
+      "--config",
+      "/unused/campaign.json",
+      "--handoff",
+      join(directory, "handoff"),
+      "--egress-plan",
+      planPath,
+    ];
+    // Without one named Finding the plan has nothing to bind to.
+    expect(await runCli(["verify", "next", ...base], environment, io)).toBe(2);
+    expect(
+      await runCli(
+        ["verify", "next", ...base, "--campaign", "c", "--finding", "f,g"],
+        environment,
+        io,
+      ),
+    ).toBe(2);
+    // A plan for another Finding is refused before any Lab.
+    expect(
+      await runCli(
+        ["verify", "next", ...base, "--campaign", "c", "--finding", "other"],
+        environment,
+        io,
+      ),
+    ).toBe(2);
+    expect(received).toEqual([]);
+    expect(
+      await runCli(
+        ["verify", "next", ...base, "--campaign", "c", "--finding", "f"],
+        environment,
+        io,
+      ),
+    ).toBe(0);
+    expect(received).toEqual([
+      expect.objectContaining({
+        egress: { destinations: [{ host: "api.example.test", port: 443 }] },
+      }),
+    ]);
+    // review reverify: the plan needs --handoff and the same ids.
+    const reverify = [
+      "review",
+      "reverify",
+      "--campaign",
+      "c",
+      "--finding",
+      "f",
+      "--config",
+      "/unused/campaign.json",
+    ];
+    expect(
+      await runCli([...reverify, "--egress-plan", planPath], environment, io),
+    ).toBe(2);
+    expect(
+      await runCli(
+        [
+          ...reverify,
+          "--handoff",
+          join(directory, "handoff"),
+          "--egress-plan",
+          planPath,
+        ],
+        environment,
+        io,
+      ),
+    ).toBe(0);
+    expect(received[1]).toMatchObject({
+      egress: { destinations: [{ host: "api.example.test", port: 443 }] },
+    });
+    expect(lines.join("\n")).not.toContain("ordinary use connects");
   });
 
   it("routes lab down --lab to the named Lab without choosing another Lab (#605)", async () => {

@@ -104,6 +104,20 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         attackerOrigin: z.enum(["domestic", "foreign"]).optional(),
       })
       .optional(),
+    /** ADR 0046: the fixed destinations of the Lab's outbound relay; absent without one. */
+    egress: z
+      .strictObject({
+        destinations: z
+          .array(
+            z.strictObject({
+              host: z.string().min(1).max(253),
+              port: z.number().int().positive().max(65535),
+            }),
+          )
+          .min(1)
+          .max(4),
+      })
+      .optional(),
   }),
   event({
     type: z.literal("discovery-run-started"),

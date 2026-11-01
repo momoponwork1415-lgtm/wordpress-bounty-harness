@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { canonicalJson } from "../../../infrastructure/canonical-json.js";
 import type { VerifierRunReceipt } from "../../../verification/index.js";
 import type {
+  EgressClosure,
   WordPressAttackerOrigin,
   WordPressLab,
   WordPressLabHandle,
@@ -50,6 +51,8 @@ type HandoffRunReceipt = VerifierRunReceipt & {
   readonly reason?: string;
   /** #699: the origin the attacker stood at under the Lab's baseline. */
   readonly attackerOrigin?: WordPressAttackerOrigin;
+  /** ADR 0046 条件 6: the Lab's relays as the Harness closed them at `setup-done`. */
+  readonly egress?: EgressClosure;
 };
 
 const exists = (path: string) =>
@@ -98,6 +101,7 @@ export class HandoffVerifier implements WordPressVerifierTransport {
         | "withdrawFromHost"
         | "reviewAdministrator"
         | "attackerEntrance"
+        | "closeEgress"
       >;
       /** Requested loopback ports; 0 takes a free one. `lab.json` names the bound ports. */
       readonly ports: { readonly http: number; readonly database: number };
@@ -128,6 +132,7 @@ export class HandoffVerifier implements WordPressVerifierTransport {
     );
     const deadline =
       startedAt.getTime() + (this.options.wallTimeMs ?? HANDOFF_WALL_MS);
+    let egress: EgressClosure | undefined;
     const finish = (
       outcome: WordPressVerifierTransportResult["outcome"],
       reason?: string,
@@ -139,6 +144,7 @@ export class HandoffVerifier implements WordPressVerifierTransport {
         outcome,
         reason,
         entrance?.origin,
+        egress,
       ),
       outcome,
     });
@@ -259,6 +265,17 @@ export class HandoffVerifier implements WordPressVerifierTransport {
                 "timeout",
                 "setup-done was not placed within the wall",
               );
+        // ADR 0046 条件 5: the outbound relays go before anything else, and
+        // the Lab must be shown unable to reach the destinations.
+        const closed = await lab.closeEgress(handle);
+        if (closed !== null) {
+          egress = closed;
+          if (!closed.unreachableConfirmed)
+            return incomplete(
+              "egress-open",
+              "The Lab's outbound relay could not be confirmed closed; repeat in a fresh Lab",
+            );
+        }
         // Setup is finished: only what follows is captured and diffed, and
         // no attacker data is released unless the Harness closed setup (#430).
         if (!(await input.restartObservation()))
@@ -381,6 +398,7 @@ export class HandoffVerifier implements WordPressVerifierTransport {
     outcome: WordPressVerifierTransportResult["outcome"],
     reason: string | undefined,
     attackerOrigin: WordPressAttackerOrigin | undefined,
+    egress: EgressClosure | undefined,
   ): HandoffRunReceipt {
     const body = {
       transport: "handoff/v1" as const,
@@ -395,6 +413,7 @@ export class HandoffVerifier implements WordPressVerifierTransport {
       completedAt: this.options.clock().toISOString(),
       ...(reason === undefined ? {} : { reason }),
       ...(attackerOrigin === undefined ? {} : { attackerOrigin }),
+      ...(egress === undefined ? {} : { egress }),
     };
     return {
       ...body,

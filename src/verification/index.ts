@@ -1,3 +1,4 @@
+import type { LabEgressPlan } from "../lab/egress-plan.js";
 import { z } from "zod";
 
 import { canonicalJson } from "../infrastructure/canonical-json.js";
@@ -300,6 +301,8 @@ export type VerificationOptions<
   readonly promptVersion?: string;
   /** Optional before / after Lab state diff; absent, the event carries no diff field. */
   readonly stateObserver?: LabStateObserver<Handle>;
+  /** ADR 0046: destinations a verification Lab's outbound relay may reach; none without a plan. */
+  readonly labEgress?: LabEgressPlan;
   readonly clock?: () => Date;
 };
 
@@ -424,7 +427,12 @@ export class Verification<
       if (lab !== undefined) return lab;
       if (failed !== undefined) return failed;
       const provisioned = await this.#options.lab
-        .provision(common.snapshot, common.setup, { purpose: "verification" })
+        .provision(common.snapshot, common.setup, {
+          purpose: "verification",
+          ...(this.#options.labEgress === undefined
+            ? {}
+            : { egress: this.#options.labEgress }),
+        })
         .catch(provisionThrew);
       if (provisioned.status === "ready") return (lab = provisioned.handle);
       return (failed = provisioned);
@@ -540,6 +548,15 @@ export class Verification<
                   id: current.baseline.id,
                   digest: current.baseline.digest,
                   ...(attackerOrigin === undefined ? {} : { attackerOrigin }),
+                },
+              }),
+          ...(current.egress === undefined
+            ? {}
+            : {
+                egress: {
+                  destinations: current.egress.destinations.map(
+                    ({ host, port }) => ({ host, port }),
+                  ),
                 },
               }),
         });

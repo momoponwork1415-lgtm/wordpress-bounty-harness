@@ -1,3 +1,4 @@
+import type { LabEgressPlan } from "../lab/egress-plan.js";
 import type { WordPressCoreReleaseObservation } from "../profiles/wordpress/acquisition/wordpress-core-release.js";
 import {
   CURRENT_WORDPRESS_LAB_BASELINE_ID,
@@ -429,6 +430,8 @@ export type VerifierHandoff = {
   readonly directory: string;
   readonly httpPort: number;
   readonly databasePort: number;
+  /** ADR 0046: the fixed destinations the Lab's relay forwards to until `setup-done`. */
+  readonly egress?: LabEgressPlan;
 };
 
 export type WordPressCliProfileOptions = {
@@ -593,6 +596,7 @@ function verificationFor(
       store: state.store,
       lab: boundaries.lab,
     }),
+    ...(handoff?.egress === undefined ? {} : { labEgress: handoff.egress }),
     clock: state.clock,
   });
 }

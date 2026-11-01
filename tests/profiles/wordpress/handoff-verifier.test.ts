@@ -12,7 +12,10 @@ import {
   loadWordPressLabBaseline,
   type WordPressLabBaseline,
 } from "../../../src/profiles/wordpress/lab/baseline.js";
-import type { WordPressLabHandle } from "../../../src/profiles/wordpress/lab/index.js";
+import type {
+  EgressClosure,
+  WordPressLabHandle,
+} from "../../../src/profiles/wordpress/lab/index.js";
 import {
   HandoffVerifier,
   WBH_VERIFY_SKILL_ID,
@@ -62,6 +65,8 @@ async function fixture(options: {
   readonly restartObservation?: () => Promise<boolean>;
   /** #699: the Lab's baseline; absent, the Lab has none. */
   readonly baseline?: WordPressLabBaseline;
+  /** ADR 0046: what `closeEgress` answers; absent, the Lab has no relay. */
+  readonly egress?: EgressClosure;
 }) {
   const root = await mkdtemp(join(tmpdir(), "wbh-handoff-verifier-"));
   roots.push(root);
@@ -99,6 +104,7 @@ async function fixture(options: {
     },
   };
   const calls: unknown[] = [];
+  const order: string[] = [];
   let restarts = 0;
   const transport = new HandoffVerifier({
     directory,
@@ -116,6 +122,10 @@ async function fixture(options: {
       async withdrawFromHost() {
         calls.push(["withdraw"]);
         return true;
+      },
+      async closeEgress() {
+        if (options.egress !== undefined) order.push("closeEgress");
+        return options.egress ?? null;
       },
       reviewAdministrator: () =>
         options.administrator === null
@@ -147,6 +157,7 @@ async function fixture(options: {
     },
     restartObservation: async () => {
       restarts++;
+      order.push("restart");
       return (await options.restartObservation?.()) ?? true;
     },
   };
@@ -162,6 +173,7 @@ async function fixture(options: {
     transport,
     run,
     calls,
+    order,
     restarts: () => restarts,
     place,
     exists,
@@ -316,6 +328,54 @@ describe("HandoffVerifier (#352)", () => {
     });
     expect(result.receipt.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(f.restarts()).toBe(1);
+    expect(f.calls.at(-1)).toEqual(["withdraw"]);
+  });
+
+  it("closes the Lab's relays at setup-done before the baseline restarts, and records the closure in the receipt (ADR 0046)", async () => {
+    const egress: EgressClosure = {
+      destinations: [{ host: "api.example.test", port: 443 }],
+      closedAt: "2026-10-18T00:05:00.000Z",
+      connections: [],
+      unreachableConfirmed: true,
+    };
+    const f = await fixture({ egress });
+    const pending = f.transport.run(f.run);
+    await until(() => f.exists("lab.json"));
+    expect(f.order).toEqual([]);
+    await f.place("setup-done");
+    await until(() => f.exists("attack.json"));
+    expect(f.order).toEqual(["closeEgress", "restart"]);
+    for (const name of WORDPRESS_VERIFIER_FILE_NAMES)
+      await f.place(name, `${name} body`);
+    const result = await pending;
+    expect(result.outcome.status).toBe("files");
+    expect(result.receipt).toMatchObject({ terminal: "completed", egress });
+  });
+
+  it("withholds attacker data when the relays cannot be confirmed closed (ADR 0046 条件 5)", async () => {
+    const f = await fixture({
+      egress: {
+        destinations: [{ host: "api.example.test", port: 443 }],
+        closedAt: "2026-10-18T00:05:00.000Z",
+        connections: [],
+        unreachableConfirmed: false,
+      },
+    });
+    const pending = f.transport.run(f.run);
+    await until(() => f.exists("lab.json"));
+    await f.place("setup-done");
+    const result = await pending;
+    expect(result.outcome).toMatchObject({
+      status: "incomplete",
+      nextStep: expect.stringContaining("relay could not be confirmed closed"),
+    });
+    expect(result.receipt).toMatchObject({
+      reason: "egress-open",
+      egress: { unreachableConfirmed: false },
+    });
+    expect(f.restarts()).toBe(0);
+    expect(await f.exists("attack.json")).toBe(false);
+    expect(await f.exists("observation-ready")).toBe(false);
     expect(f.calls.at(-1)).toEqual(["withdraw"]);
   });
 

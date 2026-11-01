@@ -1,3 +1,5 @@
+import type { LabEgressPlan } from "../../../lab/egress-plan.js";
+import { startEgressRelays } from "./egress-relay.js";
 import { isIP } from "node:net";
 import { fileURLToPath } from "node:url";
 
@@ -193,6 +195,10 @@ async function startWordPress(lab: WordPressLabSession): Promise<string> {
     // runsc cannot reliably resolve Docker's alias from inside this container.
     // Keep WordPress self-requests on its own loopback interface.
     "--add-host=wordpress:127.0.0.1",
+    // ADR 0046: a relay destination resolves to its relay's Lab address.
+    ...lab.egressRelays.map(
+      (relay) => `--add-host=${relay.destination.host}:${relay.ip}`,
+    ),
     "--security-opt=no-new-privileges",
     "--volume",
     `${lab.volume}:/var/www/html`,
@@ -348,8 +354,12 @@ export function controlCommand(
 export async function startLabContainers(
   lab: WordPressLabSession,
   attempts: number,
+  egress?: LabEgressPlan,
 ): Promise<{ readonly internalIp: string; readonly recorderIp: string }> {
   await startNetworkAndDatabase(lab);
+  // ADR 0046: relays first, so WordPress starts with their addresses.
+  if (egress !== undefined && egress.destinations.length > 0)
+    lab.egressRelays = await startEgressRelays(lab, egress.destinations);
   const internalIp = await startWordPress(lab);
   const recorderIp = await startRecorder(lab, internalIp);
   if (lab.exploration) await startControl(lab);

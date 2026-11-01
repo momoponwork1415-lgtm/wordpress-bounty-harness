@@ -1,3 +1,4 @@
+import type { EgressRelay } from "./egress-relay.js";
 import { randomBytes, randomUUID } from "node:crypto";
 
 import type { WordPressLabHandle } from "./contract.js";
@@ -76,6 +77,8 @@ export class WordPressLabSession {
   readonly requireDocker: RequireDocker;
   /** Docker objects created so far; `cleanup` removes only these. */
   readonly created = new Set<CreatedResource>();
+  /** ADR 0046: the outbound relays of a verification Lab; emptied when the Harness closes them. */
+  egressRelays: EgressRelay[] = [];
   receiverIp?: string;
   /** Exploration Labs: the address WordPress keeps across resets. */
   wordpressIp?: string;
@@ -208,7 +211,9 @@ export class WordPressLabSession {
       (kind) => this[kind],
     );
     let okay = true;
+    const relays = this.egressRelays.map((relay) => relay.container);
     for (const args of [
+      ...(relays.length > 0 ? [["rm", "--force", ...relays]] : []),
       ...(containers.length > 0 ? [["rm", "--force", ...containers]] : []),
       ...(this.created.has("volume")
         ? [["volume", "rm", "--force", this.volume]]
