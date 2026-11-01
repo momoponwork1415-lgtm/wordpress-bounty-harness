@@ -270,7 +270,11 @@ describe("WordPress selection public interface", () => {
 
   it("ships the install queue and rejects retired policy fields", async () => {
     const policy = await loadWordPressSelectionPolicy();
-    expect(policy.minimumActiveInstallations).toBe(10_000);
+    expect(policy.minimumActiveInstallations).toBe(5_000);
+    expect(policy.maximumTargets).toBe(10);
+    expect(
+      "candidateSource" in policy ? policy.candidateSource.tags : null,
+    ).toEqual([]);
     expect(policy.maximumUpdateAgeDays).toBe(365);
     expect(policy.revisitPolicy).toEqual({ kind: "version-increased" });
     for (const [field, value] of Object.entries({
@@ -653,7 +657,7 @@ describe("operator candidate list (#520)", () => {
       popular: observation("popular", [], 1_000_000),
       nominated: observation("nominated", [], 500_000),
       exposed: observation("exposed", [], 2_000_000),
-      small: observation("small", [], 5_000),
+      small: observation("small", [], 4_000),
     };
     const candidates = harness({
       observations,
