@@ -85,10 +85,27 @@ export type LabDownSummary = {
   };
 };
 
+/** #741: the core version a selection freezes and how it compares with the latest stable. */
+export type CliSelectionCore = {
+  readonly status: "ok" | "core-image-outdated" | "core-release-unavailable";
+  readonly source: "pinned" | "image";
+  readonly version: string;
+  readonly latest:
+    | {
+        readonly version: string;
+        readonly observedAt: string;
+        readonly sourceUrl: string;
+        readonly responseDigest: string;
+      }
+    | { readonly unavailable: string }
+    | null;
+};
+
 export interface CliSelectionReport {
   readonly batchId: string | null;
-  /** available, stale or unavailable public listings; manual for named slugs. */
+  /** available, stale or unavailable public listings; manual for named slugs; core-image-outdated / core-release-unavailable when the Lab image is not the latest stable (#741). */
   readonly sourceStatus?: string;
+  readonly core?: CliSelectionCore;
   readonly selected: readonly {
     readonly targetId: string;
     readonly version: string;
@@ -1171,6 +1188,16 @@ const COMMANDS: readonly Command[] = [
       for (const target of report.excluded)
         io.stdout(
           `excluded ${target.targetId}  reasons ${target.reasons.join(",")}  observed ${target.observedAt ?? "unavailable"}  source ${target.sourceUrl ?? "unavailable"}`,
+        );
+      if (report.core !== undefined)
+        io.stdout(
+          `wordpress core ${report.core.version} (${report.core.source})  latest ${
+            report.core.latest === null
+              ? "not checked"
+              : "version" in report.core.latest
+                ? report.core.latest.version
+                : `unavailable (${report.core.latest.unavailable})`
+          }  ${report.core.status}`,
         );
       if (report.batchId !== null)
         io.stdout(`selection batch ${report.batchId}`);
@@ -2258,9 +2285,24 @@ const COMMANDS: readonly Command[] = [
           `${item}  profile ${profile}  image ${image}  ${profile === image ? "ok" : "differs"}`,
         );
       if (items.every(({ profile, image }) => profile === image)) return 0;
-      io.stdout(
-        "The image differs from the runtime profile; runs would end incomplete(policy). Update the runtime profile, then confirm the new values with ledger runtime after the next campaign.",
-      );
+      if (
+        items.some(
+          ({ item, profile, image }) =>
+            item === "wordpress-core" && profile !== image,
+        )
+      )
+        io.stdout(
+          "The Lab image is not the latest stable WordPress; select freezes nothing until it is. Run containers/wordpress-lab/refresh-image.sh and set images.wordpress in the host config.",
+        );
+      if (
+        items.some(
+          ({ item, profile, image }) =>
+            item !== "wordpress-core" && profile !== image,
+        )
+      )
+        io.stdout(
+          "The image differs from the runtime profile; runs would end incomplete(policy). Update the runtime profile, then confirm the new values with ledger runtime after the next campaign.",
+        );
       return 1;
     },
   }),

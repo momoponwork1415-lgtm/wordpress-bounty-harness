@@ -789,6 +789,32 @@ describe("continuous runner", () => {
     await expectLatchedStop(t, "exhausted");
   });
 
+  it("retries hourly while the Lab image is behind the latest WordPress, like a failed listing (#741)", async () => {
+    const results = [
+      "core-image-outdated",
+      "core-release-unavailable",
+      "available",
+      "available",
+      "available",
+    ];
+    const t = await setup([], {
+      select: async () => ({
+        batchId: null,
+        targets: [],
+        sourceStatus: results.shift()!,
+      }),
+    });
+    expect(await t.runner.run()).toBe("exhausted");
+    expect(
+      t.log.filter((line) => line.includes("reason=core-image-outdated")),
+    ).toHaveLength(1);
+    expect(
+      t.log.filter((line) => line.includes("reason=core-release-unavailable")),
+    ).toHaveLength(1);
+    expect(t.hours()).toBe(2 + 2 * 24);
+    await expectLatchedStop(t, "exhausted");
+  });
+
   it("waits for a renewed login without exiting", async () => {
     const t = await setup([]);
     const start = t.deps.clock().getTime();

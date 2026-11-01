@@ -29,6 +29,8 @@ async function fixture(
     root?: string;
     /** Runs after the copy reaches its staging directory, before it returns. */
     afterCopy?: () => Promise<void>;
+    /** #741: no expected version; the image's own is accepted. */
+    unpinned?: boolean;
   } = {},
 ) {
   const root =
@@ -39,7 +41,7 @@ async function fixture(
     dockerExecutablePath: "/usr/bin/docker",
     image,
     stagingDirectory: join(root, "core"),
-    expectedVersion: "6.8.3",
+    ...(options.unpinned === true ? {} : { expectedVersion: "6.8.3" }),
     runDocker: async (args) => {
       calls.push(args);
       if (args[0] === "cp") {
@@ -68,6 +70,14 @@ async function fixture(
 }
 
 describe("WordPress core source from the pinned Lab image", () => {
+  it("accepts the image's own version when none is declared (#741)", async () => {
+    const { source } = await fixture({ version: "7.1.4", unpinned: true });
+    expect((await source())[0]).toMatchObject({
+      identity: "wordpress-core",
+      version: "7.1.4",
+    });
+  });
+
   it("creates without starting, copies once, removes the container and reuses sorted content", async () => {
     const { source, calls } = await fixture();
     const first = await source();

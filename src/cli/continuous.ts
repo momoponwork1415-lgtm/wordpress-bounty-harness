@@ -942,6 +942,18 @@ export function createContinuousRunner(deps: ContinuousDeps) {
             });
             continue;
           }
+          // #741: an outdated Lab image is not an empty pool either; retry once
+          // the operator has refreshed it (or the version check answers again).
+          if (
+            ["core-image-outdated", "core-release-unavailable"].includes(
+              selected.sourceStatus ?? "",
+            )
+          ) {
+            await hold("sleeping", LISTING_UNAVAILABLE_RETRY_MINUTES * MINUTE, {
+              reason: selected.sourceStatus!,
+            });
+            continue;
+          }
           if (++memo.consecutiveEmptyDays >= EMPTY_DAYS_BEFORE_EXHAUSTED)
             return stop("exhausted");
           await hold("sleeping", EMPTY_SLEEP_HOURS * 60 * MINUTE, {

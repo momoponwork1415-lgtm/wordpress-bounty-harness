@@ -25,16 +25,19 @@ export type DockerCommand = (
  * Freezes the WordPress core of the pinned Lab image as a snapshot dependency.
  *
  * The core is copied out of a created, never started, container and laid out
- * once per image digest. Nothing in it is executed on the host. The version in
- * `wp-includes/version.php` must equal the campaign's declared version, so the
- * agents read exactly the core the Lab runs.
+ * once per image digest. Nothing in it is executed on the host. When a version
+ * is declared, the one in `wp-includes/version.php` must equal it, so the
+ * agents read exactly the core the Lab runs; without one (#741), the image's
+ * version is the core version and `select` checks it against the latest
+ * stable release.
  */
 export function openWordPressCoreSource(options: {
   readonly dockerExecutablePath: string;
   /** The Lab's WordPress image, pinned by digest. */
   readonly image: string;
   readonly stagingDirectory: string;
-  readonly expectedVersion: string;
+  /** Absent: the image's own version is accepted (#741). */
+  readonly expectedVersion?: string;
   readonly runDocker?: DockerCommand;
   readonly limits?: {
     readonly maxEntries?: number;
@@ -46,7 +49,8 @@ export function openWordPressCoreSource(options: {
     imageDigest === undefined ||
     !isAbsolute(options.dockerExecutablePath) ||
     !isAbsolute(options.stagingDirectory) ||
-    !/^[0-9A-Za-z.-]{1,32}$/.test(options.expectedVersion)
+    (options.expectedVersion !== undefined &&
+      !/^[0-9A-Za-z.-]{1,32}$/.test(options.expectedVersion))
   )
     throw new Error("WordPress core source options are invalid");
   const limits = { ...DEFAULT_LIMITS, ...options.limits };
@@ -123,7 +127,10 @@ export function openWordPressCoreSource(options: {
     )?.[1];
     if (version === undefined)
       throw new Error("WordPress core version is unreadable");
-    if (version !== options.expectedVersion)
+    if (
+      options.expectedVersion !== undefined &&
+      version !== options.expectedVersion
+    )
       throw new Error(
         `The Lab image runs WordPress ${version}, not the declared ${options.expectedVersion}`,
       );

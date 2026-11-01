@@ -106,8 +106,12 @@ const automaticSelectionPolicy = z.strictObject({
   promptVariant: z.string().min(1).max(128),
   revisitPolicy: wordPressRevisitPolicySchema,
   maximumTargets: z.number().int().min(3).max(10),
-  /** The core image version pinned when select freezes the chosen targets. */
-  wordpressVersion: coreVersionSchema,
+  /**
+   * Set: the core version select freezes (development and historical runs).
+   * Absent (#741): the Lab image's version, which select checks against the
+   * latest stable release.
+   */
+  wordpressVersion: coreVersionSchema.optional(),
   candidateSource: z.strictObject({
     kind: z.literal("wordpress-org"),
     tags: z.array(slugSchema).max(8),

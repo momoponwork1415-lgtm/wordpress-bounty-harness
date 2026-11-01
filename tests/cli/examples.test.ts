@@ -23,7 +23,7 @@ const example = async (file: string, version = "3.3.1"): Promise<unknown> =>
     ),
   ) as unknown;
 
-it("starts the checked-in wide v14 campaign with one concurrent target on WordPress 7.1.3 (owner decision 2026-10-26)", async () => {
+it("starts the checked-in wide v14 campaign with one concurrent target on the Lab image's WordPress (owner decision 2026-10-26; #741 unpinned)", async () => {
   const source = JSON.parse(
     await readFile(
       join(
@@ -45,7 +45,8 @@ it("starts the checked-in wide v14 campaign with one concurrent target on WordPr
     runWallTimeMinutes: 120,
   });
   expect(config.resources.maxConcurrentTargets).toBe(1);
-  expect(config.wordpressVersion).toBe("7.1.3");
+  // #741: no pin; select takes the Lab image's version and checks it against the latest stable.
+  expect(config.wordpressVersion).toBeUndefined();
   expect(config.discovery.lab).toEqual({
     mode: "none",
     maxResets: 2,

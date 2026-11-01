@@ -1,3 +1,4 @@
+import type { WordPressCoreReleaseObservation } from "../profiles/wordpress/acquisition/wordpress-core-release.js";
 import {
   CURRENT_WORDPRESS_LAB_BASELINE_ID,
   loadWordPressLabBaseline,
@@ -219,7 +220,8 @@ const commonCampaignFields = {
       maxConcurrentTargets: 1,
       memoryBudgetMiB: DISCOVERY_RUN_MEMORY_MIB,
     }),
-  wordpressVersion: z.string().min(1).max(32),
+  /** Absent (#741): the Lab image's core version, checked against the latest stable at select. */
+  wordpressVersion: z.string().min(1).max(32).optional(),
   lab: z.strictObject({
     siteTitle: z.string().min(1).max(120),
     initialPosts: z.array(z.string().min(1).max(120)).max(20),
@@ -385,6 +387,10 @@ export interface WordPressCampaignBoundaries {
       readonly tree: ExpectedSourceTree;
     }[];
   }>;
+  /** #741: the latest stable WordPress release, from WordPress.org's version check. */
+  readonly coreRelease?: () => Promise<WordPressCoreReleaseObservation>;
+  /** #741: the core version the pinned Lab image ships. */
+  readonly coreImageVersion?: () => Promise<string>;
   readonly runtimeProfile: AgentRuntimeProfile;
   /** What the pinned Codex image actually ships (GvisorCodexSandbox.probe). */
   readonly probeRuntime: () => Promise<{
@@ -433,8 +439,14 @@ export type WordPressCliProfileOptions = {
   /** Selection can inspect and freeze public sources without booting a Lab. */
   readonly selectionBoundaries?: (
     state: CliState,
-    wordpressVersion: string,
-  ) => Promise<Pick<WordPressCampaignBoundaries, "selection" | "freeze">>;
+    /** The pinned core version; undefined takes the image's (#741). */
+    wordpressVersion: string | undefined,
+  ) => Promise<
+    Pick<
+      WordPressCampaignBoundaries,
+      "selection" | "freeze" | "coreRelease" | "coreImageVersion"
+    >
+  >;
   readonly scopePolicy: WordpressScopePolicy;
   /** Git-outside legacy history JSON, read on every selection (D2). */
   /** Overrides the scope facts read from recorded judge evidence and the selection record. */
@@ -521,6 +533,7 @@ export async function readWordPressCampaignPolicy(
       : await readWordPressSelectionPolicyFile(config.selectionPolicyPath);
   if (
     policy.wordpressVersion !== undefined &&
+    config.wordpressVersion !== undefined &&
     policy.wordpressVersion !== config.wordpressVersion
   )
     throw new Error("Selection and campaign WordPress versions differ");
