@@ -114,3 +114,17 @@ PR #415 のレビュー指摘 4 への対応。決定の本文は #415 より前
 ## 2026-10-26 追記: `lab.json` の scenario と前提の gate（#353、PR #577）
 
 PR #577 で Lab の scenario を削除したので、上の追記の「Lab に scenario … があればその値」の scenario は `lab.json` に入らなくなった（第 2 言語は残る）。同じ追記の検査 (a)(b) も分類の scenario 選択とともに無くなった。2026-10-21 注記と 2026-10-23 追記で #353 に残すとした scenario と plugin 別 adapter も同じ PR で削除した（[ADR 0026](0026-generic-lab-scenarios-no-verifier-browser.md) の 2026-10-26 追記）。
+
+## 2026-11-01 追記: 前提の記録を探索スキルの `lab-setup.md` と同じ形にする（#751）
+
+探索スキル `wbh-setup` v1（ADR 0043 追記 2、#749）は Lab の通常利用を作り、`/workspace/research/lab-setup.md` に Features / Settings changed / Objects / Content / Not built / Verified の 6 節で記録する。検証スキル `wbh-verify` の前提作りは同じ仕事を Finding 1 件分だけ行うが、記録の形は定めていなかった。`verification-finished` 365 件のうち理由 `precondition` が 135 件（37%）で、前提が検証の止まり方の最大の理由である（[提案 §1.3](../reviews/2026-11-01-lab-normal-use-setup-proposal.md)）。
+
+`wbh-verify` を v12 にする。変えたのは 3 点で、本文は [全文](../reviews/2026-11-01-wbh-verify-v12.md) にある。
+
+- 前提作りの段に、plugin を有効化しただけの Lab には object と公開ページが無いこと、Finding の経路が読む object を管理者として作り、object ごとに公開ページを 1 枚置くこと、既定から変えた設定を全部記録することを書いた。
+- `steps.md` の先頭に前提の部を置き、`lab-setup.md` と同じ 6 節で書く。攻撃の部は従来どおりその後に続く。
+- `<dir>/prior-lab-setup.md` があれば、同じ plugin の探索 Trial の `lab-setup.md` を AI 操作役が写したものとして、前提作りの出発点に読む。Harness はこの file を読まず、`stale-directory` の検査の対象にもしない（受け渡し file の名前ではない）。別の Lab と別の版の記録なので、この Lab で確かめてから使う。
+
+Harness の変更は `WBH_VERIFY_SKILL_ID` を `wbh-verify/v12` にすることだけである。v11 の本文は `.claude/skills/wbh-verify/versions/v11.md` に残す。測る数字は、handoff attempt のうち `precondition-unavailable` で終わる割合（出発点 135 / 365）。
+
+消し方: `SKILL.md` を `versions/v11.md` に戻し、`WBH_VERIFY_SKILL_ID` を v11 にする。記録済みの `promptVersion: wbh-verify/v12` は読み続ける。
