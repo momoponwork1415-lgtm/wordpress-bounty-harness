@@ -13,6 +13,8 @@ export interface PriorLead {
   readonly entry: PriorLeadPlace;
   readonly effect: PriorLeadPlace;
   readonly summary: string;
+  /** Strings the gap sentence must not contain (ignoring case); it is withheld if it does. */
+  readonly withheldTerms?: readonly string[];
 }
 
 /** ADR 0044: what the section states when a gap sentence fails the shape check. */
@@ -42,12 +44,19 @@ function firstSentence(summary: string): string {
 /**
  * The first sentence of a Lead summary, or undefined when it fails the shape
  * check of ADR 0044: longer than 300 characters, a URL, an HTTP method with a
- * path, a long quotation, or `<` / `>`. The check reads the characters only,
- * never the meaning.
+ * path, a long quotation, `<` / `>`, or one of `withheldTerms` (ignoring
+ * case). The check reads the characters only, never the meaning.
  */
-export function priorLeadGap(summary: string): string | undefined {
+export function priorLeadGap(
+  summary: string,
+  withheldTerms: readonly string[] = [],
+): string | undefined {
   const sentence = firstSentence(summary);
+  const lower = sentence.toLowerCase();
   if (
+    withheldTerms.some(
+      (term) => term.length > 0 && lower.includes(term.toLowerCase()),
+    ) ||
     sentence.length === 0 ||
     sentence.length > MAX_GAP_LENGTH ||
     sentence.includes("://") ||
@@ -90,7 +99,7 @@ export function priorLeadsSection(leads: readonly PriorLead[]): {
   if (leads.length === 0) throw new Error("No prior leads to state");
   let gapWithheld = 0;
   const entries = leads.map((lead, index) => {
-    const gap = priorLeadGap(lead.summary);
+    const gap = priorLeadGap(lead.summary, lead.withheldTerms);
     if (gap === undefined) gapWithheld += 1;
     return [
       `### Prior lead ${index + 1}`,

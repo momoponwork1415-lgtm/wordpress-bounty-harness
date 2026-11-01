@@ -88,6 +88,7 @@ jobs:
             src/profiles/wordpress/prompts/ \
             .claude/skills/ \
             src/profiles/wordpress/discovery/output-contract.ts \
+            src/discovery/prior-leads.ts \
             src/profiles/wordpress/verification/codex-verifier.ts \
             src/profiles/wordpress/policy/selection.json | wc -l)
           if [ "$adr" -gt 0 ] && ! has_label; then

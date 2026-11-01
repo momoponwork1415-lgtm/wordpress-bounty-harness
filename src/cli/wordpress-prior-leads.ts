@@ -83,9 +83,13 @@ async function namedLeadIds(
   target: WordPressPriorLeadsTarget,
 ): Promise<readonly string[]> {
   if (target.leadIds !== undefined) return target.leadIds;
-  const parsed = leadGroupsFileSchema.safeParse(
-    JSON.parse(await readFile(target.groupsPath!, "utf8")) as unknown,
-  );
+  let value: unknown;
+  try {
+    value = JSON.parse(await readFile(target.groupsPath!, "utf8")) as unknown;
+  } catch {
+    value = undefined;
+  }
+  const parsed = leadGroupsFileSchema.safeParse(value);
   if (!parsed.success)
     throw new PriorLeadsRefusal(
       "prior-leads-groups-unreadable",
@@ -235,6 +239,16 @@ export async function resolveWordPressPriorLeads(
       ...sectionOf(leads, leadIds, representativesDigest),
     });
   }
+  // One target version gets one second Trial, whichever of its Snapshots is named.
+  const versions = resolved.map(({ target }) => targetSelectionId(target));
+  const repeated = versions.find(
+    (version, index) => versions.indexOf(version) !== index,
+  );
+  if (repeated !== undefined)
+    throw new PriorLeadsRefusal(
+      "prior-leads-target-repeated",
+      `${repeated} is named with more than one Snapshot`,
+    );
   return resolved;
 }
 

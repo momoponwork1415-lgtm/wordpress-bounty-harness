@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { wordpressCampaignConfigSchema } from "../../src/cli/wordpress.js";
 import { priorLeadSourceRefusal } from "../../src/cli/wordpress-prior-leads.js";
+import { priorLeadsSection } from "../../src/discovery/prior-leads.js";
 import {
   wordPressPriorLead,
   wordPressPromptAdmitsPriorLeads,
@@ -124,6 +125,7 @@ describe("discovery.priorLeads configuration (ADR 0044)", () => {
     expect(
       wordPressPriorLead({
         summary: "Synthetic.",
+        storage: null,
         sourceTrace: [
           row("@wordpress/wp-includes/plugin.php", "do_action"),
           row("includes/ajax.php", "handle_save"),
@@ -140,6 +142,7 @@ describe("discovery.priorLeads configuration (ADR 0044)", () => {
     expect(
       wordPressPriorLead({
         summary: "Synthetic.",
+        storage: null,
         sourceTrace: [
           row("@wordpress/a.php", "first"),
           row("@php/b.c", "last"),
@@ -149,5 +152,25 @@ describe("discovery.priorLeads configuration (ADR 0044)", () => {
       entry: { file: "@wordpress/a.php", function: "first" },
       effect: { file: "@php/b.c", function: "last" },
     });
+  });
+
+  it("withholds a gap sentence that names the Lead's storage key (ADR 0044)", () => {
+    const lead = (summary: string) =>
+      wordPressPriorLead({
+        summary,
+        storage: { kind: "option", key: "plugin_secret_token" },
+        sourceTrace: [{ file: "a.php", function: "save", line: 1 }],
+      });
+    expect(
+      priorLeadsSection([
+        lead("The value in Plugin_Secret_Token was not shown to be read."),
+        lead("No reader of the stored value was shown."),
+      ]),
+    ).toMatchObject({ gapWithheld: 1 });
+    const { text } = priorLeadsSection([
+      lead("The value in plugin_secret_token was not shown to be read."),
+    ]);
+    expect(text).toContain("- Not shown: (withheld)");
+    expect(text).not.toContain("plugin_secret_token");
   });
 });

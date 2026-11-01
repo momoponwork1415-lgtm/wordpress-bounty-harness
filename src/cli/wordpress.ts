@@ -1491,6 +1491,13 @@ async function runWordPressCampaign(
   session: WordPressCampaignSession,
 ): ReturnType<CliProfile["runCampaign"]> {
   const { config, boundaries } = session;
+  // ADR 0044: one second Trial per Snapshot; repeats inside one campaign
+  // would pass the other-campaign check below.
+  if (config.discovery.priorLeads !== undefined && (input.repeat ?? 1) > 1)
+    throw new PriorLeadsRefusal(
+      "prior-leads-repeat",
+      "a prior-leads campaign runs one Trial per Snapshot; drop --repeat",
+    );
   // ADR 0044: a named second Trial runs on the Snapshots its configuration
   // names, resolved and checked before any Lab; selection does not run.
   const priorLeads =
@@ -1968,6 +1975,13 @@ export function createWordPressCliProfile(
     verifierRecordReader: (state) =>
       createWordPressVerifierRecordReader({ store: state.store }),
     labDown: (state, input) => wordPressLabDown(state, input, options),
+    // ADR 0044: a named second Trial runs once per Snapshot; the runner's
+    // next round would only meet `prior-leads-already-run`.
+    continuousRunRefusal: async (configPath) =>
+      (await readWordPressCampaignConfig(configPath)).discovery.priorLeads ===
+      undefined
+        ? undefined
+        : "continuous run does not run discovery.priorLeads; use campaign run (ADR 0044)",
     targetCeiling: async (configPath) =>
       (await readWordPressCampaignConfig(configPath)).resources
         .maxConcurrentTargets,

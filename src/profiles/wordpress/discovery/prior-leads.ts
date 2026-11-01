@@ -8,10 +8,11 @@ import type { WordPressLead } from "./lead.js";
  * after the rows in WordPress core, PHP or a dependency plugin are dropped,
  * or the first and last rows as they are when every row is such a frame.
  * Lines are left out. Only the summary goes with them; the section's shape
- * check picks its first sentence.
+ * check picks its first sentence, and withholds it when it names the
+ * storage key.
  */
 export function wordPressPriorLead(
-  lead: Pick<WordPressLead, "sourceTrace" | "summary">,
+  lead: Pick<WordPressLead, "sourceTrace" | "summary" | "storage">,
 ): PriorLead {
   const target = lead.sourceTrace.filter(
     (row) =>
@@ -28,6 +29,8 @@ export function wordPressPriorLead(
     entry: place(frames[0]!),
     effect: place(frames.at(-1)!),
     summary: lead.summary,
+    // ADR 0044 passes no storage key: a sentence naming it is withheld.
+    ...(lead.storage === null ? {} : { withheldTerms: [lead.storage.key] }),
   };
 }
 
