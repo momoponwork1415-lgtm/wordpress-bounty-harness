@@ -2053,8 +2053,16 @@ describe("harness CLI vertical slice", () => {
     if (discovered.stderr) throw new Error(discovered.stderr);
     expect(discovered.code).toBe(0);
     const labs = ledger().read({ campaignId, type: "lab-provisioned" });
+    // #746: the exploration Lab stands on the same base environment as verification.
     expect(labs.map(({ event }) => event)).toMatchObject([
-      { status: "ready", purpose: "discovery" },
+      {
+        status: "ready",
+        purpose: "discovery",
+        baseline: {
+          id: "hosting-default-v3",
+          digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+      },
     ]);
     const labId =
       labs[0]!.event.type === "lab-provisioned" && labs[0]!.event.labId;
@@ -2253,7 +2261,11 @@ describe("harness CLI vertical slice", () => {
       .map(({ event }) => event);
     expect(labs).toMatchObject([
       { status: "ready", purpose: "discovery" },
-      { status: "ready", purpose: "discovery" },
+      {
+        status: "ready",
+        purpose: "discovery",
+        baseline: { id: "hosting-default-v3" },
+      },
     ]);
     const [firstLab, secondLab] = labs.map((event) =>
       event.type === "lab-provisioned" ? event : undefined,

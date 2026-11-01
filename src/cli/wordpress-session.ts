@@ -598,13 +598,12 @@ export interface WordPressCampaignSession {
    */
   readonly policy: () => Promise<WordPressSelectionPolicy>;
   readonly boundaries: WordPressCampaignBoundaries;
-  readonly setupFor: (snapshot: Snapshot) => WordPressLabSetup;
   /**
-   * #699: the setup of a verification Lab: the campaign's setup on the
-   * profile's current base environment. Review Labs rebuild it from the
-   * package; discovery Labs keep `setupFor`.
+   * The campaign's setup on the profile's current base environment (#699),
+   * for discovery and verification Labs alike (#746). Review Labs rebuild it
+   * from the package.
    */
-  readonly verificationSetupFor: (snapshot: Snapshot) => WordPressLabSetup;
+  readonly setupFor: (snapshot: Snapshot) => WordPressLabSetup;
   /** Built once on use; administration and history access require no Verifier. */
   readonly verification: WordPressVerification;
 }
@@ -635,8 +634,7 @@ export async function openWordPressCampaignSession(
     config,
     policy: () => (policy ??= readWordPressCampaignPolicy(config)),
     boundaries,
-    setupFor: setupFor(config),
-    verificationSetupFor: (snapshot) => ({
+    setupFor: (snapshot) => ({
       ...setupFor(config)(snapshot),
       baseline: { id: baseline.id, digest: baseline.digest },
     }),
