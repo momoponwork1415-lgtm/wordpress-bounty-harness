@@ -38,6 +38,14 @@ const commonSelectionPolicy = {
   wordpressVersion: coreVersionSchema.optional(),
   promptVariant: z.string().min(1).max(128).optional(),
   revisitPolicy: wordPressRevisitPolicySchema.optional(),
+  /**
+   * Queue order for eligible candidates (owner decision 2026-11-01, ADR 0037
+   * 2026-11-01 addendum 3). `installs` (the default when absent): active
+   * installations descending, then the stable version's publication date
+   * descending. `version-published`: the stable version's publication date
+   * descending, then installations descending. Both end on the slug.
+   */
+  ordering: z.enum(["installs", "version-published"]).optional(),
   minimumActiveInstallations: z.number().int().nonnegative(),
   maximumObservationAgeDays: z.number().positive(),
   maximumUpdateAgeDays: z.number().positive(),

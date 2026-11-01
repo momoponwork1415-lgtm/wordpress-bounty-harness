@@ -1,7 +1,8 @@
 {
   "kind": "wordpress-selection-policy",
   "schemaVersion": 1,
-  "id": "wordpress-selection-2026-11-01-latest-core",
+  "id": "wordpress-selection-2026-11-01-version-published",
+  "ordering": "version-published",
   "promptVariant": "wp2shell-bounty-v11",
   "pluginDependencySlugs": {
     "unlimited-elements-for-elementor": ["elementor"]

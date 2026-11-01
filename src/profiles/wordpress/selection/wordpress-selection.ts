@@ -57,7 +57,7 @@ export interface WordPressCandidateInspection {
     policy: WordPressSelectionPolicy,
   ): Promise<readonly WordPressSelectionInspection[]>;
   /**
-   * Eligible targets by installs and update date, cut at `maximumTargets`, without Ledger
+   * Eligible targets in the policy's queue order, cut at `maximumTargets`, without Ledger
    * exclusions: manual pins for a campaign run and re-verification of a
    * Finding's own target, which the Ledger would otherwise exclude.
    */
@@ -103,15 +103,39 @@ export interface WordPressSelection {
   ): Promise<readonly WordPressTargetSelection[]>;
 }
 
-const byInstall = (
+const byInstallCount = (
+  left: WordPressTargetSelection,
+  right: WordPressTargetSelection,
+): number => right.activeInstallations - left.activeInstallations;
+
+/** Newest publication first; a candidate without a date sorts last. */
+const byVersionPublished = (
   left: WordPressTargetSelection,
   right: WordPressTargetSelection,
 ): number =>
-  right.activeInstallations - left.activeInstallations ||
-  (right.versionPublishedAt ?? "").localeCompare(
-    left.versionPublishedAt ?? "",
-  ) ||
-  left.slug.localeCompare(right.slug);
+  (right.versionPublishedAt ?? "").localeCompare(left.versionPublishedAt ?? "");
+
+const bySlug = (
+  left: WordPressTargetSelection,
+  right: WordPressTargetSelection,
+): number => left.slug.localeCompare(right.slug);
+
+/** The policy's queue order (`ordering`, default `installs`); one order for every caller. */
+const queueOrder = (
+  policy: Pick<WordPressSelectionPolicy, "ordering">,
+): ((
+  left: WordPressTargetSelection,
+  right: WordPressTargetSelection,
+) => number) =>
+  policy.ordering === "version-published"
+    ? (left, right) =>
+        byVersionPublished(left, right) ||
+        byInstallCount(left, right) ||
+        bySlug(left, right)
+    : (left, right) =>
+        byInstallCount(left, right) ||
+        byVersionPublished(left, right) ||
+        bySlug(left, right);
 
 const eligibleTargets = (
   inspections: readonly { readonly selection?: WordPressTargetSelection }[],
@@ -382,7 +406,7 @@ export function createWordPressSelection(
       const policy = wordPressSelectionPolicySchema.parse(policyInput);
       const { inspections } = await inspectBatch(policy);
       return eligibleTargets(inspections)
-        .sort(byInstall)
+        .sort(queueOrder(policy))
         .slice(0, policy.maximumTargets);
     },
   };
@@ -423,7 +447,7 @@ export function openWordPressSelection(input: {
     }));
     const ranked = eligibleTargets(
       inspections.filter((item) => item.reasons.length === 0),
-    ).sort(byInstall);
+    ).sort(queueOrder(policy));
     return {
       inspections,
       ranked,

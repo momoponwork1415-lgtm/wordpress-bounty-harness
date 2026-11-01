@@ -621,6 +621,60 @@ describe("install queue (#533)", () => {
   });
 });
 
+describe("queue ordering (ADR 0037 追記 3)", () => {
+  it("keeps installs first by default and puts the newest publication first with version-published", async () => {
+    const big = observation("big", [], 1_000_000);
+    big.observation.lastUpdated = "2026-08-01T00:00:00Z";
+    const fresh = observation("fresh", [], 10_000);
+    fresh.observation.lastUpdated = "2026-10-07T00:00:00Z";
+    const mid = observation("mid", [], 100_000);
+    mid.observation.lastUpdated = "2026-10-07T00:00:00Z";
+    const candidates = harness({ observations: { big, fresh, mid } });
+    const selection = openWordPressSelection({
+      candidates,
+      ledger: ledgerOf([]),
+    });
+    const policy = {
+      ...basePolicy,
+      candidateSlugs: ["big", "fresh", "mid"],
+      minimumActiveInstallations: 10_000,
+      maximumTargets: 3,
+    };
+    expect((await selection.select(policy)).map(({ slug }) => slug)).toEqual([
+      "big",
+      "mid",
+      "fresh",
+    ]);
+    expect(
+      (
+        await selection.select({ ...policy, ordering: "installs" as const })
+      ).map(({ slug }) => slug),
+    ).toEqual(["big", "mid", "fresh"]);
+    expect(
+      (
+        await selection.select({
+          ...policy,
+          ordering: "version-published" as const,
+        })
+      ).map(({ slug }) => slug),
+    ).toEqual(["mid", "fresh", "big"]);
+    expect(
+      (
+        await candidates.rank({
+          ...policy,
+          ordering: "version-published" as const,
+        })
+      ).map(({ slug }) => slug),
+    ).toEqual(["mid", "fresh", "big"]);
+  });
+
+  it("ships version-published as the production order", async () => {
+    const shipped = await loadWordPressSelectionPolicy();
+    expect(shipped.ordering).toBe("version-published");
+    expect(shipped.id).toBe("wordpress-selection-2026-11-01-version-published");
+  });
+});
+
 describe("freshness 180 days (#742)", () => {
   it("excludes an update 181 days old and keeps one 179 days old with the shipped policy", async () => {
     const stale = observation("stale", [], 100_000);
