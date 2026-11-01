@@ -77,6 +77,13 @@ export const WORDPRESS_DISCOVERY_SKILLS = [
     name: "wbh-recon",
     digest:
       "sha256:0a73e29d0ccdd850e04ad4b8f677af594c5263b36b0f5a9fe945170cc8955093",
+    status: "archived",
+  },
+  {
+    id: "wbh-recon-v3",
+    name: "wbh-recon",
+    digest:
+      "sha256:5563a8df752e112ea0bed7329bf1755b2cde9d4210e41b6802fb07270a2b6970",
     status: "current",
   },
 ] as const satisfies readonly WordPressDiscoverySkillRecord[];
