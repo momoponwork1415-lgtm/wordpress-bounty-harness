@@ -103,6 +103,10 @@ import {
   type ResolvedPriorLeads,
 } from "./wordpress-prior-leads.js";
 import {
+  rebuildWordPressPriorResearch,
+  resolveWordPressPriorResearch,
+} from "./wordpress-prior-research.js";
+import {
   DISCOVERY_RUN_MEMORY_MIB,
   openWordPressCampaignSession,
   readWordPressCampaignConfig,
@@ -639,6 +643,8 @@ function wordPressDiscoveryPromptText(options: {
   readonly runParameters: RunParameters;
   /** ADR 0044: the generated `## Prior leads` section of a named second Trial. */
   readonly priorLeadsSection?: string;
+  /** ADR 0048: the generated `## Prior research` section of a later Trial on the same target. */
+  readonly priorResearchSection?: string;
 }): string {
   const { objective, trustBoundary, config, lab, source } = options;
   const objectiveOnly = wordPressDiscoveryContractPlan(
@@ -651,6 +657,9 @@ function wordPressDiscoveryPromptText(options: {
     ...(options.priorLeadsSection === undefined
       ? []
       : [options.priorLeadsSection]),
+    ...(options.priorResearchSection === undefined
+      ? []
+      : [options.priorResearchSection]),
     "## Trust boundary",
     trustBoundary.text.trim(),
     `## Programme Boundary (${config.programmeBoundary.version})`,
@@ -833,6 +842,15 @@ async function planWordPressDiscovery(
     throw new Error(
       "The Snapshot is not one of the campaign's prior-leads targets",
     );
+  // ADR 0048: the latest earlier Trial's map and setup record for this target.
+  const priorResearch =
+    config.discovery.priorResearch === "same-target"
+      ? await resolveWordPressPriorResearch(state, boundaries.attachments, {
+          targetId: input.target.targetId,
+          snapshotDigest: snapshot.digest,
+          currentVersion: snapshot.target.version,
+        })
+      : undefined;
   // ADR 0043: the campaign's skills, pinned by digest, staged into the CLI's home.
   const skills = await Promise.all(
     (config.discovery.skills ?? []).map(loadWordPressDiscoverySkill),
@@ -846,6 +864,9 @@ async function planWordPressDiscovery(
       source,
       runParameters,
       ...(prior === undefined ? {} : { priorLeadsSection: prior.section }),
+      ...(priorResearch?.status === "passed"
+        ? { priorResearchSection: priorResearch.section }
+        : {}),
     });
   const now = state.clock().getTime();
   return {
@@ -913,6 +934,9 @@ async function planWordPressDiscovery(
             ? {}
             : { skills: skills.map(({ id, digest }) => ({ id, digest })) }),
           ...(prior === undefined ? {} : { priorLeads: prior.configuration }),
+          ...(priorResearch === undefined
+            ? {}
+            : { priorResearch: priorResearch.configuration }),
         },
         run: {
           runId: trialId,
@@ -924,6 +948,9 @@ async function planWordPressDiscovery(
           minimumActiveMs: wordPressMinimumActiveMs(config),
           resumePrompt,
           ...(skills.length === 0 ? {} : { skills: stagedSkills(skills) }),
+          ...(priorResearch?.status === "passed"
+            ? { priorResearch: priorResearch.files }
+            : {}),
           ...(lab?.exploration === undefined
             ? {}
             : {
@@ -1234,6 +1261,33 @@ async function resumeWordPressRun(
       };
     priorLeadsSection = resolved?.section;
   }
+  // ADR 0048: a segment receives the same `## Prior research` section its
+  // Trial recorded, rebuilt from the same source run and checked by digest.
+  // The files themselves come back with the restored notes archive.
+  let priorResearchSection: string | undefined;
+  const recordedPriorResearch = started.configuration.priorResearch;
+  if (
+    recordedPriorResearch !== undefined &&
+    "sourceRunId" in recordedPriorResearch
+  ) {
+    const rebuilt = await rebuildWordPressPriorResearch(
+      state,
+      boundaries.attachments,
+      recordedPriorResearch,
+      snapshot.target.version,
+    );
+    if (
+      rebuilt === undefined ||
+      `sha256:${createHash("sha256").update(rebuilt).digest("hex")}` !==
+        recordedPriorResearch.sectionDigest
+    )
+      return {
+        status: "refused",
+        reason: "prior-research-differs",
+        detail: `the Trial started with section ${recordedPriorResearch.sectionDigest}`,
+      };
+    priorResearchSection = rebuilt;
+  }
   const source = await boundaries.sourceFor(snapshot);
   // A segment enforces the values its Trial recorded, not the campaign's
   // current ones, so the copied configuration stays true (#548). Trials from
@@ -1261,6 +1315,7 @@ async function resumeWordPressRun(
       source,
       runParameters,
       ...(priorLeadsSection === undefined ? {} : { priorLeadsSection }),
+      ...(priorResearchSection === undefined ? {} : { priorResearchSection }),
     });
   const prompt = promptWith(undefined);
   const context = {

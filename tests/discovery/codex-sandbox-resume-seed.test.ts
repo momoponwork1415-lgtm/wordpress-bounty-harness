@@ -90,16 +90,17 @@ async function fixture() {
           if ((await stat(file).catch(() => undefined)) !== undefined)
             seen.sessions[path] = await readFile(file, "utf8");
         }
-        for (const path of ["notes/plan.md"]) {
+        for (const path of ["notes/plan.md", "prior/recon-map.md"]) {
           const file = join(researchDirectory!, ...path.split("/"));
           if ((await stat(file).catch(() => undefined)) !== undefined)
             seen.research[path] = await readFile(file, "utf8");
         }
         // The resumed CLI appends to the restored Root rollout, as a real run would.
-        await writeFile(
-          join(codexHome!, "sessions", ...ROOT_PATH.split("/")),
-          `${rootRollout}RESUMED_TURN\n`,
-        );
+        if (seen.sessions[ROOT_PATH] !== undefined)
+          await writeFile(
+            join(codexHome!, "sessions", ...ROOT_PATH.split("/")),
+            `${rootRollout}RESUMED_TURN\n`,
+          );
       }
       return {
         kind: "exited" as const,
@@ -155,6 +156,80 @@ const seed = {
   ],
   research: [{ path: "notes/plan.md", content: Buffer.from("plan\n") }],
 };
+
+/** The same command as a one-turn run without the notes directory. */
+function withoutNotesMount(full: CodexSandboxCommand): CodexSandboxCommand {
+  const {
+    minimumActiveMs: _active,
+    resumeArgs: _resumeArgs,
+    resumePrompt: _resumePrompt,
+    researchMount: _mount,
+    ...rest
+  } = full;
+  return rest;
+}
+
+describe("gVisor sandbox prior research seed (ADR 0048)", () => {
+  it("writes an earlier Trial's files under prior/ in the fresh notes directory before the run", async () => {
+    const { root, sandbox, command, seen } = await fixture();
+    try {
+      await sandbox.execute(
+        command(undefined, {
+          priorResearch: [
+            { path: "prior/recon-map.md", content: Buffer.from("# Map\n") },
+          ],
+        }),
+      );
+      expect(seen.research).toEqual({ "prior/recon-map.md": "# Map\n" });
+      expect(seen.sessions).toEqual({});
+      expect(await stat(seen.researchDirectory!).catch(() => "gone")).toBe(
+        "gone",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses prior files outside prior/, oversize, empty, repeated, beside a resume, or without the notes mount", async () => {
+    const { root, sandbox, command } = await fixture();
+    const file = {
+      path: "prior/recon-map.md",
+      content: Buffer.from("# Map\n"),
+    };
+    try {
+      for (const bad of [
+        command(undefined, { priorResearch: [] }),
+        command(undefined, {
+          priorResearch: [{ path: "recon-map.md", content: file.content }],
+        }),
+        command(undefined, {
+          priorResearch: [{ path: "prior/sql.md", content: file.content }],
+        }),
+        command(undefined, {
+          priorResearch: [
+            { path: "prior/../recon-map.md", content: file.content },
+          ],
+        }),
+        command(undefined, {
+          priorResearch: [{ path: file.path, content: Buffer.alloc(0) }],
+        }),
+        command(undefined, {
+          priorResearch: [
+            { path: file.path, content: Buffer.alloc(64 * 1024 + 1, 0x61) },
+          ],
+        }),
+        command(undefined, { priorResearch: [file, file] }),
+        command(seed, { priorResearch: [file] }),
+        withoutNotesMount(command(undefined, { priorResearch: [file] })),
+      ])
+        await expect(sandbox.execute(bad)).rejects.toThrow(
+          /not admitted|admitted/i,
+        );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("gVisor sandbox resume seed (ADR 0036)", () => {
   it("restores session files and notes at their relative paths and starts the runner on the thread", async () => {

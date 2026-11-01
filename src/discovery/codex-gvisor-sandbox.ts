@@ -84,6 +84,8 @@ const MAX_SESSION_HEADER_BYTES = 64 * 1024;
 const MAX_SESSION_BYTES = 60 * 1024 * 1024;
 const MAX_CAPTURE_BYTES = 300 * 1024 * 1024;
 const MAX_RESEARCH_BYTES = 8 * 1024 * 1024;
+/** ADR 0048: a passed prior file is whole and at most this size. */
+const MAX_PRIOR_RESEARCH_FILE_BYTES = 64 * 1024;
 const MAX_RESEARCH_ENTRIES = 256;
 const MAX_RESEARCH_DEPTH = 16;
 const MAX_RESEARCH_PATH_BYTES = 1024;
@@ -347,6 +349,25 @@ export function admittedResearchSeed(
     researchBytes += file.content.byteLength;
   }
   return researchBytes <= MAX_RESEARCH_BYTES;
+}
+
+/** ADR 0048: at most the two named files, each whole and bounded, under `prior/`. */
+export function admittedPriorResearch(
+  files: CodexSandboxResumeSeed["research"],
+): boolean {
+  if (files.length === 0 || files.length > 2) return false;
+  const paths = new Set<string>();
+  for (const file of files) {
+    if (
+      !/^prior\/(?:recon-map|lab-setup)\.md$/.test(file.path) ||
+      paths.has(file.path) ||
+      file.content.byteLength === 0 ||
+      file.content.byteLength > MAX_PRIOR_RESEARCH_FILE_BYTES
+    )
+      return false;
+    paths.add(file.path);
+  }
+  return true;
 }
 
 /** Writes restored notes into the fresh, empty notes directory; `wx` refuses any pre-existing file. */
@@ -818,6 +839,12 @@ export class GvisorCodexSandbox implements CodexSandbox {
       (command.resume !== undefined &&
         (command.minimumActiveMs === undefined ||
           !admittedResumeSeed(command.resume))) ||
+      // ADR 0048: prior notes need the notes mount, never ride on a resume,
+      // and sit under `prior/` only.
+      (command.priorResearch !== undefined &&
+        (command.researchMount === undefined ||
+          command.resume !== undefined ||
+          !admittedPriorResearch(command.priorResearch))) ||
       (command.resumeNotice !== undefined &&
         (command.resume === undefined ||
           command.resumeNotice.length === 0 ||
@@ -914,6 +941,12 @@ export class GvisorCodexSandbox implements CodexSandbox {
       // the same digest-verified source mounts and a new grant apply as always.
       if (command.resume !== undefined && researchDirectory !== undefined)
         await seedResume(codexHome, researchDirectory, command.resume);
+      // ADR 0048: an earlier Trial's notes, under `prior/`, before the agent starts.
+      if (
+        command.priorResearch !== undefined &&
+        researchDirectory !== undefined
+      )
+        await seedResearch(researchDirectory, command.priorResearch);
       // ADR 0043: the CLI lists `skills/<name>/SKILL.md` under its home to the model.
       if (command.skills !== undefined)
         await stageSkills(codexHome, command.skills);
