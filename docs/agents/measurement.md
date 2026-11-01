@@ -73,6 +73,7 @@ PR の「測った数字」に貼る列は固定する。
 - 比べる相手は同じ mode・同じ選定帯で `discovery.skills` を書かない Trial。campaign を 2 つ用意し、対象を交互に回して Trial 数をそろえる。
 - 数えるものは上の表と同じ（Finding / Trial、Lead / Trial、段 1b の成立、Lab で人間が `match` を記録した数、読んだ file 数、token、時間）。加えて research artifact を開いて `recon-map.md` の有無と大きさ、Corrections 節の行数を書く。`wbh-tools-v1` の腕では `tools/hooks.tsv`、`tools/sinks.tsv`、`tools/README.md` の有無と行数も書く。中身は読まない。
 - スキルは 1 本ずつ足す。`wbh-tools-v1` は `wbh-recon-v1` の上に乗せて測る（腕: recon のみ / recon + tools）。地図が無い Trial で tools だけを測らない。
+- `wbh-setup-v1`（#749）は Lab 付きの Trial（`discovery.lab: attached`）でだけ意味を持つ。腕は recon + tools / recon + tools + setup で、台帳の `labObserved` から Trial あたりの site への要求数（`requests`）、`observations`、`resets` を出し、Finding / Lead の `labObservations` が空でない数を数える。research artifact では `lab-setup.md` の有無、Objects 表の行数、Verified の 200 の数、Not built の行数を書く。中身は読まない。Lab の無い Trial にこのスキルを数えない。
 - 既定を有りに切り替えるかは DEVELOPMENT 第 5 節の 6 段で決める。形だけの PR（#682 の PR 1）は数字を持たず、所有者が探索の再開を指示した後に測る。
 
 ## 5c. Lead を入力にした第 2 Trial（ADR 0044）

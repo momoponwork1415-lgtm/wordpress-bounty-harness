@@ -50,3 +50,7 @@ Lead は「筋はよいが 1 歩足りない」ルートで、同じ固定ソー
 基準を足すと `setupDigest` が変わるので、この版より前に始まった run の再開は `lab-setup-differs` で止まる。これは想定内で、ランナー再起動の境界で切り替え、止まった run は新しい Trial としてやり直す。v3 は plugin の入口を閉じないので、探索の到達性の確認は変わらない。
 
 消し方: `setupFor` から `baseline` を外す。記録済みの `baseline` 欄は読み続ける。
+
+## 2026-11-01 追記 2: 探索 Lab の通常利用はスキルが作る（#749）
+
+第 2 Trial の探索 Lab は Harness の setup（core install、plugin の有効化、基準 `hosting-default-v3`、account、初期記事）までで止まる。plugin の通常利用（初回設定、object、公開ページ、訪問者や低権限者の data）は、探索スキル `wbh-setup-v1`（ADR 0043 追記 2）を `discovery.skills` に名指しして agent に作らせる。Harness は `## Lab` 節と setup を変えない。reset は従来どおり Harness の setup だけに戻すので、作り直しも agent の仕事である。消し方は ADR 0043 追記 2 と同じ。
