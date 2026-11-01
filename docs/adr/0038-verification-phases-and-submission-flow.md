@@ -261,3 +261,15 @@ v16-wide（42 Trial、Finding 0.3/Trial）と v17-wide（36 Trial、0）はど�
 計測: 2026-10-31 の本番の未決 Finding 262 件に v5 の項目を当てた結果は `要検証` 50 件（21 報告単位）、`除外` 212 件（36 対象）。除外のうち 2 件は、項目 11 の修正差分の確認で最新版が塞いでいると分かったもの。内訳は Git 外の `review-notes/exclusion-screen-2026-10-31.json` にある。出典対照表は `docs/reviews/2026-10-31-wbh-screen-v5-source-table.md`。
 
 消し方: `SKILL.md` を `versions/v4.2.md` に戻し、OPERATIONS 第 3 節の 0 行をこの追記の前の文に戻す。記録した `reject` は別の判断を記録すれば検証列に戻る。
+
+## 2026-11-01 追記 17: 別の Snapshot で見た同じ経路を `seen before` として表示する（#754）
+
+段 2 の群は Snapshot 内に閉じている。同じ plugin の別の版や再探索で前にも出た経路が再び出ると、人間は前の Snapshot の判定を知らずに読み直していた。本番台帳では、鍵の digest を共有する Snapshot の組が 5 組あり、同じ plugin は 1 組（pods 3.3.9.2 の再探索、11 鍵）、残り 4 組は helper の名前が重なっただけの別 plugin どうしだった。
+
+決定:
+
+- 台帳の読取器 `readFindingGroups` に `elsewhere` を足し、同じ鍵の digest を持つ別の Snapshot の群（識別子、Snapshot、件数）を返す。
+- `review` は、`target-selected` の targetId が同じ Snapshot の群だけを、`group` 行の下に `seen before: group <id>  <n> finding(s)  snapshot <digest>` として出す。対象の同一性は WordPress profile が台帳と `target-selection.json` から解き、汎用の review は渡された関数を呼ぶだけにする。
+- 順序には使わない。判定・判断・提出は Finding ごとのまま。台帳のスキーマは変えない。前の Snapshot の判定をどう使うかは、人間が `review decide` の reason を読んで決める。
+
+消し方: `elsewhere` と `seenBefore` と printer の行を消す。台帳に新しい event も項目も無い。

@@ -633,6 +633,7 @@ export function formatQueue(
     decisionReason: reason,
     duplicate: check,
     manualObservationEvidence,
+    seenBefore,
   } of queue.rows) {
     const head = `${item.status}  ${item.ref.campaignId}  finding ${item.ref.findingId}  ${item.category}`;
     const decision = `  decision: ${item.decision ?? "none"}${reason === null ? "" : ` (${reason})`}`;
@@ -650,12 +651,19 @@ export function formatQueue(
     }`;
     const verification = `  verification ${item.ref.verificationId ?? "none"}  snapshot ${item.ref.snapshotDigest}`;
     // #424: the overlap group orders the queue; each Finding is still decided on its own.
-    const group = `  group ${item.group.id}  ${item.group.size} finding(s)${item.group.representative ? "  representative" : ""}`;
+    const group = [
+      `  group ${item.group.id}  ${item.group.size} finding(s)${item.group.representative ? "  representative" : ""}`,
+      // The same route on another Snapshot of the same target; shown, never decided here.
+      ...seenBefore.map(
+        (seen) =>
+          `  seen before: group ${seen.id}  ${seen.size} finding(s)  snapshot ${seen.snapshotDigest}`,
+      ),
+    ];
     if (item.status === "contradicted")
       lines.push(
         head,
         verification,
-        group,
+        ...group,
         `  observer: ${item.judgeId}`,
         `  evidence: ${item.evidenceDigest} (${contentPath(item.evidenceDigest)})`,
         `  refutation: ${
@@ -667,12 +675,12 @@ export function formatQueue(
         duplicate,
       );
     else if (item.status === "not-verified")
-      lines.push(head, verification, group, decision, duplicate);
+      lines.push(head, verification, ...group, decision, duplicate);
     else if (item.status !== "incomplete")
       lines.push(
         head,
         verification,
-        group,
+        ...group,
         `  observer: ${item.judgeId}`,
         `  observed: ${
           Object.entries(item.conditions)
@@ -689,7 +697,7 @@ export function formatQueue(
       lines.push(
         head,
         verification,
-        group,
+        ...group,
         `  reason: ${item.reason}`,
         `  next: ${item.nextStep}`,
         ...(item.manualObservation === undefined

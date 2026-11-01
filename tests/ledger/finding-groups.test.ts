@@ -244,6 +244,86 @@ describe("finding groups in the ledger", () => {
     });
   });
 
+  it("lists the groups on other Snapshots that share a key, never one on its own Snapshot", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wbh-ledger-groups-"));
+    directories.push(root);
+    const ledger = new Ledger({
+      databasePath: join(root, "ledger.sqlite"),
+      artifactStore: new PrivateArtifactStore({
+        rootDirectory: join(root, "evidence"),
+        maxEntries: 10,
+        maxBytes: 100_000,
+      }),
+    });
+    const snapshotA = `sha256:${"a".repeat(64)}`;
+    const snapshotB = `sha256:${"b".repeat(64)}`;
+    const snapshotC = `sha256:${"c".repeat(64)}`;
+    // The same route on two versions (A, B); a second route on B that joins it
+    // there; an unrelated route on C; and the first route again on A.
+    for (const [campaignId, findingId, snapshotDigest, keys] of [
+      ["campaign-1", "first", snapshotA, ["plugin.php:handle"]],
+      [
+        "campaign-2",
+        "second",
+        snapshotB,
+        ["plugin.php:handle", "plugin.php:render"],
+      ],
+      ["campaign-3", "third", snapshotB, ["plugin.php:render"]],
+      ["campaign-4", "fourth", snapshotC, ["other.php:run"]],
+      ["campaign-5", "fifth", snapshotA, ["plugin.php:handle"]],
+    ] as const) {
+      const group = admitFindingGroup(ledger, {
+        campaignId,
+        findingId,
+        snapshotDigest,
+        keys: [...keys],
+      });
+      await ledger.append({
+        schemaVersion: 1,
+        campaignId,
+        snapshotDigest,
+        occurredAt: "2026-11-01T00:00:00Z",
+        identity: findingId,
+        type: "finding-recorded",
+        findingId,
+        runId: `run-${campaignId}`,
+        category: "sqli",
+        group,
+      });
+    }
+    const groups = readFindingGroups(ledger);
+    // Snapshot B's group is reported once, through its representative, with its size there.
+    expect(groups.elsewhere("campaign-1", "first")).toEqual([
+      {
+        id: canonicalDigest(["campaign-2", "second"]),
+        snapshotDigest: snapshotB,
+        size: 2,
+      },
+    ]);
+    // The route on A is seen from B; the Finding on the same Snapshot (fifth) is a group member, not "elsewhere".
+    expect(groups.elsewhere("campaign-2", "second")).toEqual([
+      {
+        id: canonicalDigest(["campaign-1", "first"]),
+        snapshotDigest: snapshotA,
+        size: 2,
+      },
+    ]);
+    // Only this Finding's own keys count, not its group's: `render` is on B alone.
+    expect(groups.elsewhere("campaign-3", "third")).toEqual([]);
+    expect(groups.elsewhere("campaign-4", "fourth")).toEqual([]);
+    expect(groups.elsewhere("campaign-9", "unknown")).toEqual([]);
+    // A campaign view answers for its own Findings and still sees the other campaigns' Snapshots.
+    const scoped = readFindingGroups(ledger, { campaignId: "campaign-5" });
+    expect(scoped.elsewhere("campaign-1", "first")).toEqual([]);
+    expect(scoped.elsewhere("campaign-5", "fifth")).toEqual([
+      {
+        id: canonicalDigest(["campaign-2", "second"]),
+        snapshotDigest: snapshotB,
+        size: 2,
+      },
+    ]);
+  });
+
   it("reads two groups that a later Finding joins as one, while each event keeps its admission id", async () => {
     const root = await mkdtemp(join(tmpdir(), "wbh-ledger-groups-"));
     directories.push(root);

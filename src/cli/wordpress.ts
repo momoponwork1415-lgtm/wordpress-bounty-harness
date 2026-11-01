@@ -1709,6 +1709,44 @@ async function runWordPressCampaign(
   });
 }
 
+/**
+ * The target a Snapshot was selected for, from its `target-selected` record
+ * and `target-selection.json`; undefined when no readable record names it.
+ * `review` uses it to show a Finding's route seen on another Snapshot of the
+ * same plugin, and not one of a different plugin sharing a helper's name.
+ */
+async function wordPressSnapshotTarget(
+  state: Pick<CliState, "ledger" | "store">,
+  snapshotDigest: string,
+): Promise<string | undefined> {
+  for (const { event } of state.ledger.readAll({ type: "target-selected" })) {
+    if (
+      event.type !== "target-selected" ||
+      event.snapshotDigest !== snapshotDigest
+    )
+      continue;
+    const ref = event.artifacts.find(
+      (artifact) => artifact.kind === "target-selection",
+    );
+    if (ref === undefined) continue;
+    const file = await state.store.readFile(
+      ref.digest,
+      "target-selection.json",
+      1024 * 1024,
+    );
+    if (file.status !== "resolved") continue;
+    try {
+      const parsed = wordPressTargetSelectionSchema.safeParse(
+        JSON.parse(file.bytes.toString("utf8")),
+      );
+      if (parsed.success) return parsed.data.targetId;
+    } catch {
+      // An unreadable record names no target; the next record may.
+    }
+  }
+  return undefined;
+}
+
 export function createWordPressCliProfile(
   options: WordPressCliProfileOptions,
 ): CliProfile {
@@ -1727,6 +1765,8 @@ export function createWordPressCliProfile(
             ledger: state.ledger,
             store: state.store,
           }),
+        snapshotTarget: (snapshotDigest) =>
+          wordPressSnapshotTarget(state, snapshotDigest),
         ...(options.wordfenceHistory === undefined
           ? {}
           : {

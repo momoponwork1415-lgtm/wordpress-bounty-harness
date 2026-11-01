@@ -3,10 +3,18 @@ import { rm } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 import {
+  canonicalDigest,
+  canonicalJson,
+} from "../../src/infrastructure/canonical-json.js";
+import { admitFindingGroup } from "../../src/ledger/finding-groups.js";
+import { wordPressTargetSelectionSchema } from "../../src/profiles/wordpress/selection/contracts.js";
+import {
   RECORDED_AT,
   recordedReviewState,
   type RecordedReviewState,
 } from "../support/recorded-review-state.js";
+
+const sha = (character: string) => `sha256:${character.repeat(64)}`;
 
 type State = RecordedReviewState;
 
@@ -157,6 +165,92 @@ async function sameNamedFindingsElsewhere(state: State): Promise<void> {
   await rm(state.store.contentPath(lost), { recursive: true });
 }
 
+/**
+ * One unverified Finding on another Snapshot: a campaign that selected
+ * `targetId` at `version`, froze that Snapshot and recorded a route whose
+ * group key is `key`.
+ */
+async function routeOnAnotherSnapshot(
+  state: State,
+  route: {
+    readonly campaignId: string;
+    readonly snapshotDigest: string;
+    readonly targetId: string;
+    readonly version: string;
+    readonly findingId: string;
+    readonly key: string;
+  },
+): Promise<void> {
+  const base = {
+    schemaVersion: 1 as const,
+    campaignId: route.campaignId,
+    snapshotDigest: route.snapshotDigest,
+    occurredAt: RECORDED_AT,
+  };
+  const slug = route.targetId.replace(/^wporg:/, "");
+  const selection = wordPressTargetSelectionSchema.parse({
+    targetId: route.targetId,
+    slug,
+    version: route.version,
+    score: 4.5,
+    selectedAt: RECORDED_AT,
+    policy: { id: "synthetic-pin", digest: sha("6") },
+    activeInstallations: 5000,
+    dependencyVersionPolicy: "pinned-only",
+    scoreBreakdown: { installations: 3.7, recency: 0.8, history: 0 },
+    observationRef: {
+      kind: "wordpress-org-target-observation-ref",
+      schemaVersion: 1,
+      id: `observation-${slug}`,
+      digest: sha("c"),
+    },
+    programmeRef: {
+      kind: "programme-eligibility-snapshot-ref",
+      schemaVersion: 1,
+      id: "wordfence-policy",
+      digest: sha("a"),
+    },
+  });
+  await append(state, {
+    ...base,
+    identity: `target-selected-${route.campaignId}`,
+    type: "target-selected",
+    selectionId: `${route.targetId}@${route.version}`,
+    artifacts: [
+      {
+        kind: "target-selection",
+        digest: await state.store.putFiles({
+          "target-selection.json": canonicalJson(selection),
+        }),
+      },
+    ],
+  });
+  await append(state, {
+    ...base,
+    identity: `snapshot-frozen-${route.campaignId}`,
+    type: "snapshot-frozen",
+    sourceDigest: sha("7"),
+    dependencyDigests: [],
+  });
+  await append(state, {
+    ...base,
+    identity: `${route.campaignId}-finding-${route.findingId}`,
+    type: "finding-recorded",
+    findingId: route.findingId,
+    runId: `run-${route.campaignId}`,
+    trialId: `run-${route.campaignId}`,
+    category: "account-takeover",
+    preconditionClass: "default",
+    artifacts: [],
+    group: admitFindingGroup(state.ledger, {
+      campaignId: route.campaignId,
+      snapshotDigest: route.snapshotDigest,
+      findingId: route.findingId,
+      keys: [route.key],
+    }),
+  });
+}
+
 /** The listing with the temporary state directory replaced, so it can be pinned. */
 async function listing(state: State, ...argv: string[]) {
   const listed = await state.run("review", ...argv);
@@ -259,6 +353,53 @@ describe("review listing on recorded history", () => {
       retry candidates by reason: none
       contradicted: 0  unverified: 2"
     `);
+  });
+
+  it("shows a route seen on another Snapshot of the same plugin, and not one of another plugin", async () => {
+    const state = await recordedReviewState({ verified: false });
+    const key = canonicalJson(["includes/synthetic.php", "synthetic_handler"]);
+    // Two versions of the recorded plugin share the route; a different plugin
+    // records the same file and function names and is not the same target.
+    await routeOnAnotherSnapshot(state, {
+      campaignId: "campaign-3",
+      snapshotDigest: sha("9"),
+      targetId: "wporg:synthetic-plugin",
+      version: "3.3.2",
+      findingId: "route-on-3-3-2",
+      key,
+    });
+    await routeOnAnotherSnapshot(state, {
+      campaignId: "campaign-4",
+      snapshotDigest: sha("e"),
+      targetId: "wporg:other-plugin",
+      version: "1.0.0",
+      findingId: "route-in-other-plugin",
+      key,
+    });
+    await routeOnAnotherSnapshot(state, {
+      campaignId: "campaign-5",
+      snapshotDigest: sha("f"),
+      targetId: "wporg:synthetic-plugin",
+      version: "3.3.3",
+      findingId: "route-on-3-3-3",
+      key,
+    });
+
+    const listed = await listing(state);
+    expect(
+      listed.split("\n").filter((line) => line.includes("seen before")),
+    ).toEqual([
+      `  seen before: group ${canonicalDigest(["campaign-5", "route-on-3-3-3"])}  1 finding(s)  snapshot ${sha("f")}`,
+      `  seen before: group ${canonicalDigest(["campaign-3", "route-on-3-3-2"])}  1 finding(s)  snapshot ${sha("9")}`,
+    ]);
+    // Each Finding keeps its own group and decision line; nothing is merged.
+    expect(listed).toContain(
+      `not-verified  campaign-4  finding route-in-other-plugin  account-takeover`,
+    );
+    // The campaign view still looks across campaigns for the same target.
+    expect(await listing(state, "--campaign", "campaign-5")).toContain(
+      `  seen before: group ${canonicalDigest(["campaign-3", "route-on-3-3-2"])}  1 finding(s)  snapshot ${sha("9")}`,
+    );
   });
 
   it("prints an unavailable observation and an empty queue", async () => {
