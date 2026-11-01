@@ -861,6 +861,7 @@ describe("review export", () => {
         // Carried forward from the decision before the new verification.
         duplicate: expect.objectContaining({ status: "no-match" }),
         manualObservationEvidence: null,
+        seenBefore: [],
       },
     ]);
     const latest = await exportReviewBundle({

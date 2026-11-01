@@ -117,6 +117,13 @@ export function admitFindingGroup(
   return { id: earlier[root]?.findingId ?? finding.findingId, keys };
 }
 
+/** A group on another Snapshot that shares a key digest with a Finding; display only. */
+export type FindingGroupElsewhere = {
+  readonly id: string;
+  readonly snapshotDigest: string;
+  readonly size: number;
+};
+
 /** Groups of the recorded Findings, recomputed from the key digests each event kept. */
 export function readFindingGroups(
   ledger: Ledger,
@@ -136,6 +143,13 @@ export function readFindingGroups(
   const placed = new Map(findings.map((event, index) => [refOf(event), index]));
   const indexOf = (ref: FindingRef) =>
     ref.findingId === undefined ? undefined : placed.get(refOf(ref));
+  const rootsByKey = new Map<string, Set<number>>();
+  for (const [index, event] of findings.entries())
+    for (const key of ledger.findingGroupKeyDigests(event)) {
+      let owners = rootsByKey.get(key);
+      if (owners === undefined) rootsByKey.set(key, (owners = new Set()));
+      owners.add(roots[index]!);
+    }
   return {
     /** The groups sharing a digest-only profile key with a Lead on this Snapshot. */
     matchingKeyDigests(
@@ -171,6 +185,32 @@ export function readFindingGroups(
       const root = roots[index]!;
       const id = publicGroupId(findings[root]!);
       return { id, size: sizes.get(root)!, representative: root === index };
+    },
+    /**
+     * The groups on other Snapshots that share a key digest with this
+     * Finding: the same route recorded on another version of the target, or
+     * in a re-exploration. The keys carry no target identity (a shared helper
+     * repeats across plugins), so the caller keeps only the Snapshots of the
+     * same target before showing them. Display only; decisions stay per Finding.
+     */
+    elsewhere(campaignId: string, findingId: string): FindingGroupElsewhere[] {
+      if (input.campaignId !== undefined && campaignId !== input.campaignId)
+        return [];
+      const index = indexOf({ campaignId, findingId });
+      if (index === undefined) return [];
+      const own = findings[index]!;
+      const matched = new Set<number>();
+      for (const key of ledger.findingGroupKeyDigests(own))
+        for (const root of rootsByKey.get(key) ?? [])
+          if (findings[root]!.snapshotDigest !== own.snapshotDigest)
+            matched.add(root);
+      return [...matched]
+        .sort((left, right) => left - right)
+        .map((root) => ({
+          id: publicGroupId(findings[root]!),
+          snapshotDigest: findings[root]!.snapshotDigest,
+          size: sizes.get(root)!,
+        }));
     },
     /** Representatives first in recorded order, then each group's other Findings, group by group. */
     order<T>(items: readonly T[], ref: (item: T) => FindingRef): T[] {
