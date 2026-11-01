@@ -4,7 +4,7 @@
 
 このディレクトリには、鍵、認証情報、答えの鍵、PoC、payloadを置かない。
 
-Labは公開済み二次言語 `fr_FR` と、その言語を使う管理者を設定する。修正版3.3.2は評価側で公式archiveのdigestをGit外にpinし、探索sourceへ渡さない（[TranslatePressベンチマーク](../../docs/TRANSLATEPRESS-BENCHMARK.md)）。
+Labは公開済み二次言語 `fr_FR` と、その言語を使う管理者を設定する。修正版3.3.2は評価側で公式archiveのdigestをGit外にpinし、探索sourceへ渡さない（TranslatePress ベンチマーク。文書は 2026-11-01 に削除し、tag `archive/pre-docs-rewrite-2026-11-01` に残る）。
 
 `campaign-short-managed-v4.json` と `campaign-wp2shell-bounty-v2.json` はADR 0017の過去比較用Root＋3設定。新規探索では起動できない。managed-v1 の `campaign-cooperative.json` と旧 `campaign-wp2shell-bounty.json`、`selection-luna-40.json` は 2026-10-19 に削除し、Git 履歴にだけ残る。
 

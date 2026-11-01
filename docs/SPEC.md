@@ -1,6 +1,6 @@
 # WordPressバグバウンティHarness 仕様書（新リポジトリ）
 
-版: v0.22、2026-10-19。設計判断はこの文書と [ADR](adr/) に置く。旧リポジトリの [Issue 221](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317) は経緯の資料であり、現在の探索主経路は [ADR 0029](adr/0029-single-wp2shell-cooperative-trial.md) と [ADR 0033](adr/0033-minimum-exploration-and-pinned-dependency-sources.md) に従う。[IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) は 2026-10-10 時点の作業計画の記録で、今の Step と作業順は [DEVELOPMENT.md](DEVELOPMENT.md) 第 2 節。TranslatePressでの最小ベンチマークと本番移行は [TRANSLATEPRESS-BENCHMARK.md](TRANSLATEPRESS-BENCHMARK.md)。
+版: v0.22、2026-10-19。設計判断はこの文書と [ADR](adr/) に置く。旧リポジトリの [Issue 221](https://github.com/momoponwork1415-lgtm/wordpress-harness/issues/221#issuecomment-6057678317) は経緯の資料であり、現在の探索主経路は [ADR 0029](adr/0029-single-wp2shell-cooperative-trial.md) と [ADR 0033](adr/0033-minimum-exploration-and-pinned-dependency-sources.md) に従う。今の作業順は [DEVELOPMENT.md](DEVELOPMENT.md) 第 2 節。TranslatePress での最小ベンチマークは役目を終え、文書は 2026-11-01 に削除した（tag `archive/pre-docs-rewrite-2026-11-01`）。
 
 ## 1. 目的と指標
 
@@ -195,7 +195,7 @@ WordPress profile は Finding の `configurationPrecondition` と Verifier attac
 
 ## 10. 評価
 
-TranslatePressの公開済み脆弱版・修正版で縦断経路を実証した記録は [TRANSLATEPRESS-BENCHMARK.md](TRANSLATEPRESS-BENCHMARK.md) に残す。現在の開発評価は単一のWP2Shell協調Trialと、本人発見の公開7件での再発見を扱う（ADR 0029、0027）。主指標は最新版の本番から得る。既知事例の再発見は配線と種別ごとの判定能力の証明であり、未知脆弱性の発見率を示さない。
+TranslatePressの公開済み脆弱版・修正版で縦断経路を実証した記録は、2026-11-01 に削除した文書として tag `archive/pre-docs-rewrite-2026-11-01` に残る。現在の開発評価は単一のWP2Shell協調Trialと、本人発見の公開7件での再発見を扱う（ADR 0029、0027）。主指標は最新版の本番から得る。既知事例の再発見は配線と種別ごとの判定能力の証明であり、未知脆弱性の発見率を示さない。
 
 ### 主指標（本番の台帳から、追加費用なし）
 
@@ -265,7 +265,7 @@ TranslatePressの公開済み開発対象を脆弱版と修正版で固定し、
 4. Findingが出たら新しいLabの独立VerifierとHarness判定器へ渡す。nonce証拠、HTTP記録、失敗時の `incomplete` 理由を保存する。同じ経路の修正版ではconfirmedが出ない。
 5. 上のゲートを満たしたら、最小の選定方針で公開中最新版の少数の本番探索を始める。confirmedなら最新版の同じSnapshotで独立確認し、Wordfenceを含む重複候補とscopeを照合する。最新版で成立しなければ提出候補にしない。
 6. 証拠付きの短い英語レポートJSONと再現パッケージを出し、人間がsetup manifestからLabを立てて自分の手で同じHTTP手順を再現する。レポート生成の完全自動化がまだ無い期間は、既存のdraft登録口を使って証拠から文案を作れる。
-7. 台帳からFinding、Lead、各agentの実行と使用量、検証結果、レビューの段数を読める。`pnpm check` と [テスト戦略](TEST-STRATEGY.md) の実環境ゲートを通す。
+7. 台帳からFinding、Lead、各agentの実行と使用量、検証結果、レビューの段数を読める。`pnpm check` を通す。
 
 本番探索への受入は、第10節のTranslatePressゲートと隔離・記録・最小選定方針。最初の外部提出への受入は、最新版の独立確認、重複・scope照合、証拠、英語文案、人間の手動再現と版・送信先を指定した承認まで。ベンチマークで確認した旧版の発見自体は提出しない。
 
