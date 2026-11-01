@@ -326,3 +326,19 @@ wide の Trial は、Root が登録簿に「全 sink の対象エントリ群を
 測った数字: 無し。所有者の決定で、比較の Trial を置かない。v20-wide の Trial は、所有者のチェックの後に本番で始め、ADR 0045 の分母（Codex 1 時間あたりの Lab 発火数と Wordfence の結果）で読む。agent に渡る文章なので `owner-approved` が要る（本文と日本語訳と出典対照表は [review 文書](../reviews/2026-11-01-wp2shell-bounty-v20-wide.md)）。
 
 消し方: v20-wide の行と file を消し、v14-wide の行を `current`（`mode: "wide"`）に戻し、2 つの campaign 設定の `promptId` を戻す。走った後なら v20-wide の行を `archived` にして本文を照合用に残す。
+
+## 2026-11-01 追記 19: v20-wide の stale な 2 文を消した v21-wide を `wide` の current にする（消すだけ、計測なし）
+
+v20-wide（追記 18）は v19-wide の文を消さずに保ったので、1 段落目の末尾「Runtime confirmation belongs only to the later, independent Harness-owned deterministic judge, which must observe the corresponding nonce canary outcome in a fresh Lab.」と 8 段落目の末尾「Runtime confirmation is decided later by the independent Harness judge, not by the discovery agents.」が残っていた。2 文とも Harness 所有の判定器と nonce canary を名指しするが、判定器と canary は ADR 0040 で削除し、確定の根拠は人間の `review observe` と `review decide --reproduced match` だけである（不変条件 3）。所有者は 2026-11-01 の確認文書（[owner-check](../reviews/2026-11-01-owner-check.md) §5）の推奨「消すだけの新版を出す」に「すべて推奨で」と答えた。
+
+決定:
+
+- `wp2shell-bounty-v21-wide` を `wide` の `current` にする。本文は 1 file（`prompts/wp2shell-bounty-v21-wide.md`）で、v20-wide から上の 2 文を消しただけである。語は足していない。digest は `sha256:211c22a613c5440946944d4590c3bde27bfe8e8665fb755b4ae8e7623d4d1398`、契約は v4、12 段落。全文と日本語訳は [review 文書](../reviews/2026-11-01-wp2shell-bounty-v21-wide.md) にある。
+- v20-wide は `archived` にして `mode` を外す。本番の Trial を 1 つも走らせる前に下ろした。本文と digest は登録簿に残す。
+- `src/profiles/wordpress/policy/campaign.json` と `examples/campaign-wide-20.json` の `promptId` を v21-wide にする。campaign 設定の `discovery.skills` の名指しは v20-wide と同じである。
+- ADR 0045 の凍結 5 の第 5 項「消す方向にしか触らない」の範囲内の変更であり、追記 1 の「AI はこの追記を根拠に次の新版を提案しない」に反しない。追記 1 は「言い換えの新版」を 1 回に限って許したもので、本追記は言い換えではなく削除である。
+- Harness の code は変えない。
+
+測った数字: 無し。所有者の決定で、比較の Trial を置かない。v21-wide の本番 Trial を ADR 0045 の分母で数え始める。agent に渡る文章なので `owner-approved` が要る。
+
+消し方: v21-wide の行と file を消し、v20-wide の行を `current`（`mode: "wide"`）に戻し、2 つの campaign 設定の `promptId` を戻す。走った後なら v21-wide の行を `archived` にして本文を照合用に残す。
