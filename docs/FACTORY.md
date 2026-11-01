@@ -6,7 +6,7 @@ software factory とは、人間が意図と制約を書き、agent が 1 工程
 
 ## 1. 2 つのループ
 
-この repo には 2 つのループがある。製品ループ（Harness が脆弱性を探し、人間が提出する）と工場ループ（AI が Harness を直し、人間が merge する）。製品ループの図は [DESIGN-DIAGRAMS.md](DESIGN-DIAGRAMS.md)。この文書は工場ループを描く。
+この repo には 2 つのループがある。製品ループ（Harness が脆弱性を探し、人間が提出する）と工場ループ（AI が Harness を直し、人間が merge する）。製品ループの流れは [SYSTEM.md](SYSTEM.md) に置く。この文書は工場ループを描く。
 
 ```mermaid
 flowchart LR

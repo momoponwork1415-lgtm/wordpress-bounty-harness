@@ -1,6 +1,6 @@
 # 台帳の読み方（AI 向け）
 
-台帳は `<state>/ledger.sqlite` の表 1 つ `ledger_events`。正本は [SPEC](../SPEC.md) §9、event の型は `src/ledger/index.ts`。図は [SYSTEM-DIAGRAMS](../SYSTEM-DIAGRAMS.md) 3.2〜3.4。
+台帳は `<state>/ledger.sqlite` の表 1 つ `ledger_events`。正本は [SPEC](../SPEC.md) §9、event の型は `src/ledger/index.ts`。図は [SYSTEM.md](../SYSTEM.md)。
 
 ## まず CLI
 

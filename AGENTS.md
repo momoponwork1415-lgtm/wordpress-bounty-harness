@@ -8,10 +8,8 @@
 2. [docs/adr/](docs/adr/) — 番号順に読む。設計の理由と、採らなかった選択肢。
 3. 全体を掴みたいときだけ読む。これらは規則を増やさない。
    - 流れ: [docs/DESIGN-WALKTHROUGH.md](docs/DESIGN-WALKTHROUGH.md)
-   - 動きとデータの図: [docs/SYSTEM-DIAGRAMS.md](docs/SYSTEM-DIAGRAMS.md)
    - 開発の流れ: [docs/FACTORY.md](docs/FACTORY.md)
-   - 当時の図: [docs/DESIGN-DIAGRAMS.md](docs/DESIGN-DIAGRAMS.md)（2026-10-13）と [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。現状との差は各文書の冒頭にある。
-4. [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) 第 2 節 — 今の Step、完了条件、凍結しているもの。[docs/LESSONS.md](docs/LESSONS.md) — 過去 4 世代の教訓。新しい設計案は、この 2 つに反していないかを先に見る。止めてある案は [docs/PARKING.md](docs/PARKING.md) にある。過去 4 世代の実験記録と取り込んだ原本は [docs/knowledge/](docs/knowledge/) にある。新しい問いを立てる前に、同じ問いが無いかを見る。
+4. [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) 第 2 節 — 今の Step、完了条件、凍結しているもの。[docs/LESSONS.md](docs/LESSONS.md) — 過去 4 世代の教訓。新しい設計案は、この 2 つに反していないかを先に見る。止めてある案は [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) 末尾の一覧にある。過去 4 世代の実験記録と取り込んだ原本は [docs/knowledge/](docs/knowledge/) にある。新しい問いを立てる前に、同じ問いが無いかを見る。
 
 ## 不変条件（SPEC.md 第 2 節）
 

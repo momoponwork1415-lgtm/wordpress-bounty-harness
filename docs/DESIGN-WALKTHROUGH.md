@@ -1,6 +1,6 @@
 # 設計の読み解き
 
-図から読みたい場合は [SYSTEM-DIAGRAMS.md](SYSTEM-DIAGRAMS.md)（[ARCHITECTURE.md](ARCHITECTURE.md) は当時の図）。[IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) は 2026-10-10 時点の記録で、今の Step は [DEVELOPMENT.md](DEVELOPMENT.md) 第 2 節。規則は [SPEC](SPEC.md) と [ADR](adr/) が正本。
+図は [SYSTEM.md](SYSTEM.md) に置く。2026-10 の図と 2026-10-10 時点の実装計画は 2026-11-01 に削除し、tag `archive/pre-docs-rewrite-2026-11-01` に残る。今の運用規則は [DEVELOPMENT.md](DEVELOPMENT.md) 第 2 節。規則は [SPEC](SPEC.md) と [ADR](adr/) が正本。
 
 ## 1つの対象が進む道
 

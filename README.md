@@ -8,7 +8,7 @@ WordPress プラグインの未知の脆弱性を AI が探し、判定器が `r
 2. [docs/SPEC.md](docs/SPEC.md) — 目的、不変条件、モジュール境界、受け渡し契約。
 3. [docs/adr/](docs/adr/) — 番号順。設計の理由と、採らなかった案。
 4. [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) 第 2 節と [docs/LESSONS.md](docs/LESSONS.md) — 今の Step と、過去の教訓。
-5. 全体の流れや図は、要るときだけ読む。[docs/DESIGN-WALKTHROUGH.md](docs/DESIGN-WALKTHROUGH.md)、[docs/DESIGN-DIAGRAMS.md](docs/DESIGN-DIAGRAMS.md)、[docs/SYSTEM-DIAGRAMS.md](docs/SYSTEM-DIAGRAMS.md)。
+5. 全体の流れは、要るときだけ読む。[docs/DESIGN-WALKTHROUGH.md](docs/DESIGN-WALKTHROUGH.md)。
 
 食い違ったときは SPEC と ADR が勝つ。
 
