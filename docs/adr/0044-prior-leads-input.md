@@ -42,3 +42,11 @@ Lead は「筋はよいが 1 歩足りない」ルートで、同じ固定ソー
 ## 消し方
 
 実装の PR を revert する（`discovery.priorLeads` のブロック、節の生成関数、`configuration.priorLeads` の書き込み）。この ADR と SPEC / AGENTS.md の例外の文を消す。台帳の既存 event は消さない。
+
+## 2026-11-01 追記: 探索 Lab も Lab 基準の上に立つ（#746）
+
+所有者の指示（2026-11-01「堅牢化した WordPress を常に起動できるようにする」「Wordfence が受け付けるものは制限しない」）で、第 2 Trial に付く探索 Lab も、検証 Lab と同じ基準 `hosting-default-v3`（#744）の上に立てる。campaign session の `setupFor` が基準を足し、`verificationSetupFor` は無くした。探索 Lab の `lab-provisioned` に `baseline: { id, digest }` が載る。
+
+基準を足すと `setupDigest` が変わるので、この版より前に始まった run の再開は `lab-setup-differs` で止まる。これは想定内で、ランナー再起動の境界で切り替え、止まった run は新しい Trial としてやり直す。v3 は plugin の入口を閉じないので、探索の到達性の確認は変わらない。
+
+消し方: `setupFor` から `baseline` を外す。記録済みの `baseline` 欄は読み続ける。

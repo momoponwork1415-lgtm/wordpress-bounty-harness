@@ -495,7 +495,13 @@ export async function runCampaignPipeline<
           status: provisioned.status === "ready" ? "ready" : "failed",
           purpose: "discovery",
           ...(provisioned.status === "ready"
-            ? { setupDigest: provisioned.handle.setupDigest }
+            ? {
+                setupDigest: provisioned.handle.setupDigest,
+                // #746: the exploration Lab names its base environment too.
+                ...(provisioned.handle.baseline === undefined
+                  ? {}
+                  : { baseline: provisioned.handle.baseline }),
+              }
             : {}),
           ...(provisioned.status === "ready"
             ? {}

@@ -1417,6 +1417,7 @@ async function resumeWithExplorationLab(options: {
       status: "ready",
       purpose: "discovery",
       setupDigest: handle.setupDigest,
+      ...(handle.baseline === undefined ? {} : { baseline: handle.baseline }),
     });
     if (handle.setupDigest !== previousSetupDigest)
       return {
@@ -1924,7 +1925,7 @@ export function createWordPressCliProfile(
           ledger: state.ledger,
           newId: state.newId,
           loadSnapshot: session.boundaries.loadSnapshot,
-          setupFor: session.verificationSetupFor,
+          setupFor: session.setupFor,
           verification: session.verification,
           // #699: the order and directory of each Finding sharing the Lab.
           beforeBatch: (findings) =>
@@ -2203,7 +2204,7 @@ export function createWordPressCliProfile(
           },
           freeze: boundaries.freeze,
           loadSnapshot: boundaries.loadSnapshot,
-          setupFor: session.verificationSetupFor,
+          setupFor: session.setupFor,
           verification: session.verification,
         },
       });
