@@ -1,3 +1,4 @@
+import { closeEgressRelays, type EgressClosure } from "./egress-relay.js";
 import { dirname, isAbsolute, join } from "node:path";
 
 import { z } from "zod";
@@ -81,6 +82,7 @@ import {
 } from "./wordpress-initialization.js";
 
 export type * from "./contract.js";
+export type { EgressClosure, EgressConnection } from "./egress-relay.js";
 export type {
   DockerRequest,
   DockerResult,
@@ -230,6 +232,11 @@ export interface WordPressLab extends LabProvisioner<
   /** Removes the `exposeToHost` gateway before teardown; true when it is gone. */
   withdrawFromHost(handle: WordPressLabHandle): Promise<boolean>;
   /**
+   * ADR 0046 条件 5: removes the Lab's outbound relays and confirms from inside
+   * the Lab that the destinations no longer answer. Null when the Lab has none.
+   */
+  closeEgress(handle: WordPressLabHandle): Promise<EgressClosure | null>;
+  /**
    * Lists Docker resources a crashed run left behind: Lab names and the given
    * patterns only. Removes them when asked; use only while no campaign runs.
    * With `labId`, only that Lab's resources (and its host gateway) are named.
@@ -248,7 +255,9 @@ export interface WordPressLab extends LabProvisioner<
 const labId = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const labLeftoverPatterns = (id: string) =>
   ({
-    containers: [new RegExp(`^wbh-${id}-(?:db|wp|canary|proxy|host|ctl)$`)],
+    containers: [
+      new RegExp(`^wbh-${id}-(?:db|wp|canary|proxy|host|ctl|egress[1-4])$`),
+    ],
     networks: [new RegExp(`^wbh-${id}-net$`)],
     volumes: [new RegExp(`^wbh-${id}-site$`)],
   }) as const;
@@ -283,6 +292,13 @@ function issueHandle(input: {
     internalIp,
     recorderIp,
     attackerAccounts: lab.attackerAccounts,
+    ...(lab.egressRelays.length === 0
+      ? {}
+      : {
+          egress: {
+            destinations: lab.egressRelays.map((relay) => relay.destination),
+          },
+        }),
     ...(lab.exploration && lab.controlIp !== undefined
       ? {
           exploration: {
@@ -486,6 +502,7 @@ export function openWordPressLab(options: {
         const { internalIp, recorderIp } = await startLabContainers(
           lab,
           attempts,
+          context?.egress,
         );
         // Probe the running runsc image before installing the target plugin.
         // PHP exits 43 only when the required extension is absent.
@@ -727,6 +744,13 @@ export function openWordPressLab(options: {
     async withdrawFromHost(handle) {
       const lab = sessionFor(handle);
       return lab === undefined ? false : withdrawWordPressLabFromHost(lab);
+    },
+    async closeEgress(handle) {
+      const lab = sessionFor(handle);
+      if (lab === undefined || lab.egressRelays.length === 0) return null;
+      const relays = lab.egressRelays;
+      lab.egressRelays = [];
+      return closeEgressRelays(lab, relays, () => new Date());
     },
     async markCapture(handle) {
       const lab = sessionFor(handle);

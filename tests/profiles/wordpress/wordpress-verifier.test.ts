@@ -40,6 +40,7 @@ async function fixture(options: {
   readonly setupPreconditions?: boolean;
   readonly outcome?: Outcome;
   readonly receiptRunId?: string;
+  readonly receiptReason?: string;
   readonly captureMarker?: string | null;
   readonly setupCloses?: boolean;
 }) {
@@ -108,6 +109,7 @@ async function fixture(options: {
               options.outcome?.status === "transport-failed"
                 ? "incomplete"
                 : "completed",
+            ...(options.receiptReason ? { reason: options.receiptReason } : {}),
           },
           outcome: options.outcome ?? {
             status: "files",
@@ -358,6 +360,21 @@ describe("WordPressVerifier.attempt with a non-Codex transport", () => {
       expect(privateEvidence.bytes.toString("utf8")).toBe(privateDetail);
     expect(JSON.stringify(attempt)).not.toContain(privateDetail);
     expect(JSON.stringify(f.ledger.read({}))).not.toContain(privateDetail);
+  });
+
+  it("names an unclosed outbound relay by its code without copying the diagnostic (ADR 0046)", async () => {
+    const privateDetail =
+      "handoff: The Lab's outbound relay could not be confirmed closed";
+    const f = await fixture({
+      setupPreconditions: true,
+      receiptReason: "egress-open",
+      outcome: { status: "incomplete", nextStep: privateDetail },
+    });
+    const attempt = await f.attempt();
+    expect(attempt).toMatchObject({ status: "incomplete", reason: "recipe" });
+    if (attempt.status !== "incomplete") return;
+    expect(attempt.nextStep).toMatch(/^egress-open:sha256:[a-f0-9]{64}$/);
+    expect(JSON.stringify(f.ledger.read({}))).not.toContain("relay could not");
   });
 
   it("keeps an unknown handoff diagnostic private", async () => {

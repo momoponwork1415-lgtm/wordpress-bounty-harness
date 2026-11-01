@@ -42,3 +42,17 @@ ADR 0041 は 2026-10-26 に所有者が承認した一回限りの実験を記�
 ## 消し方
 
 この ADR と SPEC・AGENTS.md の参照を revert する。案件ごとの承認に戻る。Private Evidence の記録は残す。
+
+## 2026-11-01 追記 1: 出口の中継器を Harness が持つ
+
+所有者は 2026-11-01 の開発計画（docs/reviews/2026-11-01-development-plan.md §2.1）で「中継器を Harness に作る」を承認した。6 条件のうち Harness が機械的に満たせるのは、出口の固定（条件 2）、攻撃入力の前の停止と確認（条件 5）、記録（条件 6）の 3 つである。これらを `verify next --handoff` と `review reverify --handoff` の `--egress-plan <path>` で行う。
+
+- **接続計画の様式**は JSON（`schema: "wbh-egress-plan/v1"`）で、`campaignId`、`findingId`、`destinations`（1〜4 件。小文字の固定ホスト名と 443 か 80。ワイルドカード、アドレス表記、重複は拒む）、`reason`（500 文字まで）の 4 項目だけを持つ。資格情報を入れる欄は無く、知らない項目があれば読まない。計画が名指す campaign と Finding がコマンドと違えば、Lab を立てる前に止める。
+- **出口**は宛先ごとに 1 台の中継 container（`wbh-<labId>-egress<n>`、runsc、Lab の network と bridge の両方に接続）で、WordPress container からはその宛先ホスト名だけがこの中継器に解決される。中継器は接続ごとの開始・終了時刻と転送量を記録する。それ以外の宛先への通信経路は、通常の検証 Lab と同じく無い。
+- **停止**は skill が `setup-done` を置いた直後、HTTP 捕捉と Lab 状態の基線を取り直す前に行う。中継器を消し、Lab の中から宛先へ接続できないことを確かめる。確かめられなければ 理由コード `egress-open` の `incomplete` にし、`attack.json` を置かない。
+- **記録**は handoff の run receipt（Private Evidence）に `egress`（宛先、停止時刻、接続ごとの時刻と転送量、停止確認）として残し、台帳の `lab-provisioned` には宛先だけを `egress.destinations` に書く。
+- **条件 3（公開入口）と条件 4（資格情報）は Harness の外に残す。** 公開入口は OPERATIONS 第 3 節の手順で AI 操作役が案件ごとに開閉し、資格情報は所有者が自分で入れる。Harness がこの 2 つを持たない理由は、入口の開閉は宛先サービスごとに形が違い、資格情報は不変条件 8 で Harness に持ち込まないからである。
+
+### 消し方
+
+`--egress-plan` と `src/lab/egress-plan.ts`、`src/profiles/wordpress/lab/egress-relay.ts`、`lab-provisioned.egress` を revert する。台帳の既存 event の `egress` は読み続ける。手順は第 3 節の「AI 操作役が案件ごとに用意する」に戻る。

@@ -1164,6 +1164,38 @@ describe("Ledger public interface", () => {
     ).toMatchObject({ result: { status: "runtime-confirmed" } });
   });
 
+  it("records a verification Lab's relay destinations on lab-provisioned (ADR 0046)", async () => {
+    const { ledger } = await fixture();
+    const appended = await ledger.append({
+      ...common("lab-with-relay"),
+      type: "lab-provisioned",
+      labId: "lab-relay",
+      status: "ready",
+      purpose: "verification",
+      egress: { destinations: [{ host: "api.example.test", port: 443 }] },
+    });
+    expect(appended.status).toBe("appended");
+    const read = ledger
+      .readAll({ type: "lab-provisioned" })
+      .map(({ event }) => event)
+      .find(
+        (event) =>
+          event.type === "lab-provisioned" && event.labId === "lab-relay",
+      );
+    expect(read).toMatchObject({
+      egress: { destinations: [{ host: "api.example.test", port: 443 }] },
+    });
+    await expect(
+      ledger.append({
+        ...common("lab-with-bad-relay"),
+        type: "lab-provisioned",
+        labId: "lab-relay-2",
+        status: "ready",
+        egress: { destinations: [] },
+      } as never),
+    ).rejects.toThrow();
+  });
+
   it("derives the complete campaign and category funnel without counting setup failures", async () => {
     const { ledger, artifactStore } = await fixture();
     const proof = await evidence(artifactStore);

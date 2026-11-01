@@ -1,3 +1,7 @@
+import {
+  readLabEgressPlanFile,
+  type LabEgressPlan,
+} from "../lab/egress-plan.js";
 import { z } from "zod";
 
 import { lstat, readFile, writeFile } from "node:fs/promises";
@@ -279,6 +283,8 @@ export interface CliProfile {
         readonly directory: string;
         readonly httpPort: number;
         readonly databasePort: number;
+        /** ADR 0046: relay destinations open until `setup-done`. */
+        readonly egress?: LabEgressPlan;
       };
       /**
        * The Findings the operator named, outside the queue's retry rules; two
@@ -349,6 +355,8 @@ export interface CliProfile {
         readonly directory: string;
         readonly httpPort: number;
         readonly databasePort: number;
+        /** ADR 0046: relay destinations open until `setup-done`. */
+        readonly egress?: LabEgressPlan;
       };
       /** Read a confirmed route from a separate campaign without writing to it. */
       readonly referenceCampaignId?: string;
@@ -620,6 +628,36 @@ export function formatFunnel(funnel: CampaignFunnel): string[] {
     );
   }
   return lines;
+}
+
+/**
+ * ADR 0046: reads the operator's relay plan and binds it to the one Finding
+ * the command names; the Lab receives the destinations alone.
+ */
+async function egressPlanFor(
+  path: string | undefined,
+  finding:
+    { readonly campaignId: string; readonly findingId: string } | undefined,
+): Promise<LabEgressPlan | undefined> {
+  if (path === undefined) return undefined;
+  if (finding === undefined)
+    throw new UsageError("--egress-plan needs --campaign and --finding");
+  let plan: Awaited<ReturnType<typeof readLabEgressPlanFile>>;
+  try {
+    plan = await readLabEgressPlanFile(resolve(path));
+  } catch (error: unknown) {
+    throw new UsageError(
+      error instanceof Error ? error.message : "The egress plan is invalid",
+    );
+  }
+  if (
+    plan.campaignId !== finding.campaignId ||
+    plan.findingId !== finding.findingId
+  )
+    throw new UsageError(
+      "The egress plan names another campaign or Finding than the command",
+    );
+  return { destinations: plan.destinations };
 }
 
 export function formatQueue(
@@ -1764,12 +1802,13 @@ const COMMANDS: readonly Command[] = [
     name: "review reverify",
     required: ["campaign", "finding", "config"],
     usage: [
-      "review reverify --campaign <id> --finding <id> --config <path> [--version <target-version>] [--resnapshot-dependencies] [--handoff <dir> [--port <n>] [--db-port <n>]]",
+      "review reverify --campaign <id> --finding <id> --config <path> [--version <target-version>] [--resnapshot-dependencies] [--handoff <dir> [--port <n>] [--db-port <n>] [--egress-plan <path>]]",
     ],
     options: {
       campaign: STR,
       config: STR,
       "db-port": STR,
+      "egress-plan": STR,
       finding: STR,
       handoff: STR,
       port: STR,
@@ -1793,11 +1832,17 @@ const COMMANDS: readonly Command[] = [
         (values.port !== undefined || values["db-port"] !== undefined)
       )
         throw new UsageError("--port and --db-port require --handoff");
+      if (values["egress-plan"] !== undefined && values.handoff === undefined)
+        throw new UsageError("--egress-plan requires --handoff");
       integerOption(values.port, "port", 0, 65535);
       integerOption(values["db-port"], "db-port", 0, 65535);
     },
     handler: async ({ values, state, environment, io }) => {
       const version = values.version;
+      const egress = await egressPlanFor(values["egress-plan"], {
+        campaignId: required(values.campaign, "campaign"),
+        findingId: required(values.finding, "finding"),
+      });
       const input = {
         campaignId: required(values.campaign, "campaign"),
         findingId: required(values.finding, "finding"),
@@ -1818,6 +1863,7 @@ const COMMANDS: readonly Command[] = [
                   0,
                   65535,
                 ),
+                ...(egress === undefined ? {} : { egress }),
               },
             }),
       };
@@ -1832,12 +1878,13 @@ const COMMANDS: readonly Command[] = [
     name: "verify next",
     required: ["config"],
     usage: [
-      "verify next --config <path> --handoff <dir> [--campaign <id> [--finding <id>[,<id>...]]] [--port <n>] [--db-port <n>] [--hold-minutes <n>]",
+      "verify next --config <path> --handoff <dir> [--campaign <id> [--finding <id>[,<id>...]]] [--port <n>] [--db-port <n>] [--hold-minutes <n>] [--egress-plan <path>]",
     ],
     options: {
       campaign: STR,
       config: STR,
       "db-port": STR,
+      "egress-plan": STR,
       // #699: two to five comma-separated Findings of one Snapshot share one Lab.
       finding: STR,
       handoff: STR,
@@ -1859,6 +1906,14 @@ const COMMANDS: readonly Command[] = [
         if (named.length > 5)
           throw new UsageError("verify next names at most 5 Findings");
       }
+      // ADR 0046: a relay plan belongs to exactly one named Finding.
+      if (
+        values["egress-plan"] !== undefined &&
+        (values.finding === undefined || values.finding.includes(","))
+      )
+        throw new UsageError(
+          "--egress-plan needs --campaign and exactly one --finding",
+        );
       integerOption(values.port, "port", 0, 65535);
       integerOption(values["db-port"], "db-port", 0, 65535);
       if (integerOption(values["hold-minutes"], "hold-minutes", 30, 1440) < 1)
@@ -1867,6 +1922,12 @@ const COMMANDS: readonly Command[] = [
     handler: async ({ values, state, environment, io }) => {
       if (environment.profile.verifyNext === undefined)
         throw new Error("verify next needs a verification profile");
+      const egress = await egressPlanFor(
+        values["egress-plan"],
+        values.campaign === undefined || values.finding === undefined
+          ? undefined
+          : { campaignId: values.campaign, findingId: values.finding },
+      );
       const summary = await environment.profile.verifyNext(state, {
         ...(values.campaign === undefined
           ? {}
@@ -1876,6 +1937,7 @@ const COMMANDS: readonly Command[] = [
           directory: resolve(required(values.handoff, "handoff")),
           httpPort: integerOption(values.port, "port", 0, 65535),
           databasePort: integerOption(values["db-port"], "db-port", 0, 65535),
+          ...(egress === undefined ? {} : { egress }),
         },
         ...(values.finding === undefined
           ? {}

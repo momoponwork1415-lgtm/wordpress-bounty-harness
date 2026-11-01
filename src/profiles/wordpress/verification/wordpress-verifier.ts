@@ -121,6 +121,8 @@ const HANDOFF_RECEIPT_CODES = new Set([
   "abort",
   "timeout",
   "setup-boundary",
+  // ADR 0046: the Lab's outbound relay could not be confirmed closed at setup-done.
+  "egress-open",
 ]);
 
 /** Whitelist transport control codes; never copy an agent or Lab diagnostic into the result. */

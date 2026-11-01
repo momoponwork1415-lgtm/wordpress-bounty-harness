@@ -309,18 +309,27 @@ async function fixture(
             stdout: php?.runningVersion ?? "8.3.35",
             stderr: "",
           };
+        if (verb === "logs")
+          return {
+            exitCode: 0,
+            stdout:
+              '{"openedAt":"2026-11-01T00:00:00.000Z","closedAt":"2026-11-01T00:00:01.000Z","bytesIn":12,"bytesOut":34}\nnot json\n',
+            stderr: "",
+          };
         if (request.args[0] === "inspect")
           return {
             exitCode: 0,
-            stdout: request.args.at(-1)?.endsWith("-db")
-              ? "172.20.0.3"
-              : request.args.at(-1)?.endsWith("-proxy")
-                ? "172.20.0.4"
-                : request.args.at(-1)?.endsWith("-canary")
-                  ? "172.20.0.5"
-                  : request.args.at(-1)?.endsWith("-ctl")
-                    ? "172.20.0.130"
-                    : "172.20.0.2",
+            stdout: request.args.at(-1)?.endsWith("-egress1")
+              ? "172.20.0.9"
+              : request.args.at(-1)?.endsWith("-db")
+                ? "172.20.0.3"
+                : request.args.at(-1)?.endsWith("-proxy")
+                  ? "172.20.0.4"
+                  : request.args.at(-1)?.endsWith("-canary")
+                    ? "172.20.0.5"
+                    : request.args.at(-1)?.endsWith("-ctl")
+                      ? "172.20.0.130"
+                      : "172.20.0.2",
             stderr: "",
           };
         if (request.args[0] === "exec" && request.args[1]?.endsWith("-proxy")) {
@@ -452,6 +461,88 @@ async function fixture(
 }
 
 describe("WordPress gVisor Lab", () => {
+  it("starts one relay per plan destination before WordPress, resolves the host to it, and closes it with a confirmation probe (ADR 0046)", async () => {
+    const { lab, snapshot, setup, commands, docker } = await fixture();
+    const provisioned = await lab.provision(snapshot, setup, {
+      purpose: "verification",
+      egress: { destinations: [{ host: "api.example.test", port: 443 }] },
+    });
+    expect(provisioned.status).toBe("ready");
+    if (provisioned.status !== "ready") return;
+    const relay = `wbh-${provisioned.handle.id}-egress1`;
+    const create = commands.findIndex(
+      ({ args }) => args[0] === "create" && args.includes(relay),
+    );
+    const wordpress = commands.findIndex(
+      ({ args }) =>
+        args[0] === "run" && args.includes(`wbh-${provisioned.handle.id}-wp`),
+    );
+    expect(create).toBeGreaterThan(-1);
+    // The relay is a runsc forwarder on the bridge, joined to the Lab network, then started.
+    expect(commands[create]!.args).toEqual(
+      expect.arrayContaining([
+        "--runtime=runsc",
+        "--network",
+        "bridge",
+        "--read-only",
+        "--cap-drop=ALL",
+        "--env",
+        "WBH_EGRESS_HOST=api.example.test",
+        "WBH_EGRESS_PORT=443",
+      ]),
+    );
+    expect(commands[create]!.args).not.toContain("--publish");
+    expect(
+      commands
+        .slice(create)
+        .findIndex(
+          ({ args }) => args[0] === "network" && args[1] === "connect",
+        ),
+    ).toBeGreaterThan(-1);
+    // WordPress starts after the relay and resolves the destination to it.
+    expect(wordpress).toBeGreaterThan(create);
+    expect(commands[wordpress]!.args).toContain(
+      "--add-host=api.example.test:172.20.0.9",
+    );
+    // The handle names the destinations only; the ledger copies them from here.
+    expect(provisioned.handle.egress).toEqual({
+      destinations: [{ host: "api.example.test", port: 443 }],
+    });
+    expect(docker.containers.has(relay)).toBe(true);
+
+    const closed = await lab.closeEgress(provisioned.handle);
+    expect(closed).toMatchObject({
+      destinations: [{ host: "api.example.test", port: 443 }],
+      unreachableConfirmed: true,
+      connections: [
+        {
+          destination: { host: "api.example.test", port: 443 },
+          openedAt: "2026-11-01T00:00:00.000Z",
+          closedAt: "2026-11-01T00:00:01.000Z",
+          bytesIn: 12,
+          bytesOut: 34,
+        },
+      ],
+    });
+    expect(docker.containers.has(relay)).toBe(false);
+    // The probe runs inside WordPress, after the relay is gone.
+    const removal = commands.findIndex(
+      ({ args }) => args[0] === "rm" && args.includes(relay),
+    );
+    const probe = commands.findIndex(
+      ({ args }) =>
+        args[0] === "exec" &&
+        args[2] === "php" &&
+        args.includes("api.example.test"),
+    );
+    expect(probe).toBeGreaterThan(removal);
+    // A second close has nothing to do; a Lab without a plan never had relays.
+    expect(await lab.closeEgress(provisioned.handle)).toBeNull();
+    expect(await lab.teardown(provisioned.handle)).toMatchObject({
+      status: "removed",
+    });
+  });
+
   it("checks the active PHP version against frozen source without installing it as a plugin", async () => {
     const { lab, snapshot, setup, commands } = await fixture(
       "ready",
