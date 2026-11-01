@@ -1,0 +1,835 @@
+<title>Bounty Harness 流れ図</title>
+<meta name="claude:viewport-fit-sides" content="cover" />
+<link
+  rel="stylesheet"
+  href="https://fonts.googleapis.com/css2?family=Shippori+Mincho+B1:wght@700&family=Noto+Sans+JP:wght@400;500;700&display=swap"
+/>
+<style>
+  /* Layout: one wide figure (3 lanes × 6 stages) with a caption, then a second figure for the cross-version loop */
+  :root {
+    --bg: #f5f7fa;
+    --surface: #ffffff;
+    --fg: #1b2430;
+    --muted: #5b6878;
+    --line: #c9d2dd;
+    --accent: #b4521a;
+    --accent-soft: #fbe9dd;
+    --display: "Shippori Mincho B1", "Hiragino Mincho ProN", "Yu Mincho", serif;
+    --body: "Noto Sans JP", "Hiragino Sans", "Yu Gothic", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #111720;
+      --surface: #192230;
+      --fg: #e4e9f0;
+      --muted: #9aa7b8;
+      --line: #3a4758;
+      --accent: #f0945c;
+      --accent-soft: #3a2415;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #111720;
+    --surface: #192230;
+    --fg: #e4e9f0;
+    --muted: #9aa7b8;
+    --line: #3a4758;
+    --accent: #f0945c;
+    --accent-soft: #3a2415;
+    color-scheme: dark;
+  }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--body);
+    font-size: 15px;
+    line-height: 1.8;
+    padding-block: 28px 72px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  main {
+    max-width: 1240px;
+    margin: 0 auto;
+  }
+  h1 {
+    font-family: var(--display);
+    font-size: 1.8rem;
+    margin: 0;
+    line-height: 1.3;
+    text-wrap: balance;
+  }
+  h2 {
+    font-family: var(--display);
+    font-size: 1.25rem;
+    margin: 2.6rem 0 0.4rem;
+  }
+  p {
+    margin: 0.7rem 0;
+    max-width: 72ch;
+  }
+  .eyebrow {
+    font-size: 0.78rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 500;
+  }
+  figure {
+    margin: 1.2rem 0 0;
+  }
+  .fig {
+    overflow-x: auto;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 12px;
+  }
+  .fig svg {
+    display: block;
+    height: auto;
+    max-width: 100%;
+    min-width: 1120px;
+    color: var(--fg);
+  }
+  .fig.small svg {
+    min-width: 720px;
+  }
+  figcaption {
+    font-size: 0.88rem;
+    color: var(--muted);
+    margin-top: 0.6rem;
+    max-width: 80ch;
+  }
+  .star {
+    color: var(--accent);
+    font-weight: 700;
+  }
+  ul {
+    padding-left: 1.3rem;
+    max-width: 80ch;
+  }
+  li {
+    margin: 0.25rem 0;
+  }
+  code {
+    font-family: ui-monospace, "IBM Plex Mono", Consolas, monospace;
+    font-size: 0.86em;
+    background: var(--accent-soft);
+    padding: 0.05em 0.35em;
+    border-radius: 3px;
+  }
+  footer {
+    margin-top: 2.5rem;
+    font-size: 0.82rem;
+    color: var(--muted);
+  }
+</style>
+
+<main>
+  <div class="eyebrow">2026-11-01 夜 · 6 段の確認を終えた時点</div>
+  <h1>Bounty Harness 流れ図</h1>
+  <p>
+    横が段、縦が「誰が持つか」。上の段から下の段へデータが流れ、矢印の文字がその中身。<span
+      class="star"
+      >★</span
+    >
+    と色付きの枠は今夜の決定で変わった所。
+  </p>
+
+  <figure>
+    <div class="fig">
+      <svg
+        viewBox="0 0 1660 660"
+        role="img"
+        aria-label="選定から提出・転帰までの 6 段を、Harness・AI・人間の 3 つの行に分けて描いた流れ図。Harness の行で対象と Finding が左から右へ流れ、各段で AI と人間が何を受け取り何を返すかを縦の矢印で示す。転帰は検証の規則へ戻り、選定と探索には戻らない。"
+        font-family="Noto Sans JP, Hiragino Sans, system-ui, sans-serif"
+        font-size="13"
+      >
+        <defs>
+          <marker
+            id="ar"
+            viewBox="0 0 10 10"
+            refX="9"
+            refY="5"
+            markerWidth="8"
+            markerHeight="8"
+            orient="auto-start-reverse"
+          >
+            <path d="M0,0 L10,5 L0,10 z" fill="currentColor" />
+          </marker>
+          <marker
+            id="ar-acc"
+            viewBox="0 0 10 10"
+            refX="9"
+            refY="5"
+            markerWidth="8"
+            markerHeight="8"
+            orient="auto-start-reverse"
+          >
+            <path d="M0,0 L10,5 L0,10 z" style="fill: var(--accent)" />
+          </marker>
+        </defs>
+
+        <!-- lane backgrounds -->
+        <rect
+          x="0"
+          y="48"
+          width="1660"
+          height="212"
+          fill="currentColor"
+          opacity="0.035"
+        />
+        <rect
+          x="0"
+          y="458"
+          width="1660"
+          height="142"
+          fill="currentColor"
+          opacity="0.035"
+        />
+        <!-- lane labels -->
+        <g fill="currentColor" font-weight="700" font-size="14">
+          <text x="16" y="150">Harness</text>
+          <text x="16" y="168" font-size="11" font-weight="400" opacity="0.75">
+            制御・記録
+          </text>
+          <text x="16" y="355">AI</text>
+          <text x="16" y="373" font-size="11" font-weight="400" opacity="0.75">
+            目的文・スキル
+          </text>
+          <text x="16" y="525">人間</text>
+          <text x="16" y="543" font-size="11" font-weight="400" opacity="0.75">
+            確定・外部行動
+          </text>
+        </g>
+        <!-- stage titles -->
+        <g
+          fill="currentColor"
+          font-weight="700"
+          font-size="15"
+          text-anchor="middle"
+        >
+          <text x="220" y="30">1 選定</text>
+          <text x="480" y="30">2 Snapshot</text>
+          <text x="740" y="30">3 探索</text>
+          <text x="1000" y="30">4 出口</text>
+          <text x="1260" y="30">5 検証</text>
+          <text x="1520" y="30">6 提出・転帰</text>
+        </g>
+
+        <!-- ===== Harness lane boxes ===== -->
+        <g fill="none" stroke="currentColor" stroke-width="1.2">
+          <rect
+            x="120"
+            y="60"
+            width="200"
+            height="125"
+            rx="4"
+            style="stroke: var(--accent); stroke-width: 2"
+          />
+          <rect x="380" y="60" width="200" height="110" rx="4" />
+          <rect
+            x="640"
+            y="60"
+            width="200"
+            height="160"
+            rx="4"
+            style="stroke: var(--accent); stroke-width: 2"
+          />
+          <rect x="900" y="60" width="200" height="110" rx="4" />
+          <rect x="1160" y="60" width="200" height="125" rx="4" />
+          <rect x="1420" y="60" width="200" height="95" rx="4" />
+        </g>
+        <g fill="currentColor">
+          <text x="130" y="80" font-weight="700">選定</text>
+          <text x="130" y="100">WordPress.org 人気順を全件</text>
+          <text x="130" y="117">install ≥ 5,000・更新 180 日内</text>
+          <text x="130" y="134" style="fill: var(--accent)" font-weight="700">
+            ★ 公開日の新しい順
+          </text>
+          <text x="130" y="151">1 batch 10 件・同版 1 回</text>
+          <text x="130" y="168">版が上がれば列へ戻す</text>
+
+          <text x="390" y="80" font-weight="700">Snapshot</text>
+          <text x="390" y="100">plugin zip（stable 版）</text>
+          <text x="390" y="117">本体は最新安定版（ADR 0047）</text>
+          <text x="390" y="134">PHP・依存 plugin を固定</text>
+          <text x="390" y="151">版と digest を台帳へ</text>
+
+          <text x="650" y="80" font-weight="700">探索の枠</text>
+          <text x="650" y="100">gVisor 使い捨て sandbox</text>
+          <text x="650" y="117" style="fill: var(--accent)" font-weight="700">
+            ★ 同時 10 対象
+          </text>
+          <text x="650" y="134">子 ≤ 8・120 分</text>
+          <text x="650" y="151">外向きはブローカー API だけ</text>
+          <text x="650" y="168">生成節: Run parameters・契約 v4</text>
+          <text x="650" y="185" style="fill: var(--accent)" font-weight="700">
+            ★ Prior research 節
+          </text>
+          <text x="650" y="202">出力を全件保存</text>
+
+          <text x="910" y="80" font-weight="700">出口</text>
+          <text x="910" y="100">契約 v4 で正規化・保留</text>
+          <text x="910" y="117">範囲外 10 種 → park</text>
+          <text x="910" y="134">Lead → 一覧へ</text>
+          <text x="910" y="151">seen before を表示</text>
+
+          <text x="1170" y="80" font-weight="700">Lab の供給</text>
+          <text x="1170" y="100">host ごとに 1 台・基線 v3</text>
+          <text x="1170" y="117">外部サービスは中継器で</text>
+          <text x="1170" y="134">　前提作りの間だけ</text>
+          <text x="1170" y="151">HTTP 捕捉・観測の記録</text>
+          <text x="1170" y="168">判定器は無い</text>
+
+          <text x="1430" y="80" font-weight="700">台帳</text>
+          <text x="1430" y="100">submitted / outcome を記録</text>
+          <text x="1430" y="117">digest 参照だけ</text>
+          <text x="1430" y="134">送信はしない</text>
+        </g>
+
+        <!-- ===== AI lane boxes ===== -->
+        <g fill="none" stroke="currentColor" stroke-width="1.2">
+          <rect
+            x="640"
+            y="280"
+            width="200"
+            height="125"
+            rx="4"
+            style="stroke: var(--accent); stroke-width: 2"
+          />
+          <rect
+            x="1160"
+            y="280"
+            width="200"
+            height="125"
+            rx="4"
+            style="stroke: var(--accent); stroke-width: 2"
+          />
+          <rect
+            x="1420"
+            y="280"
+            width="200"
+            height="95"
+            rx="4"
+            style="stroke: var(--accent); stroke-width: 2"
+          />
+        </g>
+        <g fill="currentColor">
+          <text x="220" y="348" text-anchor="middle" opacity="0.55">
+            判断なし
+          </text>
+          <text x="480" y="348" text-anchor="middle" opacity="0.55">
+            判断なし
+          </text>
+          <text x="1000" y="348" text-anchor="middle" opacity="0.55">
+            判断なし（文言で落とさない）
+          </text>
+
+          <text x="650" y="300" font-weight="700">Codex Root + 子</text>
+          <text x="650" y="320" style="fill: var(--accent)" font-weight="700">
+            ★ 目的文 v21-wide
+          </text>
+          <text x="650" y="337">wbh-recon v2 → wbh-tools</text>
+          <text x="650" y="354">Lab があれば wbh-setup</text>
+          <text x="650" y="371" style="fill: var(--accent)" font-weight="700">
+            ★ prior/ の地図 2 file を読む
+          </text>
+          <text x="650" y="388">どこを読むかは Root が決める</text>
+
+          <text x="1170" y="300" font-weight="700">6 段のスキル</text>
+          <text x="1170" y="320">1 screen → 1b source-check</text>
+          <text x="1170" y="337" style="fill: var(--accent)" font-weight="700">
+            → 2 群 → ★ 4 dedupe（Lab 前）
+          </text>
+          <text x="1170" y="354">→ 3 wbh-verify v12（前提作り）</text>
+          <text x="1170" y="371">→ 4 dedupe → 5 先 → 6 報告書</text>
+          <text x="1170" y="388">中間判断は --by ai</text>
+
+          <text x="1430" y="300" font-weight="700">提出の支度</text>
+          <text x="1430" y="320">英語報告書 + form JSON</text>
+          <text x="1430" y="337" style="fill: var(--accent)" font-weight="700">
+            ★ 転帰をメール本文から記録
+          </text>
+          <text x="1430" y="354">提出済みを記録</text>
+        </g>
+
+        <!-- ===== Human lane boxes ===== -->
+        <g fill="none" stroke="currentColor" stroke-width="1.2">
+          <rect x="120" y="470" width="200" height="75" rx="4" />
+          <rect x="380" y="470" width="200" height="58" rx="4" />
+          <rect x="640" y="470" width="200" height="75" rx="4" />
+          <rect x="900" y="470" width="200" height="75" rx="4" />
+          <rect x="1160" y="470" width="200" height="92" rx="4" />
+          <rect x="1420" y="470" width="200" height="92" rx="4" />
+        </g>
+        <g fill="currentColor">
+          <text x="130" y="490" font-weight="700">方針を所有</text>
+          <text x="130" y="510">下限・鮮度・除外の数値</text>
+          <text x="130" y="527">対象ごとの承認は無し</text>
+
+          <text x="390" y="490" font-weight="700">宣言を書く</text>
+          <text x="390" y="510">trust 境界宣言の文</text>
+
+          <text x="650" y="490" font-weight="700">文を承認</text>
+          <text x="650" y="510">目的文・スキル・生成節</text>
+          <text x="650" y="527">owner-approved（AI に委任）</text>
+
+          <text x="910" y="490" font-weight="700">一覧を見る</text>
+          <text x="910" y="510">review parked / leads</text>
+          <text x="910" y="527">restore で戻せる</text>
+
+          <text x="1170" y="490" font-weight="700">Lab で観測</text>
+          <text x="1170" y="510">自分の目で見る</text>
+          <text x="1170" y="527">AI が --by yuto で記録</text>
+          <text x="1170" y="544">これだけが確定の根拠</text>
+
+          <text x="1430" y="490" font-weight="700">送る・結果を伝える</text>
+          <text x="1430" y="510">拡張機能で Wordfence へ</text>
+          <text x="1430" y="527">「送った」と言う</text>
+          <text x="1430" y="544">転帰メールを会話に貼る</text>
+        </g>
+
+        <!-- ===== horizontal flow (Harness lane) ===== -->
+        <g
+          stroke="currentColor"
+          stroke-width="1.5"
+          fill="none"
+          marker-end="url(#ar)"
+        >
+          <line x1="320" y1="108" x2="378" y2="108" />
+          <line x1="580" y1="108" x2="638" y2="108" />
+          <line x1="840" y1="108" x2="898" y2="108" />
+          <line x1="1100" y1="108" x2="1158" y2="108" />
+          <line x1="1360" y1="108" x2="1418" y2="108" />
+        </g>
+        <g fill="currentColor" font-size="11" text-anchor="middle">
+          <text x="349" y="100">slug@版</text>
+          <text x="609" y="100">固定ソース</text>
+          <text x="609" y="124">+ digest</text>
+          <text x="869" y="100">Finding・Lead</text>
+          <text x="869" y="124">全件</text>
+          <text x="1129" y="100">範囲内の</text>
+          <text x="1129" y="124">Finding</text>
+          <text x="1389" y="100">観測 match</text>
+          <text x="1389" y="124">のもの</text>
+        </g>
+
+        <!-- ===== vertical flows ===== -->
+        <g
+          stroke="currentColor"
+          stroke-width="1.5"
+          fill="none"
+          marker-end="url(#ar)"
+        >
+          <!-- 選定: 人間 → Harness -->
+          <line x1="220" y1="470" x2="220" y2="187" />
+          <!-- Snapshot: 人間 → Harness -->
+          <line x1="480" y1="470" x2="480" y2="172" />
+          <!-- 探索: Harness → AI, AI → Harness -->
+          <line x1="700" y1="220" x2="700" y2="278" />
+          <line x1="780" y1="280" x2="780" y2="222" />
+          <!-- 探索: 人間 → AI -->
+          <line x1="740" y1="470" x2="740" y2="407" />
+          <!-- 出口: Harness → 人間 -->
+          <line x1="1000" y1="170" x2="1000" y2="468" />
+          <!-- 検証: Harness → AI, AI → 人間 -->
+          <line x1="1260" y1="185" x2="1260" y2="278" />
+          <line x1="1260" y1="405" x2="1260" y2="468" />
+          <!-- 検証: 人間 → Harness（観測の記録、右の隙間を通す） -->
+          <polyline points="1360,516 1390,516 1390,160 1362,160" />
+          <!-- 提出: AI → 人間, 人間 → AI, AI → Harness -->
+          <line x1="1480" y1="375" x2="1480" y2="468" />
+          <line x1="1560" y1="470" x2="1560" y2="377" />
+          <line x1="1520" y1="280" x2="1520" y2="157" />
+        </g>
+        <g fill="currentColor" font-size="11">
+          <text x="228" y="330">方針 file</text>
+          <text x="488" y="330">宣言文</text>
+          <text x="596" y="254" text-anchor="end">目的文 + 生成節</text>
+          <text x="596" y="268" text-anchor="end">+ 読み取り専用ソース</text>
+          <text x="790" y="254">Finding・Lead</text>
+          <text x="790" y="268">research の封印</text>
+          <text x="748" y="445">承認済みの文</text>
+          <text x="1008" y="330">parked / leads</text>
+          <text x="1268" y="240">Lab + 捕捉</text>
+          <text x="1268" y="440">前提済みの Lab</text>
+          <text x="1398" y="330">観測を記録</text>
+          <text x="1398" y="344">（AI が代行）</text>
+          <text x="1428" y="430" text-anchor="end">報告書</text>
+          <text x="1568" y="430">送った・メール</text>
+          <text x="1528" y="230">submitted</text>
+          <text x="1528" y="244">outcome</text>
+        </g>
+
+        <!-- ===== feedback: 転帰 → 検証の規則 ===== -->
+        <polyline
+          points="1520,562 1520,622 1130,622 1130,342 1158,342"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-dasharray="6 4"
+          marker-end="url(#ar)"
+        />
+        <g fill="currentColor" font-size="11">
+          <text x="1325" y="640" text-anchor="middle">
+            転帰 → wbh-screen の規則と Lab
+            の基線へ戻す（選定・探索には戻さない）
+          </text>
+        </g>
+
+        <!-- legend -->
+        <g font-size="11" fill="currentColor">
+          <rect
+            x="1180"
+            y="14"
+            width="14"
+            height="14"
+            rx="2"
+            fill="none"
+            style="stroke: var(--accent); stroke-width: 2"
+          />
+          <text x="1200" y="25">今夜の決定で変わった所</text>
+          <line
+            x1="1340"
+            y1="21"
+            x2="1380"
+            y2="21"
+            stroke="currentColor"
+            stroke-width="1.5"
+            stroke-dasharray="6 4"
+          />
+          <text x="1386" y="25">結果を戻す向き</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption>
+      対象は Harness
+      の行を左から右へ流れる。各段で下の行から上がってくるのは「方針」「宣言」「承認」「観測」で、Harness
+      がそれを判断の代わりに受け取る。AI
+      は探索と検証と提出の支度だけに現れ、選定・Snapshot・出口には判断を置かない。転帰は検証の規則に戻り、探索の目的文には戻らない。
+    </figcaption>
+  </figure>
+
+  <h2>今夜変わった所</h2>
+  <ul>
+    <li>
+      <span class="star">★</span> 選定の順序: install 数順から stable
+      版の公開日の新しい順へ（却下 40 件中 29
+      件が重複だったため）。母集団・再訪・batch は同じ。
+    </li>
+    <li>
+      <span class="star">★</span> 同時対象 10（5 から）。429 が来ても backoff
+      で遅くなるだけ。1 日見て出れば 7 に下げる。
+    </li>
+    <li>
+      <span class="star">★</span> 目的文 v21-wide: v20 から判定器と canary
+      の古い 2 文を消しただけ。スキルは wbh-recon v2 / wbh-tools v1 / wbh-setup
+      v1。
+    </li>
+    <li>
+      <span class="star">★</span> Prior research: 同じ plugin
+      の前の版が残した地図 2 file だけを次の版の Trial に渡す（下の図）。
+    </li>
+    <li>
+      <span class="star">★</span> 段 4 の重複照合を Lab の前にも 1
+      回。possible-match なら根拠を見せて Lab を立てない。
+    </li>
+    <li>
+      <span class="star">★</span> 転帰の記録: Wordfence
+      のメール本文を会話に貼れば AI が
+      <code>review outcome</code> で記録する。未記録 11 件から始める。
+    </li>
+  </ul>
+
+  <h2>版をまたぐ 1 本の線（探索の中身）</h2>
+  <figure>
+    <div class="fig small">
+      <svg
+        viewBox="0 0 1000 300"
+        role="img"
+        aria-label="版 N の Trial で Root と子が /workspace/research に書いた地図と一覧は、終了時に Git 外の research attachment として封じられ、Finding と Lead は台帳へ行く。版 N+1 の Trial には、その attachment から recon-map.md と lab-setup.md の 2 file だけが /workspace/research/prior/ に置かれる。"
+        font-family="Noto Sans JP, Hiragino Sans, system-ui, sans-serif"
+        font-size="12"
+      >
+        <defs>
+          <marker
+            id="ar2"
+            viewBox="0 0 10 10"
+            refX="9"
+            refY="5"
+            markerWidth="8"
+            markerHeight="8"
+            orient="auto-start-reverse"
+          >
+            <path d="M0,0 L10,5 L0,10 z" fill="currentColor" />
+          </marker>
+        </defs>
+        <!-- Trial N -->
+        <rect
+          x="20"
+          y="40"
+          width="390"
+          height="230"
+          rx="6"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+        />
+        <text x="32" y="62" font-weight="700" fill="currentColor">
+          版 N の Trial（gVisor sandbox）
+        </text>
+        <rect
+          x="40"
+          y="90"
+          width="90"
+          height="40"
+          rx="4"
+          fill="none"
+          stroke="currentColor"
+        />
+        <text x="85" y="114" text-anchor="middle" fill="currentColor">
+          Root
+        </text>
+        <rect
+          x="40"
+          y="190"
+          width="90"
+          height="40"
+          rx="4"
+          fill="none"
+          stroke="currentColor"
+        />
+        <text x="85" y="214" text-anchor="middle" fill="currentColor">
+          子 × ≤ 8
+        </text>
+        <line
+          x1="85"
+          y1="130"
+          x2="85"
+          y2="188"
+          stroke="currentColor"
+          stroke-width="1.5"
+          marker-end="url(#ar2)"
+        />
+        <text x="92" y="150" fill="currentColor" font-size="11">spawn</text>
+        <text x="92" y="164" fill="currentColor" font-size="11">
+          履歴なし（v2）
+        </text>
+        <rect
+          x="190"
+          y="90"
+          width="200"
+          height="160"
+          rx="4"
+          fill="none"
+          stroke="currentColor"
+        />
+        <text x="200" y="110" font-weight="700" fill="currentColor">
+          /workspace/research
+        </text>
+        <text x="200" y="132" fill="currentColor">
+          recon-map.md（wbh-recon）
+        </text>
+        <text x="200" y="150" fill="currentColor">
+          tools/*.tsv（wbh-tools）
+        </text>
+        <text x="200" y="168" fill="currentColor">
+          &lt;sink&gt;.md・REGISTRY.md
+        </text>
+        <text x="200" y="186" fill="currentColor">lab-setup.md（Lab 時）</text>
+        <text
+          x="200"
+          y="210"
+          fill="currentColor"
+          style="fill: var(--accent)"
+          font-weight="700"
+        >
+          prior/（前の版の 2 file）
+        </text>
+        <text x="200" y="228" fill="currentColor" font-size="11">
+          読むだけ。書くのは上の 4 つ
+        </text>
+        <line
+          x1="130"
+          y1="110"
+          x2="188"
+          y2="120"
+          stroke="currentColor"
+          stroke-width="1.5"
+          marker-end="url(#ar2)"
+        />
+        <line
+          x1="130"
+          y1="210"
+          x2="188"
+          y2="190"
+          stroke="currentColor"
+          stroke-width="1.5"
+          marker-end="url(#ar2)"
+        />
+        <text x="150" y="104" fill="currentColor" font-size="11">書く</text>
+        <text x="150" y="212" fill="currentColor" font-size="11">書く</text>
+
+        <!-- outputs -->
+        <rect
+          x="470"
+          y="40"
+          width="210"
+          height="60"
+          rx="4"
+          fill="none"
+          stroke="currentColor"
+        />
+        <text x="480" y="62" font-weight="700" fill="currentColor">台帳</text>
+        <text x="480" y="82" fill="currentColor">
+          Finding・Lead・run の記録
+        </text>
+        <line
+          x1="410"
+          y1="70"
+          x2="468"
+          y2="70"
+          stroke="currentColor"
+          stroke-width="1.5"
+          marker-end="url(#ar2)"
+        />
+        <text
+          x="439"
+          y="62"
+          text-anchor="middle"
+          fill="currentColor"
+          font-size="11"
+        >
+          出力
+        </text>
+
+        <rect
+          x="470"
+          y="150"
+          width="210"
+          height="70"
+          rx="4"
+          fill="none"
+          stroke="currentColor"
+        />
+        <text x="480" y="172" font-weight="700" fill="currentColor">
+          research attachment
+        </text>
+        <text x="480" y="192" fill="currentColor">Git 外・digest 付き</text>
+        <text x="480" y="208" fill="currentColor" font-size="11">
+          research の中身を丸ごと封じる
+        </text>
+        <line
+          x1="410"
+          y1="185"
+          x2="468"
+          y2="185"
+          stroke="currentColor"
+          stroke-width="1.5"
+          marker-end="url(#ar2)"
+        />
+        <text
+          x="439"
+          y="177"
+          text-anchor="middle"
+          fill="currentColor"
+          font-size="11"
+        >
+          終了時
+        </text>
+
+        <!-- Trial N+1 -->
+        <rect
+          x="740"
+          y="40"
+          width="240"
+          height="230"
+          rx="6"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          style="stroke: var(--accent); stroke-width: 2"
+        />
+        <text x="752" y="62" font-weight="700" fill="currentColor">
+          版 N+1 の Trial
+        </text>
+        <rect
+          x="760"
+          y="100"
+          width="200"
+          height="96"
+          rx="4"
+          fill="none"
+          stroke="currentColor"
+        />
+        <text x="770" y="120" font-weight="700" fill="currentColor">
+          /workspace/research/prior/
+        </text>
+        <text x="770" y="140" fill="currentColor">recon-map.md</text>
+        <text x="770" y="158" fill="currentColor">lab-setup.md</text>
+        <text x="770" y="178" fill="currentColor" font-size="11">
+          tsv・経路 file は渡さない
+        </text>
+        <text x="752" y="226" fill="currentColor">
+          生成節 ## Prior research が
+        </text>
+        <text x="752" y="244" fill="currentColor">
+          元の版・場所・大きさを述べる
+        </text>
+        <line
+          x1="680"
+          y1="185"
+          x2="738"
+          y2="185"
+          stroke="currentColor"
+          stroke-width="1.5"
+          marker-end="url(#ar2)"
+          style="stroke: var(--accent)"
+        />
+        <text
+          x="709"
+          y="177"
+          text-anchor="middle"
+          fill="currentColor"
+          font-size="11"
+        >
+          2 file だけ
+        </text>
+        <text
+          x="709"
+          y="203"
+          text-anchor="middle"
+          fill="currentColor"
+          font-size="11"
+        >
+          同じ plugin の
+        </text>
+        <text
+          x="709"
+          y="216"
+          text-anchor="middle"
+          fill="currentColor"
+          font-size="11"
+        >
+          最新の前の版
+        </text>
+      </svg>
+    </div>
+    <figcaption>
+      版が上がって同じ plugin が列に戻ると、前の版の Trial が封じた地図と Lab
+      設定の記録だけが次の Trial に渡る。経路 file
+      や一覧は渡さないので、何を疑うかは新しい Trial
+      が自分で決める。これが「公開日の新しい順」と組み合わさると、新版の Trial
+      は地図を持った状態で出た直後のコードを読むことになる。
+    </figcaption>
+  </figure>
+
+  <footer>
+    出典: docs/SPEC.md 第 2・3・6・7 節、ADR 0037 追記 3、0038 追記 18、0039
+    追記 19、0040、0043、0045、0046、0047、0048、本番の campaign / selection
+    設定（Git 外）。正本ではない。
+  </footer>
+</main>

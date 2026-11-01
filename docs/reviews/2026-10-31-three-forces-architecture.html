@@ -1,0 +1,853 @@
+<title>探索 Harness 構成図</title>
+<meta name="claude:viewport-fit-sides" content="cover" />
+<link
+  rel="stylesheet"
+  href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;600&display=swap"
+/>
+<style>
+  :root {
+    --bg: #faf8f4;
+    --fg: #1f2422;
+    --muted: #6b716d;
+    --line: #d8d3ca;
+    --panel: #f1ede5;
+    --accent: #b4541a;
+    --accent-soft: #f6e3d3;
+    --keep: #2d6a4f;
+    --keep-soft: #dfeee6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #171a19;
+      --fg: #e8e6e1;
+      --muted: #a1a59f;
+      --line: #3a3f3c;
+      --panel: #202422;
+      --accent: #f0955a;
+      --accent-soft: #3a2a1f;
+      --keep: #7cc4a0;
+      --keep-soft: #1f3a2e;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #171a19;
+    --fg: #e8e6e1;
+    --muted: #a1a59f;
+    --line: #3a3f3c;
+    --panel: #202422;
+    --accent: #f0955a;
+    --accent-soft: #3a2a1f;
+    --keep: #7cc4a0;
+    --keep-soft: #1f3a2e;
+    color-scheme: dark;
+  }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family:
+      "Noto Sans JP",
+      system-ui,
+      -apple-system,
+      "Hiragino Sans",
+      "Yu Gothic",
+      sans-serif;
+    line-height: 1.65;
+    font-size: 15px;
+    margin: 0;
+  }
+  main {
+    max-width: 960px;
+    margin: 0 auto;
+    padding-block: 28px 48px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  h1 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin: 0 0 4px;
+    text-wrap: balance;
+  }
+  .sub {
+    color: var(--muted);
+    margin: 0 0 24px;
+    font-size: 0.92rem;
+  }
+  h2 {
+    font-size: 1.08rem;
+    font-weight: 600;
+    margin: 32px 0 10px;
+    text-wrap: balance;
+  }
+  figure {
+    margin: 0;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 14px 8px;
+  }
+  figure svg {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    color: var(--fg);
+  }
+  figcaption {
+    color: var(--muted);
+    font-size: 0.86rem;
+    margin-top: 8px;
+  }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px 22px;
+    font-size: 0.84rem;
+    color: var(--muted);
+    margin: 10px 0 0;
+  }
+  .legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .sw {
+    width: 22px;
+    height: 12px;
+    border-radius: 3px;
+    border: 1.5px solid currentColor;
+    display: inline-block;
+  }
+  .sw.new {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+  }
+  .sw.keep {
+    background: var(--keep-soft);
+    border-color: var(--keep);
+  }
+  .sw.demote {
+    border-style: dashed;
+  }
+  .tbl {
+    overflow-x: auto;
+    margin-top: 8px;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 0.88rem;
+    min-width: 620px;
+  }
+  th,
+  td {
+    text-align: left;
+    padding: 7px 9px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  th {
+    font-weight: 600;
+    color: var(--muted);
+    font-size: 0.8rem;
+    letter-spacing: 0.04em;
+  }
+  td.new {
+    color: var(--accent);
+    font-weight: 600;
+  }
+  td.keep {
+    color: var(--keep);
+    font-weight: 600;
+  }
+  ul {
+    padding-left: 1.2em;
+    margin: 8px 0;
+  }
+  li {
+    margin: 4px 0;
+  }
+  p {
+    margin: 8px 0;
+  }
+  .note {
+    font-size: 0.88rem;
+    color: var(--muted);
+  }
+</style>
+<main>
+  <h1>探索 Harness の構成（3 つの戦力）</h1>
+  <p class="sub">
+    ADR 0045 と Issue #724 の設計を、部品と流れで示す。2026-10-31。
+  </p>
+
+  <h2>1. 今の構成</h2>
+  <figure>
+    <svg
+      viewBox="0 0 900 150"
+      role="img"
+      aria-label="今の構成: 選定がインストール順に 1 本選び、Snapshot を取り、gVisor の中で Root と子 8 体が 2 時間読み、出口で正規化され、段 1/1b、Lab、人間の観測、台帳と提出へ進む一本道"
+    >
+      <defs>
+        <marker
+          id="a1"
+          viewBox="0 0 10 10"
+          refX="9"
+          refY="5"
+          markerWidth="7"
+          markerHeight="7"
+          orient="auto-start-reverse"
+        >
+          <path d="M0 0L10 5L0 10z" fill="currentColor" />
+        </marker>
+      </defs>
+      <g
+        font-size="12"
+        fill="currentColor"
+        stroke="currentColor"
+        stroke-width="1.2"
+      >
+        <rect x="10" y="40" width="110" height="44" rx="6" fill="none" />
+        <text x="65" y="58" text-anchor="middle" stroke="none">選定</text>
+        <text x="65" y="74" text-anchor="middle" stroke="none" font-size="10.5">
+          インストール順に 1 本
+        </text>
+        <rect x="150" y="40" width="100" height="44" rx="6" fill="none" />
+        <text x="200" y="58" text-anchor="middle" stroke="none">Snapshot</text>
+        <text
+          x="200"
+          y="74"
+          text-anchor="middle"
+          stroke="none"
+          font-size="10.5"
+        >
+          版 + digest
+        </text>
+        <rect
+          x="280"
+          y="22"
+          width="190"
+          height="80"
+          rx="6"
+          fill="none"
+          stroke-dasharray="5 4"
+        />
+        <text x="375" y="46" text-anchor="middle" stroke="none">
+          gVisor: Root + 子 8
+        </text>
+        <text
+          x="375"
+          y="64"
+          text-anchor="middle"
+          stroke="none"
+          font-size="10.5"
+        >
+          wide Trial、最大 2 時間
+        </text>
+        <text
+          x="375"
+          y="82"
+          text-anchor="middle"
+          stroke="none"
+          font-size="10.5"
+        >
+          1 本まるごと読む
+        </text>
+        <rect x="500" y="40" width="100" height="44" rx="6" fill="none" />
+        <text x="550" y="58" text-anchor="middle" stroke="none">出口</text>
+        <text
+          x="550"
+          y="74"
+          text-anchor="middle"
+          stroke="none"
+          font-size="10.5"
+        >
+          正規化・park
+        </text>
+        <rect x="630" y="40" width="80" height="44" rx="6" fill="none" />
+        <text x="670" y="58" text-anchor="middle" stroke="none">段 1 / 1b</text>
+        <text
+          x="670"
+          y="74"
+          text-anchor="middle"
+          stroke="none"
+          font-size="10.5"
+        >
+          選別
+        </text>
+        <rect x="740" y="40" width="150" height="44" rx="6" fill="none" />
+        <text x="815" y="58" text-anchor="middle" stroke="none">
+          Lab → 人間の観測
+        </text>
+        <text
+          x="815"
+          y="74"
+          text-anchor="middle"
+          stroke="none"
+          font-size="10.5"
+        >
+          台帳・提出
+        </text>
+        <line x1="120" y1="62" x2="148" y2="62" marker-end="url(#a1)" />
+        <line x1="250" y1="62" x2="278" y2="62" marker-end="url(#a1)" />
+        <line x1="470" y1="62" x2="498" y2="62" marker-end="url(#a1)" />
+        <line x1="600" y1="62" x2="628" y2="62" marker-end="url(#a1)" />
+        <line x1="710" y1="62" x2="738" y2="62" marker-end="url(#a1)" />
+        <text
+          x="375"
+          y="128"
+          text-anchor="middle"
+          stroke="none"
+          font-size="11"
+          fill="var(--muted)"
+        >
+          Codex 5 席 × 2 時間 = 1 日約 60 本。本物は 0.06 / Trial
+        </text>
+      </g>
+    </svg>
+    <figcaption>
+      入口が 1 つしかなく、信号の有無に関係なく 1 本に 2 時間を使う。
+    </figcaption>
+  </figure>
+
+  <h2>2. 3 つの戦力に分けた構成</h2>
+  <figure>
+    <svg
+      viewBox="0 0 900 470"
+      role="img"
+      aria-label="3 つの戦力の構成: 上段に掃き出し、差分監視、名指しの 3 つの入口。掃き出しは上位 N 本の固定ソースに規則を当てて候補行を出し、差分監視は新版の差分だけを同じ規則に通して候補の先頭に置き、名指しは identity の sink を持つ大型だけに wide Trial を立てる。候補行は Snapshot を経て gVisor の子 1 体が 20 から 40 分で読み、既存の出力契約で Finding か Lead になる。下段の出口、段 1/1b、Lab、人間の観測、台帳と提出は変えない"
+    >
+      <defs>
+        <marker
+          id="a2"
+          viewBox="0 0 10 10"
+          refX="9"
+          refY="5"
+          markerWidth="7"
+          markerHeight="7"
+          orient="auto-start-reverse"
+        >
+          <path d="M0 0L10 5L0 10z" fill="currentColor" />
+        </marker>
+      </defs>
+      <g
+        font-size="12"
+        fill="currentColor"
+        stroke="currentColor"
+        stroke-width="1.2"
+      >
+        <!-- row 1: three entrances -->
+        <text x="10" y="22" stroke="none" font-size="11" fill="var(--muted)">
+          入口（新しい部分）
+        </text>
+        <rect
+          x="10"
+          y="32"
+          width="270"
+          height="96"
+          rx="6"
+          fill="var(--accent-soft)"
+          stroke="var(--accent)"
+        />
+        <text
+          x="145"
+          y="52"
+          text-anchor="middle"
+          stroke="none"
+          font-weight="600"
+        >
+          ① 掃き出し
+        </text>
+        <text
+          x="145"
+          y="72"
+          text-anchor="middle"
+          stroke="none"
+          font-size="10.5"
+        >
+          上位 N 本の最新版を固定（版 + digest）
+        </text>
+        <text
+          x="145"
+          y="90"
+          text-anchor="middle"
+          stroke="none"
+          font-size="10.5"
+        >
+          規則 runner（規則は skill の置き場）
+        </text>
+        <text
+          x="145"
+          y="108"
+          text-anchor="middle"
+          stroke="none"
+          font-size="10.5"
+        >
+          型の規則 + 自分の確認済みからの変種規則
+        </text>
+
+        <rect
+          x="315"
+          y="32"
+          width="270"
+          height="96"
+          rx="6"
+          fill="var(--accent-soft)"
+          stroke="var(--accent)"
+        />
+        <text
+          x="450"
+          y="52"
+          text-anchor="middle"
+          stroke="none"
+          font-weight="600"
+        >
+          ② 差分監視
+        </text>
+        <text
+          x="450"
+          y="72"
+          text-anchor="middle"
+          stroke="none"
+          font-size="10.5"
+        >
+          上位プラグインの新版を検知
+        </text>
+        <text
+          x="450"
+          y="90"
+          text-anchor="middle"
+          stroke="none"
+          font-size="10.5"
+        >
+          差分だけを ① の規則に通す
+        </text>
+        <text
+          x="450"
+          y="108"
+          text-anchor="middle"
+          stroke="none"
+          font-size="10.5"
+        >
+          identity・決済・入力処理の追加行を先頭に
+        </text>
+
+        <rect
+          x="620"
+          y="32"
+          width="270"
+          height="96"
+          rx="6"
+          fill="none"
+          stroke="var(--accent)"
+        />
+        <text
+          x="755"
+          y="52"
+          text-anchor="middle"
+          stroke="none"
+          font-weight="600"
+        >
+          ③ 名指しの深掘り
+        </text>
+        <text
+          x="755"
+          y="72"
+          text-anchor="middle"
+          stroke="none"
+          font-size="10.5"
+        >
+          identity の sink 一覧 → 対象表
+        </text>
+        <text
+          x="755"
+          y="90"
+          text-anchor="middle"
+          stroke="none"
+          font-size="10.5"
+        >
+          大型プラグインだけ、所有者か AI が名指し
+        </text>
+        <text
+          x="755"
+          y="108"
+          text-anchor="middle"
+          stroke="none"
+          font-size="10.5"
+        >
+          今の wide Trial と Lead 入力 Trial を使う
+        </text>
+
+        <!-- arrows from entrances to candidate store -->
+        <line x1="145" y1="128" x2="145" y2="160" marker-end="url(#a2)" />
+        <line x1="450" y1="128" x2="450" y2="160" marker-end="url(#a2)" />
+        <text
+          x="160"
+          y="150"
+          stroke="none"
+          font-size="10.5"
+          fill="var(--muted)"
+        >
+          候補行を書く
+        </text>
+        <text
+          x="465"
+          y="150"
+          stroke="none"
+          font-size="10.5"
+          fill="var(--muted)"
+        >
+          候補行を先頭に挿す
+        </text>
+
+        <!-- candidate store -->
+        <rect
+          x="10"
+          y="162"
+          width="575"
+          height="50"
+          rx="6"
+          fill="var(--accent-soft)"
+          stroke="var(--accent)"
+        />
+        <text
+          x="297"
+          y="183"
+          text-anchor="middle"
+          stroke="none"
+          font-weight="600"
+        >
+          候補行の置き場（Private Evidence）
+        </text>
+        <text
+          x="297"
+          y="201"
+          text-anchor="middle"
+          stroke="none"
+          font-size="10.5"
+        >
+          slug・版・digest・ファイル・行・入口・sink・規則 id。台帳には書かない
+        </text>
+
+        <!-- arrow to snapshot/child -->
+        <line x1="297" y1="212" x2="297" y2="244" marker-end="url(#a2)" />
+        <text
+          x="312"
+          y="234"
+          stroke="none"
+          font-size="10.5"
+          fill="var(--muted)"
+        >
+          候補 1 行につき
+        </text>
+
+        <!-- row 3: snapshot + child -->
+        <rect x="10" y="246" width="130" height="60" rx="6" fill="none" />
+        <text x="75" y="270" text-anchor="middle" stroke="none">Snapshot</text>
+        <text
+          x="75"
+          y="288"
+          text-anchor="middle"
+          stroke="none"
+          font-size="10.5"
+        >
+          同じ版 + digest
+        </text>
+        <line x1="140" y1="276" x2="168" y2="276" marker-end="url(#a2)" />
+        <rect
+          x="170"
+          y="246"
+          width="250"
+          height="60"
+          rx="6"
+          fill="var(--accent-soft)"
+          stroke="var(--accent)"
+        />
+        <text
+          x="295"
+          y="270"
+          text-anchor="middle"
+          stroke="none"
+          font-weight="600"
+        >
+          gVisor: 確認の子 1 体
+        </text>
+        <text
+          x="295"
+          y="288"
+          text-anchor="middle"
+          stroke="none"
+          font-size="10.5"
+        >
+          20〜40 分。候補の場所から chain を完成させる
+        </text>
+        <line x1="420" y1="276" x2="448" y2="276" marker-end="url(#a2)" />
+        <rect x="450" y="246" width="135" height="60" rx="6" fill="none" />
+        <text x="517" y="270" text-anchor="middle" stroke="none">
+          出力契約 v4
+        </text>
+        <text
+          x="517"
+          y="288"
+          text-anchor="middle"
+          stroke="none"
+          font-size="10.5"
+        >
+          Finding か Lead
+        </text>
+
+        <!-- named deep path -->
+        <line x1="755" y1="128" x2="755" y2="244" marker-end="url(#a2)" />
+        <text
+          x="770"
+          y="190"
+          stroke="none"
+          font-size="10.5"
+          fill="var(--muted)"
+        >
+          名指しのときだけ
+        </text>
+        <rect
+          x="620"
+          y="246"
+          width="270"
+          height="60"
+          rx="6"
+          fill="none"
+          stroke-dasharray="5 4"
+        />
+        <text x="755" y="270" text-anchor="middle" stroke="none">
+          gVisor: Root + 子 8（wide、2 時間）
+        </text>
+        <text
+          x="755"
+          y="288"
+          text-anchor="middle"
+          stroke="none"
+          font-size="10.5"
+        >
+          主経路から降りる。削除はしない
+        </text>
+        <line x1="755" y1="306" x2="755" y2="340" marker-end="url(#a2)" />
+        <line x1="517" y1="306" x2="517" y2="340" marker-end="url(#a2)" />
+
+        <!-- row 4: unchanged back end -->
+        <rect
+          x="10"
+          y="342"
+          width="880"
+          height="96"
+          rx="6"
+          fill="var(--keep-soft)"
+          stroke="var(--keep)"
+        />
+        <text
+          x="450"
+          y="364"
+          text-anchor="middle"
+          stroke="none"
+          font-weight="600"
+          fill="var(--keep)"
+        >
+          変えない後ろ（凍結の 5 つが守る）
+        </text>
+        <g stroke="var(--keep)">
+          <rect x="30" y="378" width="150" height="44" rx="5" fill="none" />
+          <text x="105" y="396" text-anchor="middle" stroke="none">出口</text>
+          <text
+            x="105"
+            y="412"
+            text-anchor="middle"
+            stroke="none"
+            font-size="10.5"
+          >
+            正規化・Programme 外は park
+          </text>
+          <rect x="200" y="378" width="150" height="44" rx="5" fill="none" />
+          <text x="275" y="396" text-anchor="middle" stroke="none">
+            段 1 / 1b
+          </text>
+          <text
+            x="275"
+            y="412"
+            text-anchor="middle"
+            stroke="none"
+            font-size="10.5"
+          >
+            規則の写しとソース読み
+          </text>
+          <rect x="370" y="378" width="150" height="44" rx="5" fill="none" />
+          <text x="445" y="396" text-anchor="middle" stroke="none">Lab</text>
+          <text
+            x="445"
+            y="412"
+            text-anchor="middle"
+            stroke="none"
+            font-size="10.5"
+          >
+            Finding 単位、hosting 既定
+          </text>
+          <rect x="540" y="378" width="160" height="44" rx="5" fill="none" />
+          <text x="620" y="396" text-anchor="middle" stroke="none">
+            人間の観測
+          </text>
+          <text
+            x="620"
+            y="412"
+            text-anchor="middle"
+            stroke="none"
+            font-size="10.5"
+          >
+            所有者が見て言う、AI が記録
+          </text>
+          <rect x="720" y="378" width="150" height="44" rx="5" fill="none" />
+          <text x="795" y="396" text-anchor="middle" stroke="none">
+            台帳・提出
+          </text>
+          <text
+            x="795"
+            y="412"
+            text-anchor="middle"
+            stroke="none"
+            font-size="10.5"
+          >
+            追記専用、人間が送る
+          </text>
+          <line x1="180" y1="400" x2="198" y2="400" marker-end="url(#a2)" />
+          <line x1="350" y1="400" x2="368" y2="400" marker-end="url(#a2)" />
+          <line x1="520" y1="400" x2="538" y2="400" marker-end="url(#a2)" />
+          <line x1="700" y1="400" x2="718" y2="400" marker-end="url(#a2)" />
+        </g>
+        <text
+          x="450"
+          y="460"
+          text-anchor="middle"
+          stroke="none"
+          font-size="11"
+          fill="var(--muted)"
+        >
+          AI
+          の時間は候補のある場所にだけ落ちる。拡がり方は席の数ではなく、プラグイン数と新版の数
+        </text>
+      </g>
+    </svg>
+    <figcaption>
+      入口が 3 つになり、候補行の置き場が間に入る。Snapshot
+      から提出までの後ろは同じ部品のまま。
+    </figcaption>
+    <div class="legend">
+      <span><i class="sw new"></i>新しく足す</span
+      ><span><i class="sw keep"></i>変えない</span
+      ><span><i class="sw demote"></i>主経路から名指しに降りる</span>
+    </div>
+  </figure>
+
+  <h2>3. 部品ごとの変化</h2>
+  <div class="tbl">
+    <table>
+      <thead>
+        <tr>
+          <th>部品</th>
+          <th>今</th>
+          <th>3 戦力後</th>
+          <th>置き場</th>
+          <th>PR</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>対象の固定</td>
+          <td>選ばれた 1 本の Snapshot</td>
+          <td class="new">上位 N 本の最新版を版 + digest で固定（軽い pin）</td>
+          <td>Harness（acquisition）</td>
+          <td>1</td>
+        </tr>
+        <tr>
+          <td>規則 runner</td>
+          <td>無い</td>
+          <td class="new">skill の置き場の規則を走らせ、候補行を保存</td>
+          <td>Harness が走らせる、規則は skill</td>
+          <td>1</td>
+        </tr>
+        <tr>
+          <td>候補行の置き場</td>
+          <td>無い</td>
+          <td class="new">Private Evidence に jsonl。台帳には書かない</td>
+          <td>Private Evidence</td>
+          <td>1</td>
+        </tr>
+        <tr>
+          <td>確認の子</td>
+          <td>無い（Root が子を決める）</td>
+          <td class="new">
+            候補 1 行に 1 体、20〜40 分、同じ sandbox と出力契約
+          </td>
+          <td>Harness（discovery）</td>
+          <td>2</td>
+        </tr>
+        <tr>
+          <td>差分監視</td>
+          <td>版上昇 90 日の再訪のみ</td>
+          <td class="new">新版の差分だけを規則に通し、候補の先頭へ</td>
+          <td>Harness（selection / acquisition）</td>
+          <td>3</td>
+        </tr>
+        <tr>
+          <td>identity の sink 一覧</td>
+          <td>探索プロンプトの 1 文</td>
+          <td class="new">規則として一覧化し、対象表を作る</td>
+          <td>skill</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <td>wide Trial（Root + 子 8）</td>
+          <td>主経路</td>
+          <td>名指しのときだけ。削除しない</td>
+          <td>Harness（discovery）</td>
+          <td>後</td>
+        </tr>
+        <tr>
+          <td>選定（インストール順）</td>
+          <td>主経路の入口</td>
+          <td>掃き出しの N と名指しの候補を出す側に回る</td>
+          <td>Harness（selection）</td>
+          <td>後</td>
+        </tr>
+        <tr>
+          <td>出口・段 1/1b・Lab・観測・台帳・提出</td>
+          <td>—</td>
+          <td class="keep">変えない</td>
+          <td>—</td>
+          <td>—</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>4. 数字と線</h2>
+  <ul>
+    <li>
+      <strong>分母は 1 つ。</strong> Codex 1 時間あたりの Lab
+      発火数と、Wordfence の結果。Finding と Lead の数は観測として記録するだけ。
+    </li>
+    <li>
+      <strong>基準線。</strong> v19-wide の 20 Trial（#716）。並行して終える。
+    </li>
+    <li>
+      <strong>採否の線。</strong> PR 1〜2 の後、2 週間で「候補 → 確認層通過 →
+      Lab 発火 → 提出」を数え、Lab 発火が 0 なら PR 1〜2 を消す。
+    </li>
+    <li>
+      <strong>11 月の設計変更はこれ 1 回。</strong>
+      探索プロンプトの文面は消す方向にしか触らない。
+    </li>
+  </ul>
+  <p class="note">
+    正本は
+    <a
+      href="https://github.com/momoponwork1415-lgtm/wordpress-bounty-harness/issues/724"
+      >Issue #724</a
+    >
+    と ADR 0045。この図は説明用で、食い違えば正本が勝つ。
+  </p>
+</main>

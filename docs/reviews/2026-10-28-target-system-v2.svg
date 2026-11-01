@@ -1,0 +1,155 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1760" height="1020" viewBox="0 0 1760 1020" font-family="'Noto Sans JP','Hiragino Sans','Yu Gothic',sans-serif">
+  <defs>
+    <marker id="m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#555"/></marker>
+    <marker id="mo" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#c77700"/></marker>
+    <marker id="mg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#2e7d32"/></marker>
+  </defs>
+  <style>
+    .title{font-size:26px;font-weight:700;fill:#222}
+    .sub{font-size:14px;fill:#555}
+    .lane{font-size:18px;font-weight:700;fill:#333}
+    .h{font-size:16px;font-weight:700;fill:#222}
+    .t{font-size:13px;fill:#333}
+    .n{font-size:12px;fill:#c77700;font-weight:700}
+    .d{font-size:12px;fill:#999;text-decoration:line-through}
+    .have{fill:#eef4fb;stroke:#1f5fa8;stroke-width:1.8}
+    .todo{fill:#fff6e5;stroke:#c77700;stroke-width:1.8;stroke-dasharray:7 4}
+    .human{fill:#eef7ee;stroke:#2e7d32;stroke-width:1.8}
+    .gone{fill:#f3f3f3;stroke:#999;stroke-width:1.4;stroke-dasharray:4 4}
+    .ar{fill:none;stroke:#555;stroke-width:1.6;marker-end:url(#m)}
+    .aro{fill:none;stroke:#c77700;stroke-width:1.6;stroke-dasharray:7 4;marker-end:url(#mo)}
+    .arg{fill:none;stroke:#2e7d32;stroke-width:1.6;marker-end:url(#mg)}
+    .lanebox{fill:none;stroke:#ccc;stroke-width:1;stroke-dasharray:3 5}
+  </style>
+  <rect width="1760" height="1020" fill="#fff"/>
+  <text x="40" y="44" class="title">目標の姿 v2（2026-10-28 夕）— install 順の列を区画分配型で回し、無人で検証し、結果を還流する</text>
+  <text x="40" y="68" class="sub">青 = ある。橙の破線 = これから作る（Issue 番号）。緑 = 人が触る 2 点。灰 = 比較の腕。取り消し線 = 消すもの。v1 からの差は「選定」「再訪」「還流の分母」の 3 つ。</text>
+
+  <!-- lane 1 -->
+  <rect x="30" y="92" width="1700" height="330" class="lanebox"/>
+  <text x="44" y="118" class="lane">① 探索（無人、24 時間、Codex runtime）— 列を上から順に消化し、版が上がった plugin を列に戻す</text>
+
+  <rect x="40" y="150" width="200" height="130" rx="8" class="todo"/>
+  <text x="56" y="176" class="h">選定 = 列</text>
+  <text x="56" y="198" class="t">install 10k 以上、365 日以内更新、</text>
+  <text x="56" y="218" class="t">除外著者以外の全件（約 2,170）</text>
+  <text x="56" y="238" class="t">install 多い順、同段は更新の新しい順</text>
+  <text x="56" y="258" class="t">同じ版は 1 回。版が上がれば戻す</text>
+  <text x="56" y="276" class="n">#533（書き換え）</text>
+
+  <rect x="280" y="150" width="200" height="100" rx="8" class="have"/>
+  <text x="296" y="176" class="h">Snapshot</text>
+  <text x="296" y="198" class="t">plugin、core、PHP、依存を</text>
+  <text x="296" y="218" class="t">版と digest で固定</text>
+
+  <rect x="520" y="150" width="200" height="100" rx="8" class="have"/>
+  <text x="536" y="176" class="h">列挙役 1 体（一発）</text>
+  <text x="536" y="198" class="t">道具を自分で走らせ、入口と</text>
+  <text x="536" y="218" class="t">出口の一覧と区画の案を書く</text>
+  <text x="536" y="238" class="n">Codex #646　道具 v2 #647</text>
+
+  <rect x="760" y="150" width="200" height="100" rx="8" class="have"/>
+  <text x="776" y="176" class="h">Harness: 形の検査</text>
+  <text x="776" y="198" class="t">schema、重複行、上限。</text>
+  <text x="776" y="218" class="t">超えたら理由付きで差し戻し ≤2</text>
+  <text x="776" y="238" class="n">上限の既定値 #647</text>
+
+  <rect x="1000" y="150" width="200" height="100" rx="8" class="have"/>
+  <text x="1016" y="176" class="h">追跡役 ≤8 体（一発）</text>
+  <text x="1016" y="198" class="t">区画ごと 1 体、隔離、45 分。</text>
+  <text x="1016" y="218" class="t">出すのは Finding と Lead</text>
+  <text x="1016" y="238" class="n">Codex #646　並列 4→8</text>
+
+  <rect x="1240" y="150" width="200" height="100" rx="8" class="have"/>
+  <text x="1256" y="176" class="h">正規化・park・群</text>
+  <text x="1256" y="198" class="t">契約 v4-solo、Boundary 外は park</text>
+  <text x="1256" y="218" class="n">群の鍵を必須に、版をまたいで</text>
+  <text x="1256" y="238" class="n">同じ発見を束ねる　#653</text>
+
+  <rect x="1480" y="150" width="200" height="100" rx="8" class="have"/>
+  <text x="1496" y="176" class="h">台帳 / Private Evidence</text>
+  <text x="1496" y="198" class="t">追記専用、digest 参照。</text>
+  <text x="1496" y="218" class="t">読んだ区画、出力の全件</text>
+
+  <path d="M240 200 H280" class="ar"/><path d="M480 200 H520" class="ar"/><path d="M720 200 H760" class="ar"/>
+  <path d="M960 200 H1000" class="ar"/><path d="M1200 200 H1240" class="ar"/><path d="M1440 200 H1480" class="ar"/>
+  <path d="M860 250 V275 H640 V250" class="ar"/><text x="660" y="292" class="t">差し戻し（前回の案と理由を添える）</text>
+
+  <!-- version watch -->
+  <rect x="280" y="300" width="440" height="60" rx="8" class="todo"/>
+  <text x="296" y="322" class="h">新版の監視（毎日）</text>
+  <text x="296" y="344" class="t">WordPress.org の版が Trial 済みの版より上がった plugin を、同じ順序で列に戻す。日数の待ち無し</text>
+  <path d="M280 330 H140 V280" class="aro"/>
+
+  <rect x="1000" y="300" width="440" height="70" rx="8" class="gone"/>
+  <text x="1016" y="324" class="h" fill="#666">比較の腕: v14-wide（Root + 子 ≤8、同じ列から 1 対象ずつ）</text>
+  <text x="1016" y="346" class="t" fill="#666">群/Trial と 提出/Trial で負けたら archived にする。prompt の版はもう変えない</text>
+  <path d="M1340 300 V250" class="ar" stroke="#999"/>
+
+  <text x="760" y="392" class="d">消す: install 帯の上限、cascade、scoreWeights、履歴 3 項の採点、legacy-history の file、mirror の鮮度で select が止まる gate、未提出 Finding による除外、90 日の待ち</text>
+
+  <!-- lane 2 -->
+  <rect x="30" y="440" width="1700" height="300" class="lanebox"/>
+  <text x="44" y="466" class="lane">② 検証と提出（段 1b と検証は無人、人は 10 分の観測と提出だけ。重複は提出前の照合でだけ扱う）</text>
+
+  <rect x="40" y="500" width="200" height="100" rx="8" class="have"/>
+  <text x="56" y="526" class="h">段 1b: 別の体が読み直す</text>
+  <text x="56" y="548" class="t">追跡役の文脈を持たない。</text>
+  <text x="56" y="568" class="t">固定ソースで 2 つの問い</text>
+  <text x="56" y="588" class="t">（wbh-screen / source-check）</text>
+
+  <rect x="280" y="500" width="200" height="100" rx="8" class="todo"/>
+  <text x="296" y="526" class="h">verify auto（一発、Lab 付き）</text>
+  <text x="296" y="548" class="t">Harness が Lab を立て、Codex が</text>
+  <text x="296" y="568" class="t">wbh-verify を headless で行う</text>
+  <text x="296" y="588" class="n">#650 → #651</text>
+
+  <rect x="520" y="500" width="200" height="100" rx="8" class="todo"/>
+  <text x="536" y="526" class="h">export v2</text>
+  <text x="536" y="548" class="t">送る request、見る画面、</text>
+  <text x="536" y="568" class="t">Lab の URL と期限。6 ファイル</text>
+  <text x="536" y="588" class="n">#652</text>
+
+  <rect x="760" y="500" width="200" height="100" rx="8" class="human"/>
+  <text x="776" y="526" class="h">人: 10 分の観測</text>
+  <text x="776" y="548" class="t">request を送り、自分の</text>
+  <text x="776" y="568" class="t">ブラウザで見る。記名申告</text>
+  <text x="776" y="588" class="t">（週末でも平日でも）</text>
+
+  <rect x="1000" y="500" width="200" height="100" rx="8" class="have"/>
+  <text x="1016" y="526" class="h">skill 3 本</text>
+  <text x="1016" y="548" class="t">wbh-dedupe（先例・重複、ここだけ）</text>
+  <text x="1016" y="568" class="t">wbh-destination（Wordfence →</text>
+  <text x="1016" y="588" class="t">Patchstack → vendor）、wbh-report</text>
+
+  <rect x="1240" y="500" width="200" height="100" rx="8" class="human"/>
+  <text x="1256" y="526" class="h">人: 提出</text>
+  <text x="1256" y="548" class="t">Wordfence / Patchstack の</text>
+  <text x="1256" y="568" class="t">フォーム。Harness は送らない</text>
+
+  <rect x="1480" y="500" width="200" height="100" rx="8" class="todo"/>
+  <text x="1496" y="526" class="h">結果の還流</text>
+  <text x="1496" y="548" class="t">採否、重複、報酬を台帳の</text>
+  <text x="1496" y="568" class="t">Finding に結ぶ</text>
+  <text x="1496" y="588" class="n">#601</text>
+
+  <path d="M240 550 H280" class="aro"/><path d="M480 550 H520" class="aro"/><path d="M720 550 H760" class="arg"/>
+  <path d="M960 550 H1000" class="ar"/><path d="M1200 550 H1240" class="arg"/><path d="M1440 550 H1480" class="aro"/>
+  <path d="M1580 250 V425 H140 V500" class="ar"/><text x="1300" y="442" class="t">群の代表が検証列に入ったら自動で起動</text>
+
+  <!-- feedback -->
+  <path d="M1580 600 V670 H18 V215 H40" class="aro"/>
+  <text x="440" y="692" class="n">群/Trial と 提出/Trial を install 段ごとに出す。履歴の型（こちらの位置の件数）は選定に使わず、集計の列として mirror から後で引く。版と腕の比較は同じ対象で対にして k≥3</text>
+
+  <!-- bottom -->
+  <text x="44" y="760" class="lane">変わらないもの</text>
+  <text x="44" y="786" class="t">不変条件 8 つ。gVisor と broker。Programme Boundary の出口で park。追記専用の台帳。Private Evidence は Git の外。判定器は置かず、人が Lab で見る。agent に渡る文章は owner-approved。mirror は段 1 と重複照合で使う。</text>
+
+  <text x="44" y="830" class="lane">順序</text>
+  <text x="44" y="856" class="t">#654（整理）→ #647（道具 v2・上限）→ #646（Codex の一発 run）→ #533（列と新版の監視。主帯は 1〜2 週で尽きるので #646 の直後）→ 本番を partitioned に切り替え → #650 → #651 → #652。並行: #653（群の鍵）、#601（還流）。</text>
+
+  <text x="44" y="900" class="lane">後で測ってから決めるもの</text>
+  <text x="44" y="926" class="t">種別で区画を切る（PRISM の形。本文の変更）。coverage critic。自分の確認済み Finding からの変種探索。失敗の要約を 2 回目の区画へ渡す。複数 model の和集合。Patchstack の 1 ページ stored XSS 条件の写し直し（小さな修正）。</text>
+
+  <text x="44" y="976" class="sub">出典: 2026-10-28-target-system.svg（v1）、Issue #533 の 2026-10-28 の 4 comment（legacy-started、位置の signal、前年→翌年の表、install 順への置き換え）。mirror と wp.org の計測は同日。</text>
+</svg>

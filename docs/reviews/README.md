@@ -10,6 +10,22 @@ AI に「調べて報告」を頼んだときの成果物を、日付付きで�
 
 設計と方針の出典:
 - [2026-10-31-exploration-structure-investigation.md](2026-10-31-exploration-structure-investigation.md): 探索の構造調査。Root が中央値約 16 分で閉じ、120 分の大半を使わない構造を本番台帳と実行記録から示した。ADR 0039 追記 16（#714）の数字の出典。
+- [2026-11-01-system-overview.html](2026-11-01-system-overview.html): 選定から提出までの全体と 6 段の責務分担を 1 枚にした図解（2026-11-01、所有者の「システム全体を解説して」への答え）。
+- [2026-11-01-system-flow-diagram.html](2026-11-01-system-flow-diagram.html): 全体の流れ図（選定 → Snapshot → 探索 → 出口 → 検証 → 提出）。docs/SYSTEM.md の Mermaid 図の原本。
+- [2026-11-01-system-design.html](2026-11-01-system-design.html): 段ごとの契約・処理・観測・決める数字を書いた設計書（2026-11-01）。所有者が検証する前提で Claude が書いた。
+- [2026-11-01-development-plan.md](2026-11-01-development-plan.md): 2026-11-01 夜の開発計画の整理。§2 の 5 項目（egress relay、目的文 1 枚、recon v2、重複表示、prior research）の出典。
+- [2026-11-01-owner-check.md](2026-11-01-owner-check.md): 計画 §2 を入れ終えた後の所有者チェック票と、再開で変える設定 3 つ。
+- [2026-11-01-exploration-design-assessment.md](2026-11-01-exploration-design-assessment.md): 探索設計の現状評価と、A/B/C の型と 3 つの問いで変更を判断する指針。
+- [2026-11-01-noticing-vs-reasoning.md](2026-11-01-noticing-vs-reasoning.md): 成立した Finding と見逃しを「気づき / 保存またぎ / 推論」の 3 段で分類した報告。機械の規則へ寄せる根拠は弱いとした。
+- [2026-11-01-selection-policy-proposal.md](2026-11-01-selection-policy-proposal.md): 下限 5,000・タグ無し・180 日・batch 10 の提案（#740、#743）。
+- [2026-11-01-lab-baseline-v3-proposal.md](2026-11-01-lab-baseline-v3-proposal.md): Lab 基準 `hosting-default-v3` の提案（#745）。
+- [2026-11-01-lab-normal-use-setup-proposal.md](2026-11-01-lab-normal-use-setup-proposal.md): Lab の「通常利用」セットアップの提案（`wbh-setup` v1、#750）。
+- [2026-10-31-pipeline-overview.md](2026-10-31-pipeline-overview.md): 2026-10-31 時点の選定 → 探索 → 検証 → 提出の整理。Wordfence の却下 40 件から検証側へ戻す規則の出典。
+- [2026-10-31-owner-record-types-and-architecture-fit.md](2026-10-31-owner-record-types-and-architecture-fit.md): 所有者の過去の発見の型と、3 つの戦力（ADR 0045）の適合。
+- [2026-10-31-three-forces-architecture.html](2026-10-31-three-forces-architecture.html): 3 つの戦力（sweep / diff-watch / named deep）の図（Issue #724）。
+- [2026-10-30-software-factory-research.md](2026-10-30-software-factory-research.md): software factory の一次資料と、この repo への適用候補（2026-10-30）。
+- [2026-10-30-development-environment-primary-sources.md](2026-10-30-development-environment-primary-sources.md): 開発環境整備の一次資料メモ（2026-10-30）。
+- [2026-10-30-ai-terms-and-relations.md](2026-10-30-ai-terms-and-relations.md): AI 開発の用語と関係の整理（2026-10-30）。
 - [2026-10-31-wp2shell-bounty-v19-wide.md](2026-10-31-wp2shell-bounty-v19-wide.md): wp2shell-bounty-v19-wide（v18-wide の停止文を tools の一覧に結び付けた比較候補、#714）の本文と出典対照表。2026-11-01 に計測せず archived（ADR 0039 追記 18）。
 - [2026-11-01-wp2shell-bounty-v20-wide.md](2026-11-01-wp2shell-bounty-v20-wide.md): wp2shell-bounty-v20-wide（v19-wide の本文に探索スキルへの routing の 1 段落を足した 1 file）の全文、日本語訳、出典対照表。同日、Trial を走らせずに archived（ADR 0039 追記 19）。
 - [2026-11-01-wp2shell-bounty-v21-wide.md](2026-11-01-wp2shell-bounty-v21-wide.md): wp2shell-bounty-v21-wide（`wide` の現行。v20-wide から判定器と canary の古い 2 文を消しただけ）の全文、日本語訳、消した 2 文の表。
@@ -58,6 +74,10 @@ AI に「調べて報告」を頼んだときの成果物を、日付付きで�
 - [2026-10-18-wp2shell-bounty-v7.md](2026-10-18-wp2shell-bounty-v7.md): prompt v7 の採用本文。
 - [2026-10-18-v8-r2-public-record-comparison.md](2026-10-18-v8-r2-public-record-comparison.md): v8 r2 の Trial と公開記録の照合。
 - [2026-10-25-wp2shell-bounty-v10.md](2026-10-25-wp2shell-bounty-v10.md): prompt v10 の本文、日本語訳、v8 との差分と出典対照。
+- [2026-10-31-exploration-prompts-japanese.html](2026-10-31-exploration-prompts-japanese.html): 2026-10-31 時点の探索プロンプトとスキル本文の日本語訳（読むための訳。エージェントには渡さない）。
+- [2026-10-30-enumeration-recall-cve-bench.md](2026-10-30-enumeration-recall-cve-bench.md): 区画分配型の列挙 script の再現率を既存 CVE ベンチで測った報告（2026-10-30）。区画分配型は ADR 0042 で廃止。
+- [2026-11-01-bench30-v1-trial-records.md](2026-11-01-bench30-v1-trial-records.md): bench30 v1（v19-wide、48 Trial）の記録から見た探索の改善点。bench30 の定義は [docs/evaluation/bench30-2026-11.md](../evaluation/bench30-2026-11.md)。
+- [../evaluation/bench30-2026-11.md](../evaluation/bench30-2026-11.md): bench30（Issue #726）の定義と記録。v1 → v2 → v3（密な版）。答えの鍵と source は Git 外。`docs/evaluation/README.md` は 2026-11-01 の文書整理（#774）で消えたので、案内はここに置く。
 
 Codex への依頼文:
 
@@ -163,6 +183,8 @@ Codex への依頼文:
 - [2026-10-28-architecture-refactor-review.md](2026-10-28-architecture-refactor-review.md): 新設計を基準にした構造レビューと管理一覧テストの整理
 - [2026-10-28-architecture.svg](2026-10-28-architecture.svg): 探索の仕組み（2026-10-28、承認用）— 中身は AI、形はハーネス
 - [2026-10-28-wp2shell-bounty-v18-wide.md](2026-10-28-wp2shell-bounty-v18-wide.md): wp2shell-bounty-v18-wide の本文と出典対照表（2026-10-28）
+- [2026-10-28-target-system-v2.svg](2026-10-28-target-system-v2.svg): 現状とこれからの作業を示す全体図の第 2 版（2026-10-28）
+- [2026-10-31-wbh-review-v5-patch.md](2026-10-31-wbh-review-v5-patch.md): wbh-review v5 の差分（ADR 0040 追記 3 に合わせた、所有者が当てる版）
 
 ## 現状と違う点（2026-10-19 時点）
 

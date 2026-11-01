@@ -1,0 +1,2423 @@
+<title>Bounty Harness 全体設計</title>
+<meta name="claude:viewport-fit-sides" content="cover" />
+<link
+  rel="stylesheet"
+  href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+/>
+<style>
+  /* layout: one reading column (max 980px), module cards with a fixed 6-row definition list, wide tables scroll in their own box */
+  :root {
+    --bg: #f4f6f7;
+    --fg: #1a2429;
+    --muted: #5d6b73;
+    --line: #cdd6db;
+    --panel: #e8edf0;
+    --panel2: #dfe6ea;
+    --accent: #0d6b73;
+    --accent-soft: #d6ebed;
+    --change: #8a4f0a;
+    --change-soft: #f3e4cf;
+    --keep: #4a5a63;
+    --keep-soft: #e3e8eb;
+    --human: #6b3a7d;
+    --human-soft: #eadff0;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sans:
+      "Noto Sans JP", system-ui, -apple-system, "Hiragino Sans", "Yu Gothic",
+      sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141a1d;
+      --fg: #e4e9eb;
+      --muted: #9fadb4;
+      --line: #334047;
+      --panel: #1c2429;
+      --panel2: #232d33;
+      --accent: #5fc3c9;
+      --accent-soft: #17383b;
+      --change: #e1a35a;
+      --change-soft: #3a2c17;
+      --keep: #aab7bd;
+      --keep-soft: #262f34;
+      --human: #c9a3d9;
+      --human-soft: #33253a;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141a1d;
+    --fg: #e4e9eb;
+    --muted: #9fadb4;
+    --line: #334047;
+    --panel: #1c2429;
+    --panel2: #232d33;
+    --accent: #5fc3c9;
+    --accent-soft: #17383b;
+    --change: #e1a35a;
+    --change-soft: #3a2c17;
+    --keep: #aab7bd;
+    --keep-soft: #262f34;
+    --human: #c9a3d9;
+    --human-soft: #33253a;
+    color-scheme: dark;
+  }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--sans);
+    line-height: 1.7;
+    font-size: 15px;
+    margin: 0;
+  }
+  main {
+    max-width: 980px;
+    margin: 0 auto;
+    padding-block: 28px 64px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  h1 {
+    font-size: 1.6rem;
+    font-weight: 700;
+    margin: 0 0 6px;
+    text-wrap: balance;
+    letter-spacing: 0.01em;
+  }
+  .sub {
+    color: var(--muted);
+    margin: 0 0 20px;
+    font-size: 0.92rem;
+  }
+  h2 {
+    font-size: 1.15rem;
+    font-weight: 700;
+    margin: 40px 0 10px;
+    padding-top: 10px;
+    border-top: 2px solid var(--line);
+    text-wrap: balance;
+  }
+  h3 {
+    font-size: 1rem;
+    font-weight: 700;
+    margin: 26px 0 8px;
+    text-wrap: balance;
+  }
+  p {
+    margin: 8px 0;
+    max-width: 72ch;
+  }
+  ul,
+  ol {
+    padding-left: 1.3em;
+    margin: 6px 0;
+    max-width: 72ch;
+  }
+  li {
+    margin: 3px 0;
+  }
+  code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    background: var(--panel);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+  .note {
+    font-size: 0.88rem;
+    color: var(--muted);
+  }
+  figure {
+    margin: 12px 0;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px 12px 6px;
+  }
+  figure svg {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    color: var(--fg);
+  }
+  figcaption {
+    color: var(--muted);
+    font-size: 0.86rem;
+    margin-top: 6px;
+  }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 20px;
+    font-size: 0.84rem;
+    color: var(--muted);
+    margin: 8px 0 0;
+  }
+  .legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .sw {
+    width: 20px;
+    height: 12px;
+    border-radius: 3px;
+    border: 1.5px solid currentColor;
+    display: inline-block;
+  }
+  .sw.k {
+    background: var(--keep-soft);
+    border-color: var(--keep);
+  }
+  .sw.c {
+    background: var(--change-soft);
+    border-color: var(--change);
+  }
+  .sw.n {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+  }
+  .sw.h {
+    background: var(--human-soft);
+    border-color: var(--human);
+  }
+  .tbl {
+    overflow-x: auto;
+    margin: 8px 0 4px;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 0.86rem;
+    min-width: 640px;
+  }
+  th,
+  td {
+    text-align: left;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  th {
+    font-weight: 700;
+    color: var(--muted);
+    font-size: 0.78rem;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+  td.num {
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .tag {
+    display: inline-block;
+    font-size: 0.74rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 1px 7px;
+    border-radius: 999px;
+    border: 1px solid;
+    vertical-align: middle;
+    white-space: nowrap;
+  }
+  .tag.k {
+    color: var(--keep);
+    background: var(--keep-soft);
+    border-color: var(--keep);
+  }
+  .tag.c {
+    color: var(--change);
+    background: var(--change-soft);
+    border-color: var(--change);
+  }
+  .tag.n {
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-color: var(--accent);
+  }
+  .tag.h {
+    color: var(--human);
+    background: var(--human-soft);
+    border-color: var(--human);
+  }
+  .mod {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    margin: 14px 0;
+    background: var(--bg);
+  }
+  .mod header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    padding: 10px 14px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    border-radius: 8px 8px 0 0;
+  }
+  .mod header b {
+    font-size: 1rem;
+  }
+  .mod header .who {
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  .mod dl {
+    display: grid;
+    grid-template-columns: 9.5em 1fr;
+    gap: 0;
+    margin: 0;
+  }
+  .mod dt {
+    padding: 9px 14px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--muted);
+    border-bottom: 1px solid var(--line);
+    background: var(--panel2);
+  }
+  .mod dd {
+    margin: 0;
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--line);
+    min-width: 0;
+  }
+  .mod dd:last-of-type,
+  .mod dt:last-of-type {
+    border-bottom: 0;
+  }
+  .mod dd p,
+  .mod dd ul {
+    margin: 4px 0;
+  }
+  @media (max-width: 560px) {
+    .mod dl {
+      grid-template-columns: 1fr;
+    }
+    .mod dt {
+      border-bottom: 0;
+      padding-bottom: 2px;
+    }
+  }
+  .principles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 10px;
+    margin: 10px 0;
+  }
+  .principles div {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 12px;
+    background: var(--panel);
+    min-width: 0;
+  }
+  .principles b {
+    display: block;
+    margin-bottom: 4px;
+  }
+  .skills td:first-child {
+    white-space: nowrap;
+    font-family: var(--mono);
+    font-size: 0.82rem;
+  }
+  .kbd {
+    font-family: var(--mono);
+    font-size: 0.84em;
+  }
+</style>
+<main>
+  <h1>Bounty Harness 全体設計</h1>
+  <p class="sub">
+    選定から提出までを 1
+    つのシステムとして、段ごとに契約・処理・観測・決める数字を書く。2026-11-01。「調べて報告」の成果物で正本ではない。正本は
+    docs/SPEC.md と docs/adr/。現行の処理は
+    origin/main（8247631）のコードから読んだ事実、「変える処理」は案である。Finding
+    の本文、payload、URL、対象固有の関数名は書かない。
+  </p>
+
+  <div class="legend">
+    <span><span class="sw k"></span>いまのまま</span>
+    <span><span class="sw c"></span>変える</span>
+    <span><span class="sw n"></span>新しく置く</span>
+    <span><span class="sw h"></span>人間の判断点</span>
+  </div>
+  <p class="note">
+    担い手は 4 種類に分ける。<b>Harness</b>（TypeScript
+    のコード。制御と記録だけ）、<b>道具</b>（script、semgrep、psalm。判断しない）、<b>スキル</b>（sandbox
+    内の agent が読む手順。中身の判断）、<b>人間</b>（観測、提出、承認）。
+  </p>
+
+  <h2>1. 設計の原則</h2>
+  <div class="principles">
+    <div>
+      <b>凍結の 5 つ（ADR 0045）</b>確定は人間の Lab 観測だけ。Harness
+      は制御だけ。台帳は追記専用で digest 参照だけ。分母は Codex 1 時間あたりの
+      Lab 発火と Wordfence の結果。設計変更は月 1 回。この設計書はこの 5
+      つを変えない。
+    </div>
+    <div>
+      <b>1 段に 1 契約、1 観測、1 数字</b
+      >各段は、版付きの入力と出力の契約（Zod）、Harness
+      が記録する観測、採否を決める数字を 1
+      つずつ持つ。観測は舵取りに使わない（ADR 0034）。
+    </div>
+    <div>
+      <b>A / B / C の試金石</b>合否を grep か AST
+      で書けるなら道具（A）。足りないのが本体の保存欄などの固定知識なら知識表 +
+      追跡（B）。2 要求や 2 時点を並べないと決まらないなら推論（C）。提案は 3
+      つのどれを動かすかを先に言う。
+    </div>
+    <div>
+      <b>スキル 1 本に単体テスト 1 つ</b>探索のスキルは bench30 v3 の答え（Git
+      外）に対して、そのスキルの成果物だけで採点できる形にする。探索を丸ごと回さないと測れないスキルは置かない。
+    </div>
+    <div>
+      <b>Lab で通った事実だけを次の土台にする</b>候補はソース上で反証し、探索
+      Lab で Harness が捕捉した事実だけを次の仮説の入力にする。捕捉は「agent
+      が観測した」と記録し、提出の確定は人間の観測に残す。
+    </div>
+    <div>
+      <b>消し方を先に書く</b>どの変更もスキル 1 本か設定 1 行で外せる。Harness
+      のコードに探索の判断を戻さない（LESSONS 14）。
+    </div>
+  </div>
+
+  <h2>2. 全体の流れ</h2>
+  <figure>
+    <svg
+      viewBox="0 0 960 300"
+      role="img"
+      aria-label="10 段の流れ。選定、Snapshot、sandbox と runtime、探索 Trial、出口の契約と park、選別の段 1 と 1b、検証 Lab、人間の観測、提出の 9 段が順に並び、すべてが台帳と Private Evidence に追記する。探索 Trial と検証 Lab と人間の観測は色が変わる段である。"
+    >
+      <defs>
+        <marker
+          id="ar"
+          viewBox="0 0 10 10"
+          refX="9"
+          refY="5"
+          markerWidth="7"
+          markerHeight="7"
+          orient="auto-start-reverse"
+        >
+          <path d="M0 0L10 5L0 10z" fill="currentColor" />
+        </marker>
+      </defs>
+      <g font-size="12" font-family="Noto Sans JP, sans-serif">
+        <!-- row 1 -->
+        <rect
+          x="20"
+          y="22"
+          width="160"
+          height="60"
+          rx="6"
+          fill="var(--keep-soft)"
+          stroke="var(--keep)"
+        />
+        <text x="100" y="46" text-anchor="middle" font-weight="700">
+          ① 選定
+        </text>
+        <text
+          x="100"
+          y="66"
+          text-anchor="middle"
+          font-size="11"
+          fill="var(--muted)"
+        >
+          インストール順、版上昇で再訪
+        </text>
+        <rect
+          x="210"
+          y="22"
+          width="160"
+          height="60"
+          rx="6"
+          fill="var(--keep-soft)"
+          stroke="var(--keep)"
+        />
+        <text x="290" y="46" text-anchor="middle" font-weight="700">
+          ② Snapshot
+        </text>
+        <text
+          x="290"
+          y="66"
+          text-anchor="middle"
+          font-size="11"
+          fill="var(--muted)"
+        >
+          plugin・core・PHP・依存を digest
+        </text>
+        <rect
+          x="400"
+          y="22"
+          width="160"
+          height="60"
+          rx="6"
+          fill="var(--change-soft)"
+          stroke="var(--change)"
+        />
+        <text x="480" y="46" text-anchor="middle" font-weight="700">
+          ③ sandbox・runtime
+        </text>
+        <text
+          x="480"
+          y="66"
+          text-anchor="middle"
+          font-size="11"
+          fill="var(--muted)"
+        >
+          runsc、broker、skills、観測
+        </text>
+        <rect
+          x="590"
+          y="22"
+          width="160"
+          height="60"
+          rx="6"
+          fill="var(--accent-soft)"
+          stroke="var(--accent)"
+          stroke-width="1.5"
+        />
+        <text x="670" y="46" text-anchor="middle" font-weight="700">
+          ④ 探索 Trial
+        </text>
+        <text
+          x="670"
+          y="66"
+          text-anchor="middle"
+          font-size="11"
+          fill="var(--muted)"
+        >
+          スキルの列 + 閉ループ（§3.4）
+        </text>
+        <rect
+          x="780"
+          y="22"
+          width="160"
+          height="60"
+          rx="6"
+          fill="var(--change-soft)"
+          stroke="var(--change)"
+        />
+        <text x="860" y="46" text-anchor="middle" font-weight="700">
+          ⑤ 出口
+        </text>
+        <text
+          x="860"
+          y="66"
+          text-anchor="middle"
+          font-size="11"
+          fill="var(--muted)"
+        >
+          契約 v4、正規化、park
+        </text>
+        <line
+          x1="180"
+          y1="52"
+          x2="208"
+          y2="52"
+          stroke="currentColor"
+          marker-end="url(#ar)"
+        />
+        <line
+          x1="370"
+          y1="52"
+          x2="398"
+          y2="52"
+          stroke="currentColor"
+          marker-end="url(#ar)"
+        />
+        <line
+          x1="560"
+          y1="52"
+          x2="588"
+          y2="52"
+          stroke="currentColor"
+          marker-end="url(#ar)"
+        />
+        <line
+          x1="750"
+          y1="52"
+          x2="778"
+          y2="52"
+          stroke="currentColor"
+          marker-end="url(#ar)"
+        />
+        <!-- down to row 2 -->
+        <path
+          d="M860 82 V110 H100 V136"
+          fill="none"
+          stroke="currentColor"
+          marker-end="url(#ar)"
+        />
+        <text
+          x="480"
+          y="104"
+          text-anchor="middle"
+          font-size="11"
+          fill="var(--muted)"
+        >
+          Finding（対象範囲内）は検証の結果に関係なく全件がレビュー列へ
+        </text>
+        <!-- row 2 -->
+        <rect
+          x="20"
+          y="138"
+          width="160"
+          height="60"
+          rx="6"
+          fill="var(--change-soft)"
+          stroke="var(--change)"
+        />
+        <text x="100" y="162" text-anchor="middle" font-weight="700">
+          ⑥ 選別
+        </text>
+        <text
+          x="100"
+          y="182"
+          text-anchor="middle"
+          font-size="11"
+          fill="var(--muted)"
+        >
+          段 1 規則、段 1b ソース読み直し
+        </text>
+        <rect
+          x="210"
+          y="138"
+          width="160"
+          height="60"
+          rx="6"
+          fill="var(--keep-soft)"
+          stroke="var(--keep)"
+        />
+        <text x="290" y="162" text-anchor="middle" font-weight="700">
+          ⑦ 検証 Lab
+        </text>
+        <text
+          x="290"
+          y="182"
+          text-anchor="middle"
+          font-size="11"
+          fill="var(--muted)"
+        >
+          handoff、HTTP 捕捉、状態差分
+        </text>
+        <rect
+          x="400"
+          y="138"
+          width="160"
+          height="60"
+          rx="6"
+          fill="var(--human-soft)"
+          stroke="var(--human)"
+          stroke-width="1.5"
+        />
+        <text x="480" y="162" text-anchor="middle" font-weight="700">
+          ⑧ 人間の観測
+        </text>
+        <text
+          x="480"
+          y="182"
+          text-anchor="middle"
+          font-size="11"
+          fill="var(--muted)"
+        >
+          review observe / decide --reproduced
+        </text>
+        <rect
+          x="590"
+          y="138"
+          width="160"
+          height="60"
+          rx="6"
+          fill="var(--human-soft)"
+          stroke="var(--human)"
+          stroke-width="1.5"
+        />
+        <text x="670" y="162" text-anchor="middle" font-weight="700">
+          ⑨ 提出
+        </text>
+        <text
+          x="670"
+          y="182"
+          text-anchor="middle"
+          font-size="11"
+          fill="var(--muted)"
+        >
+          dedupe、destination、report、人間が送る
+        </text>
+        <rect
+          x="780"
+          y="138"
+          width="160"
+          height="60"
+          rx="6"
+          fill="var(--keep-soft)"
+          stroke="var(--keep)"
+        />
+        <text x="860" y="162" text-anchor="middle" font-weight="700">
+          ⑩ 結果
+        </text>
+        <text
+          x="860"
+          y="182"
+          text-anchor="middle"
+          font-size="11"
+          fill="var(--muted)"
+        >
+          受理・重複・対象外を台帳へ
+        </text>
+        <line
+          x1="180"
+          y1="168"
+          x2="208"
+          y2="168"
+          stroke="currentColor"
+          marker-end="url(#ar)"
+        />
+        <line
+          x1="370"
+          y1="168"
+          x2="398"
+          y2="168"
+          stroke="currentColor"
+          marker-end="url(#ar)"
+        />
+        <line
+          x1="560"
+          y1="168"
+          x2="588"
+          y2="168"
+          stroke="currentColor"
+          marker-end="url(#ar)"
+        />
+        <line
+          x1="750"
+          y1="168"
+          x2="778"
+          y2="168"
+          stroke="currentColor"
+          marker-end="url(#ar)"
+        />
+        <!-- ledger band -->
+        <rect
+          x="20"
+          y="226"
+          width="920"
+          height="40"
+          rx="6"
+          fill="none"
+          stroke="currentColor"
+          stroke-dasharray="5 4"
+        />
+        <text x="480" y="251" text-anchor="middle" font-size="12">
+          台帳（SQLite、追記専用、39 種の event、digest 参照だけ）＋ Private
+          Evidence（Git
+          外、content-addressed）。すべての段が書き、どの段も消さない。
+        </text>
+        <!-- feedback -->
+        <path
+          d="M860 198 V214 H940 V12 H670 V20"
+          fill="none"
+          stroke="var(--accent)"
+          stroke-dasharray="3 3"
+          marker-end="url(#ar)"
+        />
+        <text
+          x="700"
+          y="292"
+          text-anchor="start"
+          font-size="11"
+          fill="var(--accent)"
+        >
+          点線: 結果と bench30 の数字が、探索の採否を決める
+        </text>
+      </g>
+    </svg>
+    <figcaption>
+      10
+      段の流れ。色が付いた段が、この設計書で処理を変える段である。選定、Snapshot、検証
+      Lab、結果の記録は変えない。
+    </figcaption>
+  </figure>
+
+  <div class="tbl">
+    <table>
+      <thead>
+        <tr>
+          <th>段</th>
+          <th>入力の契約</th>
+          <th>出力の契約</th>
+          <th>Harness が記録する観測</th>
+          <th>決める数字</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>① 選定</td>
+          <td>選定方針（JSON、digest）、WordPress.org の一覧と観測</td>
+          <td>
+            <code>TargetSelection v1</code>（slug@version、score、policy
+            digest）
+          </td>
+          <td>
+            <code>target-selected</code
+            >、<code>target-skipped(freeze)</code>、selection-report.json
+          </td>
+          <td>変えない（所有者決定 2026-10-31）</td>
+        </tr>
+        <tr>
+          <td>② Snapshot</td>
+          <td>TargetSelection</td>
+          <td>Snapshot record（target と dependencies の sourceDigest）</td>
+          <td><code>snapshot-frozen</code>、pinset</td>
+          <td>変えない</td>
+        </tr>
+        <tr>
+          <td>③ sandbox・runtime</td>
+          <td>
+            CampaignInput（Snapshot digest、trust 境界、Programme
+            Boundary、prompt・contract digest、skills）
+          </td>
+          <td>run receipt、research archive、read-paths</td>
+          <td>
+            <code>discovery-run-started/finished</code
+            >（observed、usage、labObserved）
+          </td>
+          <td>被覆の観測を足す。Codex 時間を分母にする</td>
+        </tr>
+        <tr>
+          <td>④ 探索 Trial</td>
+          <td>目的文 + 生成節 + skills + 固定ソース</td>
+          <td>
+            Root と子の報告（findings / leads の JSON 文字列）、research
+            file（map、tsv、flows）
+          </td>
+          <td>子の数、wall、filesRead、token</td>
+          <td>スキルごとの単体テスト（bench30 v3）と Lab 発火 / Codex 時間</td>
+        </tr>
+        <tr>
+          <td>⑤ 出口</td>
+          <td>報告の JSON</td>
+          <td><code>Finding v1</code> / <code>Lead v1</code>（契約 v4）</td>
+          <td>
+            <code>candidate-normalized/held</code
+            >、<code>finding-recorded/parked</code>、<code>lead-recorded</code>
+          </td>
+          <td>held と park の数（観測）</td>
+        </tr>
+        <tr>
+          <td>⑥ 選別</td>
+          <td>review export</td>
+          <td><code>review decide --by ai</code>（reason code）</td>
+          <td><code>review-decided</code></td>
+          <td>Trial 内の反証との一致率</td>
+        </tr>
+        <tr>
+          <td>⑦ 検証 Lab</td>
+          <td>Finding（同じ Snapshot）、Lab Setup</td>
+          <td><code>VerificationResult v1</code>、HTTP 捕捉、状態差分</td>
+          <td>
+            <code>lab-provisioned</code
+            >、<code>verification-finished</code>（常に
+            awaiting-human-observation）
+          </td>
+          <td>Lab 発火数</td>
+        </tr>
+        <tr>
+          <td>⑧ 人間の観測</td>
+          <td>保持した検証 Lab、用意した要求</td>
+          <td>
+            <code>manual-observation-recorded</code>、<code
+              >human-reproduction-recorded</code
+            >
+          </td>
+          <td>同左</td>
+          <td>match 数</td>
+        </tr>
+        <tr>
+          <td>⑨ 提出</td>
+          <td>accept + no-match + 提出先</td>
+          <td>
+            report と fill JSON（Private
+            Evidence）、<code>draft-saved</code>、<code
+              >submission-recorded-externally</code
+            >
+          </td>
+          <td>同左</td>
+          <td>提出数</td>
+        </tr>
+        <tr>
+          <td>⑩ 結果</td>
+          <td>Wordfence の返答</td>
+          <td>
+            <code>submission-outcome-recorded</code>（accepted / rejected /
+            duplicate / out-of-scope）
+          </td>
+          <td>同左</td>
+          <td>受理数と報酬（分母の片側）</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>3. 段ごとの詳細設計</h2>
+
+  <section class="mod">
+    <header>
+      <b>3.1 選定</b><span class="tag k">いまのまま</span
+      ><span class="who">担い手: Harness</span>
+    </header>
+    <dl>
+      <dt>役割</dt>
+      <dd>
+        方針に従って対象を機械的に選び、同じ版は 1 Trial、版が上がったら戻す。
+      </dd>
+      <dt>今の処理</dt>
+      <dd>
+        <ul>
+          <li>
+            WordPress.org の <code>query_plugins</code> を
+            <code>browse=popular</code> と方針の tag（8
+            つまで）でページ順に読み、全件が最低インストール数を割ったページで止める。一覧が古いか取れないときは候補を空にする（<code>wordpress-org-candidate-enumerator.ts:264-338</code>）。
+          </li>
+          <li>
+            適格性の理由は固定の語彙（<code>excluded-slug</code>、<code>observation-stale</code>、<code>update-stale</code>、<code>below-installation-threshold</code>、<code
+              >core-version-incompatible</code
+            >
+            など。<code>wordpress-selection.ts:233-309</code>）。Programme
+            の写しが current でなければ <code>programme-stale</code>。
+          </li>
+          <li>
+            並びはインストール数の降順、同数なら版の公開日、slug（<code>byInstall</code>、l.106-114）。score
+            はインストール数そのもの。
+          </li>
+          <li>
+            台帳の除外: 数えられる Trial（<code>explore</code> /
+            <code>enumerate</code>）があった slug@version は、版が上がらない限り
+            <code>previously-selected</code>。理由は <code>initial</code> か
+            <code>version-increased</code
+            >（<code>ledger-exclusions.ts:51-207</code>）。
+          </li>
+          <li>
+            方針の現在値: 最低 10,000 インストール、観測 2 日以内、更新 365
+            日以内、1 回に最大 5 本、WordPress
+            7.1.3（<code>policy/selection.json</code>）。
+          </li>
+          <li>
+            書くもの: Private Evidence の
+            <code>selection-report.json</code>、台帳の
+            <code>target-selected</code>（selectionId、promptVariant）、<code
+              >target-skipped(stage: freeze)</code
+            >、campaign 起動時の <code>selection-batch-bound</code>。
+          </li>
+        </ul>
+      </dd>
+      <dt>変える処理</dt>
+      <dd>
+        <p>
+          変えない。帯、順序、再訪の規則は所有者が 2026-10-31 に決めた。#724
+          の「差分監視」は選定の変更ではなく、<code>version-increased</code>
+          で再訪した対象に対して「新版の差分を読む順の先頭に置く」というスキル側の手順である（§3.4
+          S1）。
+        </p>
+      </dd>
+      <dt>観測と数字</dt>
+      <dd>対象ごとの Trial 数、再訪の数。採否の数字は持たない。</dd>
+      <dt>消し方</dt>
+      <dd>該当なし。</dd>
+    </dl>
+  </section>
+
+  <section class="mod">
+    <header>
+      <b>3.2 Snapshot</b><span class="tag k">いまのまま</span
+      ><span class="who">担い手: Harness</span>
+    </header>
+    <dl>
+      <dt>役割</dt>
+      <dd>
+        対象 plugin、WordPress 本体、PHP ソース、依存 plugin を版と digest
+        で固定し、以後のすべての段が同じ digest を参照できるようにする（不変条件
+        5）。
+      </dd>
+      <dt>今の処理</dt>
+      <dd>
+        <ul>
+          <li>
+            <code>freeze</code>: 取得 → manifest（path、sha256、size
+            の整列一覧）→
+            <code>sourceDigest = canonicalDigest(manifest)</code> → record の
+            digest を snapshot digest にし、<code
+              >snapshots/&lt;hex&gt;.json</code
+            >
+            に不変で書く。衝突は
+            <code>source-mismatch</code
+            >（<code>src/snapshot/index.ts:195</code>）。
+          </li>
+          <li>
+            ソースは <code>sources/&lt;sourceDigest&gt;/</code> に 1
+            回だけ展開し、file は 0444。既存は再計測して digest
+            一致を要求する（<code>materialized-sources.ts:56-127</code>）。
+          </li>
+          <li>
+            本体は固定 image の <code>/usr/src/wordpress</code> から取り、<code
+              >$wp_version</code
+            >
+            を campaign の版と照合。PHP は image の <code>php.tar.xz</code> を
+            sha256 で照合。
+          </li>
+          <li>
+            依存: 主ファイル先頭 8 KiB の <code>Requires Plugins</code> と
+            WooCommerce の版ヘッダから決める。<code>pinned-only</code>
+            で固定の無い WooCommerce は
+            <code>header-derived-unpinned</code>
+            として外し、ほかの未固定は止める。pinset は
+            <code>wordpress-org/plugin-dependency-pins/&lt;hex&gt;.json</code>
+            に不変で置く。
+          </li>
+          <li>
+            #734: ヘッダ付き PHP が複数あるときは root の
+            <code>&lt;slug&gt;.php</code>、無ければ root
+            直下に唯一のヘッダがある file、それ以外は
+            <code>main-plugin-file-ambiguous</code> で延期。
+          </li>
+          <li>
+            台帳:
+            <code>snapshot-frozen</code>（sourceDigest、dependencyDigests）。
+          </li>
+        </ul>
+      </dd>
+      <dt>変える処理</dt>
+      <dd>
+        <p>
+          変えない。bench30
+          の修正腕（全記録が直った最小の版）も同じ仕組みで固定しており、スキルの偽陽性の測定に使える。
+        </p>
+      </dd>
+      <dt>観測と数字</dt>
+      <dd>freeze の失敗理由の分布（観測のみ）。</dd>
+      <dt>消し方</dt>
+      <dd>該当なし。</dd>
+    </dl>
+  </section>
+
+  <section class="mod">
+    <header>
+      <b>3.3 sandbox・broker・runtime</b
+      ><span class="tag c">変える（観測の追加と道具の同梱）</span
+      ><span class="who">担い手: Harness</span>
+    </header>
+    <dl>
+      <dt>役割</dt>
+      <dd>
+        固定ソースを読み取り専用で agent に渡し、外向き通信を provider API
+        に限り、制限時間と子の数を強制し、観測を取る。判断は持たない。
+      </dd>
+      <dt>今の処理</dt>
+      <dd>
+        <ul>
+          <li>
+            runsc の container は
+            <code
+              >--read-only --cap-drop=ALL --no-new-privileges
+              --pids-limit=256</code
+            >、非 root、image は digest 固定、network は Trial ごとの internal
+            network だけ（<code>gvisor-container.ts:243-296</code>）。代替
+            runtime は無い。
+          </li>
+          <li>
+            mount:
+            <code>/workspace/main</code
+            >（対象、RO）、<code>/workspace/wordpress</code>、<code>/workspace/php</code>、<code>/workspace/dependencies/&lt;slug&gt;</code>（RO）、<code>/workspace/research</code>（RW、Trial
+            内で共有）。全 mount を Snapshot の tree と再照合する。
+          </li>
+          <li>
+            broker: run ごとに 1 container。agent は Trial 限りの Bearer token
+            だけを持ち、許す path は provider 1 種類分（Codex は
+            <code>/v1/responses</code> か
+            <code>/backend-api/codex/responses</code>、Claude は
+            <code>/v1/messages</code>）。model が root か子の model 以外なら
+            403。要求数と大きさに上限。
+          </li>
+          <li>
+            Codex:
+            <code>codex exec --model … --sandbox danger-full-access</code
+            >（隔離は runsc 側）、<code
+              >--enable multi_agent -c agents.max_threads=&lt;maxChildren&gt; -c
+              agents.max_depth=1</code
+            >。<code>max_threads</code> は同時に生きる子だけを縛る。Claude は
+            PreToolUse hook で Agent を拒む。
+          </li>
+          <li>
+            skills: <code>discovery.skills</code> の id を digest 照合して
+            <code>CODEX_HOME/skills/&lt;name&gt;/SKILL.md</code>（0400、<code
+              >.sh</code
+            >
+            は 0500）に置く。8 本、各 32 KiB、支援 file 16 まで。
+          </li>
+          <li>
+            prompt の組み立て順: 目的文 →
+            <code>## Finding and Lead output contract</code> →
+            <code>## Run parameters</code> →
+            <code>## Prior leads</code>（任意）→
+            <code>## Trust boundary</code> →
+            <code>## Programme Boundary</code> → <code>## Lab</code> か「Lab
+            なし」→ 本体・依存・notes の path →
+            <code>## Assigned files</code
+            >（<code>wordpress.ts:582-630</code>）。
+          </li>
+          <li>
+            観測: <code>discovery-run-finished</code> に
+            <code
+              >observed{toolCalls, filesRead, uniqueFilesRead, labRequests,
+              dbQueries}</code
+            >、<code>usage</code>（token 4
+            種）、<code>wallTimeMs</code>、<code>childThreadsObserved/Admitted</code>、<code>brokerMetrics</code>、<code
+              >researchArtifact{digest, truncated}</code
+            >。artifact は
+            <code>native-run-receipt</code>、<code>read-paths</code>（rollout
+            から取った source 相対 path
+            の整列一覧）、<code>research</code>（<code
+              >/workspace/research</code
+            >
+            の全件、8 MiB・256 entry まで）。
+          </li>
+          <li>
+            子は Root の会話履歴を引き継いで始まる。bench30 v1 で入力 token の
+            79% が子の分。
+          </li>
+        </ul>
+      </dd>
+      <dt>変える処理</dt>
+      <dd>
+        <ol>
+          <li>
+            <b>道具の同梱を確かめる。</b>semgrep と psalm が sandbox image
+            に入っているかは記録から判らない（bench30 v1 で実行
+            0）。入っていなければ image に足す。image digest
+            が変わるので、campaign 設定で名指しし、台帳の
+            <code>configuration</code> に image digest
+            が残ることを確かめる。Harness は道具を実行しない。実行するのは S1
+            のスキルである。
+          </li>
+          <li>
+            <b>被覆の観測を足す（舵取りではない）。</b>run の終了時に、research
+            archive の <code>tools/hooks.tsv</code> と
+            <code>tools/sinks.tsv</code> の file 集合と
+            <code>read-paths</code> の交わりを数え、<code
+              >observed.coverage{hooksFiles, hooksFilesRead, sinksFiles,
+              sinksFilesRead}</code
+            >
+            として <code>discovery-run-finished</code> に足す（欄は
+            add-only）。さらに <code>flows.tsv</code>（§3.4）があれば行数、<code
+              >reaches / blocked / unknown</code
+            >
+            の数、hop 数の分布を <code>observed.flows</code> に足す。Root
+            には返さない。
+          </li>
+          <li>
+            <b>子の履歴継承を測る。</b>子ごとの入力 token は receipt
+            にあるので、Codex
+            時間の分母に「子の継承分」を分けて出す。継承を切れるかは Codex
+            の設定を調べてから決める。
+          </li>
+        </ol>
+      </dd>
+      <dt>契約</dt>
+      <dd>
+        <code>CampaignInput v1</code> は変えない。<code
+          >discovery-run-finished.observed</code
+        >
+        に欄を足すだけ。旧 event は読み続ける。
+      </dd>
+      <dt>観測と数字</dt>
+      <dd>
+        被覆（hooks / sinks の file のうち読んだ割合。bench30 v1
+        の観測値は中央値 0.71 / 0.38）、flows の行数と判定の分布、子の token
+        比。
+      </dd>
+      <dt>消し方</dt>
+      <dd>観測の欄を書く関数を revert。image は前の digest に戻す。</dd>
+    </dl>
+  </section>
+
+  <section class="mod">
+    <header>
+      <b>3.4 探索 Trial</b
+      ><span class="tag n">新しく置く（スキルの列と閉ループ）</span
+      ><span class="who"
+        >担い手: スキル（判断）、道具（列挙）、Harness（上限と記録）</span
+      >
+    </header>
+    <dl>
+      <dt>役割</dt>
+      <dd>
+        固定ソースから、対象範囲内の効果に届く経路を見つけ、契約の形で出す。何を読むか、どの順で仮説を立てるかはスキルの側にある（AGENTS.md「Harness
+        と AI の責務」）。
+      </dd>
+      <dt>今の処理</dt>
+      <dd>
+        <ul>
+          <li>
+            目的文 <code>wp2shell-bounty-v19-wide</code>。Root は
+            <code>wbh-recon</code>（地図）と <code>wbh-tools</code>（列挙 script
+            2 本と本体機能の固定参照）を読み、sink 分類（HTML / SQL / file /
+            identity）ごとに 1 体の専門の子を立てる。子は入口から sink
+            へ前向き、sink から入口へ後ろ向きに 1〜2 hop を追い、<code
+              >/workspace/research/&lt;sink&gt;.md</code
+            >
+            に書いて戻る。Root は <code>REGISTRY.md</code> に hooks.tsv
+            の読んだ行数と残りを書き、残り 0 で閉じる。
+          </li>
+          <li>
+            bench30 v1（48 Trial）の実測: Root は中央値 12 分で閉じる。48/48
+            が「残り 0」と書いたが、観測した被覆は sinks で 0.38。case の hit は
+            9/30（A 3/10、B 5/10、C 1/10）。外した 20 件は「読んだが Finding も
+            Lead も無い」8、「Lead 止まり」12（欠けは <code>producer</code> が
+            28 件）。identity の子は平均 2.4 分で返り、Finding 1 件。
+          </li>
+          <li>
+            探索 Lab を付けた腕（v14、6 Trial）は、Lab が立っても要求 0 だった。
+          </li>
+        </ul>
+      </dd>
+      <dt>変える処理</dt>
+      <dd>
+        <p>
+          巨大な目的文で 3 種類の仕事をさせる形を、<b
+            >1 本ずつ単体で採点できるスキルの列</b
+          >に分ける。Root に残るのは順序と登録簿と終了だけ。Harness
+          に残るのは子の上限、制限時間、Lab の予算、全件保存である。
+        </p>
+        <div class="tbl">
+          <table class="skills">
+            <thead>
+              <tr>
+                <th>スキル</th>
+                <th>種</th>
+                <th>入力</th>
+                <th>出力（research file）</th>
+                <th>単体テスト（bench30 v3 の答えに対して）</th>
+                <th>状態</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>S0 wbh-recon</td>
+                <td>B/C</td>
+                <td>固定ソース</td>
+                <td>
+                  <code>recon-map.md</code
+                  >（subsystem、入口、gate、helper、store、JS 境界）
+                </td>
+                <td>答えの file が map の入口表か helper 表にあるか</td>
+                <td><span class="tag k">v1 あり</span></td>
+              </tr>
+              <tr>
+                <td>S1 wbh-tools</td>
+                <td>A</td>
+                <td>固定ソース、script v3、semgrep / psalm の規則</td>
+                <td>
+                  <code>tools/hooks.tsv</code
+                  >、<code>tools/sinks.tsv</code>、<code>tools/taint.tsv</code>（file、行、入口
+                  → sink の候補行）。再訪なら新版の差分に当たる行を先頭に
+                </td>
+                <td>
+                  答えの入口行と sink
+                  行が出力にあるか（再現率）。修正腕で候補が消えるか
+                </td>
+                <td><span class="tag c">v1 → v2</span></td>
+              </tr>
+              <tr>
+                <td>S2 wbh-sources</td>
+                <td>B</td>
+                <td>
+                  固定参照
+                  <code>core-stored-sources-v1.md</code
+                  >（低権限者が本体と主要な依存に保存できる欄と、それを描く本体の場所）
+                </td>
+                <td>html の子に渡す「表の行 × plugin の描画箇所」の単位一覧</td>
+                <td>B 型の答えの入口が表の行にあるか（表の被覆）</td>
+                <td><span class="tag n">新規</span></td>
+              </tr>
+              <tr>
+                <td>S3 wbh-trace</td>
+                <td>A/B</td>
+                <td>候補行 1 つ（S1 か S2 の 1 行）</td>
+                <td>
+                  <code>flows.tsv</code> に 1 行以上:
+                  入口（file:関数:行、機構、到達できる役）、parameter
+                  か保存欄、変換（sanitizer と文脈）、store（kind,
+                  key）、sink（file:関数:行、分類）、hop 数、判定
+                  <code>reaches / blocked / unknown</code>、欠け（missingEdge
+                  の語彙）、止まった理由
+                </td>
+                <td>
+                  答えの入口と sink を結ぶ行が
+                  <code>reaches</code> で存在するか（行の再現率）。hop
+                  数と止まった理由が「1〜2 hop で止まった」を観測可能にする
+                </td>
+                <td><span class="tag n">新規</span></td>
+              </tr>
+              <tr>
+                <td>S4 wbh-falsify</td>
+                <td>A/B</td>
+                <td>
+                  <code>flows.tsv</code> の <code>reaches</code> 行 1
+                  つ。候補を出した子の研究 file は読まない
+                </td>
+                <td>
+                  同じ行に
+                  <code>falsified: yes/no/unknown</code> と根拠（本体ソースの
+                  file:行。kses、prepare、nonce、capability が実際に何をするか）
+                </td>
+                <td>
+                  修正腕で <code>yes</code> になる率、脆弱版の答えの行で
+                  <code>no</code> になる率。段 1b の人間側の判定との一致率
+                </td>
+                <td><span class="tag n">新規</span></td>
+              </tr>
+              <tr>
+                <td>S5 wbh-probe</td>
+                <td>A/B/C</td>
+                <td>
+                  <code>falsified: no</code> の行と探索 Lab（第 2 Trial、ADR
+                  0044）
+                </td>
+                <td>
+                  <code>observed.tsv</code>: 行 id、使った役、送った要求の捕捉
+                  id、Lab の反応（dialog、marker、HTTP status、状態差分）、<code
+                    >observed: fired / not-fired / blocked</code
+                  >
+                </td>
+                <td>
+                  答えの行で <code>fired</code> になるか。Harness
+                  の捕捉（<code>capture.jsonl</code>）と一致するか
+                </td>
+                <td><span class="tag n">新規</span></td>
+              </tr>
+              <tr>
+                <td>S6 wbh-extend</td>
+                <td>B/C</td>
+                <td><code>observed: fired</code> の行（確認済みの事実）だけ</td>
+                <td>
+                  新しい候補行: 同じ sink に届く別の入口、同じ入口から届く別の
+                  sink、同じ helper の別の呼び出し元、同じ前提で開く別の経路。S3
+                  へ戻す
+                </td>
+                <td>
+                  密な版（1 版に複数の答え）で、1 つ目の確認から 2
+                  つ目の答えに届くか
+                </td>
+                <td><span class="tag n">新規</span></td>
+              </tr>
+              <tr>
+                <td>S7 wbh-deep</td>
+                <td>C</td>
+                <td>
+                  map の状態を持つ面（identity、決済、cron、cache、nonce と
+                  token）1 つ
+                </td>
+                <td>面ごとの仮説と反証の記録、<code>flows.tsv</code> の行</td>
+                <td>C 群の答えに届くか。面ごとの時間と hit</td>
+                <td><span class="tag n">新規（名指しの深掘り）</span></td>
+              </tr>
+              <tr>
+                <td>Root（wbh-coverage）</td>
+                <td>—</td>
+                <td>map、tsv、flows</td>
+                <td>
+                  <code>REGISTRY.md</code>:
+                  単位ごとに「読んだ」「未読の理由」。終了は観測した被覆が単位ごとに埋まり、開いた候補行が無くなったとき
+                </td>
+                <td>閉じた時点の被覆と、答えの行が未読側に残っていないか</td>
+                <td>
+                  <span class="tag c">v19 の停止段落を置き換える（#686）</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="note">
+          S1〜S4 は Codex の子として同じ Trial で回る。S5 と S6 は探索 Lab
+          が要るので、ADR 0044 の第 2 Trial（Lab 付き、名指し）で回す。第 1
+          Trial に Lab を付けない理由は、16
+          分で閉じる段階では使われなかったことにある。S7 は identity の sink
+          を持つ大型 plugin に名指しで立てる。
+        </p>
+      </dd>
+      <dt>閉ループ</dt>
+      <dd>
+        <figure>
+          <svg
+            viewBox="0 0 960 250"
+            role="img"
+            aria-label="閉ループ。候補行は S1 の道具と S2 の知識表から出て、S3 が flows.tsv に追跡を書き、S4 が本体ソースで反証し、落ちたものは不成立として記録される。残った行を S5 が探索 Lab で送り、Harness が捕捉し、発火した行だけを確認済みの事実として S6 が広げ、新しい候補行として S3 に戻す。発火しなかった行は Lead になる。確認済みの事実と Finding は出口の契約で出て、確定は人間の観測に残る。"
+          >
+            <defs>
+              <marker
+                id="ar2"
+                viewBox="0 0 10 10"
+                refX="9"
+                refY="5"
+                markerWidth="7"
+                markerHeight="7"
+                orient="auto-start-reverse"
+              >
+                <path d="M0 0L10 5L0 10z" fill="currentColor" />
+              </marker>
+            </defs>
+            <g font-size="12" font-family="Noto Sans JP, sans-serif">
+              <rect
+                x="20"
+                y="70"
+                width="130"
+                height="64"
+                rx="6"
+                fill="var(--keep-soft)"
+                stroke="var(--keep)"
+              />
+              <text x="85" y="94" text-anchor="middle" font-weight="700">
+                候補行
+              </text>
+              <text
+                x="85"
+                y="112"
+                text-anchor="middle"
+                font-size="11"
+                fill="var(--muted)"
+              >
+                S1 道具 / S2 知識表
+              </text>
+              <rect
+                x="190"
+                y="70"
+                width="130"
+                height="64"
+                rx="6"
+                fill="var(--accent-soft)"
+                stroke="var(--accent)"
+              />
+              <text x="255" y="94" text-anchor="middle" font-weight="700">
+                S3 追跡
+              </text>
+              <text
+                x="255"
+                y="112"
+                text-anchor="middle"
+                font-size="11"
+                fill="var(--muted)"
+              >
+                flows.tsv に 1 行
+              </text>
+              <rect
+                x="360"
+                y="70"
+                width="130"
+                height="64"
+                rx="6"
+                fill="var(--accent-soft)"
+                stroke="var(--accent)"
+              />
+              <text x="425" y="94" text-anchor="middle" font-weight="700">
+                S4 反証
+              </text>
+              <text
+                x="425"
+                y="112"
+                text-anchor="middle"
+                font-size="11"
+                fill="var(--muted)"
+              >
+                本体ソースで guard を読む
+              </text>
+              <rect
+                x="530"
+                y="70"
+                width="130"
+                height="64"
+                rx="6"
+                fill="var(--accent-soft)"
+                stroke="var(--accent)"
+              />
+              <text x="595" y="94" text-anchor="middle" font-weight="700">
+                S5 Lab で送る
+              </text>
+              <text
+                x="595"
+                y="112"
+                text-anchor="middle"
+                font-size="11"
+                fill="var(--muted)"
+              >
+                Harness が捕捉
+              </text>
+              <rect
+                x="700"
+                y="70"
+                width="130"
+                height="64"
+                rx="6"
+                fill="var(--accent-soft)"
+                stroke="var(--accent)"
+              />
+              <text x="765" y="94" text-anchor="middle" font-weight="700">
+                S6 広げる
+              </text>
+              <text
+                x="765"
+                y="112"
+                text-anchor="middle"
+                font-size="11"
+                fill="var(--muted)"
+              >
+                fired の行だけから
+              </text>
+              <line
+                x1="150"
+                y1="102"
+                x2="188"
+                y2="102"
+                stroke="currentColor"
+                marker-end="url(#ar2)"
+              />
+              <line
+                x1="320"
+                y1="102"
+                x2="358"
+                y2="102"
+                stroke="currentColor"
+                marker-end="url(#ar2)"
+              />
+              <text
+                x="339"
+                y="94"
+                text-anchor="middle"
+                font-size="10"
+                fill="var(--muted)"
+              >
+                reaches
+              </text>
+              <line
+                x1="490"
+                y1="102"
+                x2="528"
+                y2="102"
+                stroke="currentColor"
+                marker-end="url(#ar2)"
+              />
+              <text
+                x="509"
+                y="94"
+                text-anchor="middle"
+                font-size="10"
+                fill="var(--muted)"
+              >
+                no
+              </text>
+              <line
+                x1="660"
+                y1="102"
+                x2="698"
+                y2="102"
+                stroke="currentColor"
+                marker-end="url(#ar2)"
+              />
+              <text
+                x="679"
+                y="94"
+                text-anchor="middle"
+                font-size="10"
+                fill="var(--muted)"
+              >
+                fired
+              </text>
+              <!-- return -->
+              <path
+                d="M765 70 V30 H255 V68"
+                fill="none"
+                stroke="var(--accent)"
+                stroke-width="1.5"
+                marker-end="url(#ar2)"
+              />
+              <text
+                x="510"
+                y="24"
+                text-anchor="middle"
+                font-size="11"
+                fill="var(--accent)"
+              >
+                新しい候補行（同じ sink の別入口、同じ入口の別 sink、同じ helper
+                の別呼び出し元）
+              </text>
+              <!-- exits -->
+              <path
+                d="M425 134 V176"
+                fill="none"
+                stroke="currentColor"
+                stroke-dasharray="4 3"
+                marker-end="url(#ar2)"
+              />
+              <rect
+                x="350"
+                y="178"
+                width="150"
+                height="40"
+                rx="6"
+                fill="none"
+                stroke="currentColor"
+                stroke-dasharray="4 3"
+              />
+              <text x="425" y="202" text-anchor="middle" font-size="11">
+                yes → 不成立として記録
+              </text>
+              <path
+                d="M595 134 V176"
+                fill="none"
+                stroke="currentColor"
+                stroke-dasharray="4 3"
+                marker-end="url(#ar2)"
+              />
+              <rect
+                x="520"
+                y="178"
+                width="150"
+                height="40"
+                rx="6"
+                fill="none"
+                stroke="currentColor"
+                stroke-dasharray="4 3"
+              />
+              <text x="595" y="202" text-anchor="middle" font-size="11">
+                not-fired → Lead（欠け付き）
+              </text>
+              <path
+                d="M830 102 H900 V176"
+                fill="none"
+                stroke="currentColor"
+                marker-end="url(#ar2)"
+              />
+              <rect
+                x="760"
+                y="178"
+                width="180"
+                height="40"
+                rx="6"
+                fill="var(--human-soft)"
+                stroke="var(--human)"
+              />
+              <text
+                x="850"
+                y="196"
+                text-anchor="middle"
+                font-size="11"
+                font-weight="700"
+              >
+                Finding（契約 v4）
+              </text>
+              <text
+                x="850"
+                y="211"
+                text-anchor="middle"
+                font-size="10"
+                fill="var(--muted)"
+              >
+                確定は人間の観測（§3.8）
+              </text>
+              <text x="20" y="240" font-size="11" fill="var(--muted)">
+                S1〜S4 は第 1 Trial の子。S5〜S6 は Lab 付きの第 2
+                Trial。「fired」は Harness の捕捉で、agent の申告ではない。
+              </text>
+            </g>
+          </svg>
+          <figcaption>
+            候補行は反証を通り、Lab で Harness
+            が捕捉した行だけが次の仮説の土台になる。落ちたものと届かなかったものも記録に残る。
+          </figcaption>
+        </figure>
+        <p>
+          「Lab で通った」の意味を固定する。探索 Lab の
+          <code>POST /observe</code>（役、path、操作 5 つまで、dialog
+          marker）の答えと <code>capture.jsonl</code> は Harness
+          が記録する事実で、<code>exploration-lab</code> artifact に残る。これを
+          <b>agent-observed</b> と呼び、S6 の入力と Finding の
+          <code>labObservations</code> にだけ使う。提出の根拠にはしない（凍結
+          1、ADR 0040）。人間は同じ要求を検証 Lab で再送して観測する。
+        </p>
+        <p>
+          反証の独立性について。Codex の子は Root の履歴を引き継ぐので、S4
+          を完全に独立した体にはできない。第 1 Trial では「候補を出した子の研究
+          file
+          を読まない」「本体ソースの該当行を引用する」という手順で近似し、完全な独立は第
+          2 Trial の S5（別の sandbox、別の Trial）で取る。段 1b（§3.6）は、S4
+          との一致率が測れるまで残す。
+        </p>
+      </dd>
+      <dt>観測の 4 層</dt>
+      <dd>
+        <div class="tbl">
+          <table>
+            <thead>
+              <tr>
+                <th>層</th>
+                <th>問い</th>
+                <th>読む記録</th>
+                <th>今</th>
+                <th>変えた後</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>file</td>
+                <td>答えの file を誰かが開いたか</td>
+                <td><code>read-paths</code> と答えの file</td>
+                <td>測れる（bench30 v1 で 48/48）</td>
+                <td>
+                  同じ。加えて hooks / sinks の file 集合に対する被覆を Harness
+                  が記録
+                </td>
+              </tr>
+              <tr>
+                <td>行（経路）</td>
+                <td>開いた file で何 hop まで追い、どこで止まったか</td>
+                <td><code>flows.tsv</code> の hop 数、判定、止まった理由</td>
+                <td>
+                  測れない（散文の <code>claim</code> と Lead の
+                  <code>missingEdge</code> だけ）
+                </td>
+                <td>行ごとに測れる。「1〜2 hop で止まった」が数になる</td>
+              </tr>
+              <tr>
+                <td>スキル</td>
+                <td>どのスキルが答えを落としたか</td>
+                <td>各スキルの research file と答え</td>
+                <td>測れない（探索を丸ごと回した hit だけ）</td>
+                <td>S0〜S7 ごとの再現率。落とした段が特定できる</td>
+              </tr>
+              <tr>
+                <td>Trial</td>
+                <td>費用に見合うか</td>
+                <td>
+                  <code>discovery-run-finished</code> の wall、usage、Lab 発火
+                </td>
+                <td>測れる</td>
+                <td>同じ。分母は Codex 1 時間あたりの Lab 発火</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </dd>
+      <dt>契約</dt>
+      <dd>
+        目的文、契約 v4、生成節は変えない。<code>flows.tsv</code> と
+        <code>observed.tsv</code> は research file
+        で、全件保存の仕組みに乗る。目的文からは「sink 分類ごとに 1
+        体」の段落と停止段落を<b>削る</b>方向にだけ触る（凍結
+        5）。各スキルの本文と支援 file は agent に渡る文章なので
+        <code>owner-approved</code> と出典対照表が要る。
+      </dd>
+      <dt>観測と数字</dt>
+      <dd>
+        スキルごとの単体テスト（上の表）。全体は bench30 v3 の群別 hit（A 12 本
+        / B 10 本 / C 8 本、修正腕で偽陽性）と、本番の Lab 発火 / Codex 時間。
+      </dd>
+      <dt>消し方</dt>
+      <dd>
+        <code>discovery.skills</code> から id を外す。スキルは registry で
+        <code>archived</code> にし、台帳の
+        <code>configuration.skills</code> は読み続ける。Harness のコードは §3.3
+        の観測以外に触っていないので、revert は観測の欄だけ。
+      </dd>
+    </dl>
+  </section>
+
+  <section class="mod">
+    <header>
+      <b>3.5 出口（契約・正規化・park）</b
+      ><span class="tag c">変える（記録の形）</span
+      ><span class="who">担い手: Harness</span>
+    </header>
+    <dl>
+      <dt>役割</dt>
+      <dd>
+        agent の報告をスキーマで正規化して受理し、Programme Boundary 外を park
+        し、全件を Private Evidence に残す。棄却はしない（ADR 0018）。
+      </dd>
+      <dt>今の処理</dt>
+      <dd>
+        <ul>
+          <li>
+            Finding（契約 v4、<code>finding.ts:156-206</code>）:
+            <code>claim</code>（4,000
+            字まで）、<code>attackerPosition</code>（unauthenticated /
+            subscriber / customer）、<code>impact</code>（22
+            種）、<code>configurationPrecondition</code>、<code>brokenProperty</code>、<code
+              >sourceTrace[{file, function, line}]</code
+            >、<code>existingControls</code>、<code>labObservations</code>、<code>privateRecipeReference?</code>。<code
+              >findingId</code
+            >
+            は runId を含む本文の canonical digest。
+          </li>
+          <li>
+            Lead（<code>lead.ts:25-65</code>）:
+            <code>summary</code>、<code>primitive</code>（read / write / delete
+            / auth-material / partial-execution）、<code
+              >storage{kind, key}</code
+            >
+            か null、<code>missingEdge</code>（producer / consumer / auth-use /
+            reachability / precondition）、<code>sourceTrace</code>。
+          </li>
+          <li>
+            正規化は構文の修復だけ（<code>json-decoded</code>、<code>text-array-joined</code>、<code>text-truncated</code>、<code>impact-label-coerced</code>、<code
+              >source-trace-parsed</code
+            >
+            など）。スキーマに通らなければ <code>candidate-held</code>。
+          </li>
+          <li>
+            park: impact が Programme の 12 種に無ければ
+            <code>outside-programme-boundary</code>。申告欄（v5 の 3 欄）が park
+            一覧に当たれば <code>declared-precondition</code>。v4 では申告欄を
+            agent に見せないので、新しい Finding にはほぼ当たらない。
+          </li>
+          <li>
+            Root と子は別々に記録する。同じ経路でも runId が違うので別 Finding
+            になり、群（file + 関数の組）で束ねる。
+          </li>
+          <li>
+            v5（申告欄付き）を使った v16 / v17 で Finding が崩れた（0.33 /
+            Trial）。契約の文を足すと探索が縮む。
+          </li>
+        </ul>
+      </dd>
+      <dt>変える処理</dt>
+      <dd>
+        <ol>
+          <li>
+            <b>契約 v4 は変えない。</b>機械で読める記録は、まず research file の
+            <code>flows.tsv</code> と
+            <code>observed.tsv</code> として置く（§3.4）。これらは
+            <code>research</code> artifact に全件入り、Harness が §3.3
+            の観測として行数と判定を数える。
+          </li>
+          <li>
+            <b>Finding と行を結ぶ。</b>Finding の
+            <code>sourceTrace</code> の先頭と末尾（入口と効果の file +
+            関数）は、<code>flows.tsv</code> の行の入口と sink
+            と同じ鍵なので、Harness 側で結合して review export に
+            <code>flows</code> 節を足す（export の版を上げる。契約は触らない）。
+          </li>
+          <li>
+            <b>20 Trial で埋まり方を測ってから</b
+            >、契約へ昇格させるかを決める。昇格するなら
+            <code>claim</code>
+            の上限を下げる方向と同時に行い、文を足す方向にはしない。
+          </li>
+        </ol>
+      </dd>
+      <dt>契約</dt>
+      <dd>
+        Finding v1 / Lead v1（契約 v4）は不変。<code>review-export</code> は v3
+        に上げて <code>flows</code> と <code>observed</code> の節を足す。
+      </dd>
+      <dt>観測と数字</dt>
+      <dd>
+        Finding のうち <code>flows.tsv</code> の行に結合できた割合。held と park
+        の数。
+      </dd>
+      <dt>消し方</dt>
+      <dd>
+        export の節を外す。research file は agent
+        の出力なので、スキルを外せば出なくなる。
+      </dd>
+    </dl>
+  </section>
+
+  <section class="mod">
+    <header>
+      <b>3.6 選別（段 1、段 1b）</b
+      ><span class="tag c">変える（Trial 内の反証との関係）</span
+      ><span class="who">担い手: スキル（host 側、AI 操作役）</span>
+    </header>
+    <dl>
+      <dt>役割</dt>
+      <dd>
+        Lab を立てる前に、公式規則で明白に除外されるもの（段
+        1、<code>wbh-screen</code>）と、固定ソースだけで「低権限者が入力を握れるか」「既定かもっともらしい設定で
+        sink に届くか」に no が付くもの（段
+        1b、<code>wbh-source-check</code>）を落とす。判定は
+        <code>review decide --by ai</code> で記録し、人間の観測は代行しない。
+      </dd>
+      <dt>今の処理</dt>
+      <dd>
+        段 1b は対象ごとに 1 agent、10 件まで、実行も通信もしない。2026-10-28
+        の全未検証 173 件では成立 106 / 不成立 45 / 未決 22。段 2
+        の選別実験では人間の判断と 159/162 が一致した。
+      </dd>
+      <dt>変える処理</dt>
+      <dd>
+        <p>
+          段 1b の 2 つの問いは、S4（反証）が Trial の中で同じ問いに答える。S4
+          の行と段 1b の判定を同じ Finding について並べ、一致率が測れるまで段 1b
+          を残す。一致率が十分なら、段 1b は「S4 の根拠行を人間が 1
+          画面で見る」確認票に縮む。段 1 の規則は変えない。
+        </p>
+      </dd>
+      <dt>契約</dt>
+      <dd>
+        <code>review decide</code> の reason
+        code（<code>^[a-z0-9][a-z0-9-]{0,63}$</code>）はそのまま。S4 の結果は
+        research file で、台帳には入らない。
+      </dd>
+      <dt>観測と数字</dt>
+      <dd>
+        S4 と段 1b の一致率。段 1b の不成立のうち S4 が先に落としていた割合。
+      </dd>
+      <dt>消し方</dt>
+      <dd>スキル本文の改訂を revert。</dd>
+    </dl>
+  </section>
+
+  <section class="mod">
+    <header>
+      <b>3.7 検証 Lab（<span class="kbd">verify next --handoff</span>）</b
+      ><span class="tag k">いまのまま</span
+      ><span class="who"
+        >担い手: Harness（Lab と捕捉）、スキル <code>wbh-verify</code>（前提と
+        route）</span
+      >
+    </header>
+    <dl>
+      <dt>役割</dt>
+      <dd>
+        Finding 1 件（同じ Snapshot のものを 1 Lab に 5 件まで）に使い捨ての
+        WordPress + MariaDB
+        を立て、スキルが通常機能で前提を作り、攻撃者の位置から route
+        を実行し、Harness が HTTP と Lab 状態の差分と Lab browser
+        の記録を残す。成立は判定しない。
+      </dd>
+      <dt>今の処理</dt>
+      <dd>
+        <ul>
+          <li>
+            Lab は runsc。基準環境 <code>hosting-default-v2</code>（同梱 plugin
+            なし、PHP 8、<code>display_errors</code>
+            off、<code>/%postname%/</code>、未認証の攻撃者は foreign origin で
+            <code>/wp-admin</code>（admin-ajax と admin-post
+            を除く）、<code>/wp-login.php</code>、<code>/xmlrpc.php</code>
+            を拒む）。初期化は core install → 同梱 plugin 削除 →
+            依存と対象の導入 → 基準の適用と読み戻し → 第 2 locale →
+            攻撃者と被害者の account → 初期記事（管理者の作者、#718）。
+          </li>
+          <li>
+            handoff の順:
+            <code>lab.json</code>（<code>wbh-handoff-lab/v2</code>、管理者は
+            setup 限り）→ <code>setup-done</code> を待つ → 管理者 session と app
+            password を全部失効、管理者 password を乱数に替え、捕捉 marker
+            と状態 baseline を取り直す（<code>setup-close.ts</code>）→
+            <code>observation-ready</code> →
+            <code>attack.json</code>（攻撃者の役だけ、読み取り専用 DB は任意）→
+            6
+            file（<code>http.json</code>、<code>steps.md</code>、<code>route.json</code>、<code>session.json</code>、<code>refutation.md</code>、<code>precondition</code>）か
+            <code>abort</code> を待つ。壁は setup と route を合わせて 30 分。
+          </li>
+          <li>
+            証拠: <code>proxy-capture.jsonl</code>（要求と応答の
+            method、path、header、body）、<code>lab-browser-observation.json</code>（被害者の役で訪問し
+            dialog と marker
+            を記録）、<code>victim-screen.png</code>、<code>lab-state-before/after/diff</code>（option、user
+            と role、table の checksum）。すべて
+            <code>private-evidence/sha256:&lt;hex&gt;/content/</code>。
+          </li>
+          <li>
+            結果は常に
+            <code>incomplete(awaiting-human-observation)</code> で、<code
+              >evidenceCapture: harness-captured</code
+            >。不変条件 5 は Verification、台帳、Verifier の 3
+            か所で守る（Snapshot が違えば <code>digest-mismatch</code>）。
+          </li>
+          <li>
+            Lab は hold（既定 30 分、最大
+            1440）して人間の観測に使う（#600）。host 全体の slot
+            は無く（#432）、Lab ごとの owner file だけがある。
+          </li>
+        </ul>
+      </dd>
+      <dt>変える処理</dt>
+      <dd>
+        <p>
+          変えない。S5 で agent-observed の行がある Finding は、<code
+            >wbh-verify</code
+          >
+          が前提と route を <code>observed.tsv</code> の行から組めるので、setup
+          の時間が短くなるはずである。これはスキルの読む順の話で、Harness
+          の変更ではない。所有者の「curl の要求を保存する」は
+          <code>proxy-capture.jsonl</code>
+          がすでにその形で、人間はこの要求を再送する。
+        </p>
+      </dd>
+      <dt>契約</dt>
+      <dd>
+        <code>VerificationResult v1</code>、handoff の file 名と schema は不変。
+      </dd>
+      <dt>観測と数字</dt>
+      <dd>
+        Lab 発火（捕捉に効果が出た数）、setup の所要時間、<code
+          >incomplete</code
+        >
+        の理由分布。
+      </dd>
+      <dt>消し方</dt>
+      <dd>該当なし。</dd>
+    </dl>
+  </section>
+
+  <section class="mod">
+    <header>
+      <b>3.8 人間の観測と review</b><span class="tag h">人間の判断点</span
+      ><span class="who"
+        >担い手: 人間（観測の明言）、AI
+        操作役（記録の代行）、Harness（記録）</span
+      >
+    </header>
+    <dl>
+      <dt>役割</dt>
+      <dd>
+        確定の唯一の根拠を作る。保持した検証 Lab
+        で、人間が用意された要求を送り自分のブラウザで見て、<code
+          >match / mismatch / unavailable</code
+        >
+        を記録する（ADR 0040）。
+      </dd>
+      <dt>今の処理</dt>
+      <dd>
+        <ul>
+          <li>
+            <code>review observe</code>: 現在の attempt が
+            <code>incomplete(observation | awaiting-human-observation)</code>
+            で、<code>review-lab-reconstruction</code> と
+            <code>manual-observation-lab-ready</code> の receipt が一致し、<code
+              >--by</code
+            >
+            が人間であることを要求する。<code>--evidence</code>（1 B〜10
+            MB）と任意の
+            <code>--ordinary-site yes|no --ordinary-site-reason</code>
+            を取り、<code>manual-observation-recorded</code> を書く。
+          </li>
+          <li>
+            <code>review decide --reproduced match</code>: 人間の
+            <code>--by</code> と basis <code>reproduce</code> を要求し、<code
+              >human-reproduction-recorded</code
+            >
+            と <code>review-decided</code> を書く。scope、draft、authorize
+            はこの match を前提にする（<code>submission-basis.ts</code>）。
+          </li>
+          <li>
+            代行（ADR 0040 追記 3）: 所有者が会話で結果と
+            <code>--ordinary-site</code>
+            を明言し、自分の画面を渡したときに限り、AI
+            操作役が所有者の名前で記録する。事前に
+            <code
+              >manual-observation-attestations/&lt;findingId&gt;-&lt;image
+              digest&gt;.json</code
+            >
+            を Private Evidence
+            に書く。これはまだ文書だけで、コードは無い。最終の
+            <code>accept</code>、<code>--prepared-by human</code>、<code
+              >authorize</code
+            >
+            は代行しない。
+          </li>
+          <li>
+            レビューの画面は <code>wbh-review</code>（Harness の事実だけを 1
+            画面に並べ、accept / reject / defer を提案し、<code>--by ai</code>
+            で中間判断を記録）。
+          </li>
+        </ul>
+      </dd>
+      <dt>変える処理</dt>
+      <dd>
+        <p>
+          規則は変えない。<code>wbh-review</code> の画面は、散文の
+          <code>claim</code> より先に、結合した <code>flows</code> の行と
+          <code>proxy-capture.jsonl</code>
+          の該当要求（人間が再送する部品）を出す。所有者の「英文は短く」はここで満たす。attestation
+          の file を書くコードが無い点は、代行を続けるなら小さな PR
+          で足す（Harness の記録なので境界の内側）。
+        </p>
+      </dd>
+      <dt>契約</dt>
+      <dd>
+        <code>manual-observation-recorded</code
+        >、<code>human-reproduction-recorded</code>、<code>review-decided</code>
+        は不変。
+      </dd>
+      <dt>観測と数字</dt>
+      <dd>match の数（分母の片側）。観測待ちの日数。</dd>
+      <dt>消し方</dt>
+      <dd>画面の順序はスキル本文なので revert で戻る。</dd>
+    </dl>
+  </section>
+
+  <section class="mod">
+    <header>
+      <b>3.9 提出</b><span class="tag k">いまのまま</span
+      ><span class="who"
+        >担い手: スキル（dedupe、destination、report）、人間（送信）</span
+      >
+    </header>
+    <dl>
+      <dt>役割</dt>
+      <dd>
+        accept 済みで重複が no-match の Finding
+        について、提出先を決め、英語の報告書とフォーム入力用 JSON を Private
+        Evidence に作る。Harness は送らない（不変条件 7）。
+      </dd>
+      <dt>今の処理</dt>
+      <dd>
+        <ul>
+          <li>
+            <code>wbh-dedupe</code>: ローカルの Wordfence
+            mirror、Patchstack、WPScan を slug と版で照合し、<code
+              >possible-match / no-match / unavailable</code
+            >
+            を <code>review decide --duplicate … --by ai</code> で記録する。
+          </li>
+          <li>
+            <code>wbh-destination</code>: Wordfence → Patchstack → vendor
+            の順に方針の写しで調べ、非公開メモに結論を書く。台帳には書かない。
+          </li>
+          <li>
+            <code>wbh-report</code>:
+            <code>review export --version 2</code> を読み、人間の match と
+            <code>--reproduced match</code> があるときだけ
+            <code>review draft --prepared-by ai</code>
+            に登録する。観測待ちなら「Do not submit」の内部プレビューだけ。
+          </li>
+          <li>
+            <code>review submitted --external</code> は
+            <code>submission-recorded-externally</code
+            >（提出先、日、提出時の最新版）を書き、<code
+              >review outcome --external</code
+            >
+            は <code>submission-outcome-recorded</code>（accepted / rejected /
+            duplicate /
+            out-of-scope、理由、報酬）を書く。<code>authorize</code>、<code>submitted</code>、<code
+              >outcome</code
+            >
+            はいずれも「Harness sends nothing」と出す。
+          </li>
+        </ul>
+      </dd>
+      <dt>変える処理</dt>
+      <dd>
+        <p>
+          変えない。結果の記録は 2026-10-31
+          に始まったばかりで、分母の片側になる。報告書の本文に、人間が再送した要求と
+          Lab の反応を 1 段落で書く形は
+          <code>wbh-report</code> の既存の様式に収まる。
+        </p>
+      </dd>
+      <dt>契約</dt>
+      <dd>
+        <code>SubmissionCandidate v1</code>、draft、external submission、outcome
+        の event は不変。
+      </dd>
+      <dt>観測と数字</dt>
+      <dd>提出数、受理数、重複数、対象外数、報酬。</dd>
+      <dt>消し方</dt>
+      <dd>該当なし。</dd>
+    </dl>
+  </section>
+
+  <section class="mod">
+    <header>
+      <b>3.10 台帳と Private Evidence</b
+      ><span class="tag k">いまのまま（欄は add-only）</span
+      ><span class="who">担い手: Harness</span>
+    </header>
+    <dl>
+      <dt>役割</dt>
+      <dd>
+        全段階の event を追記し、digest 参照だけを持つ。ペイロード、HTTP
+        記録、画面、実行ログ、未公開の発見は Git 外の Private Evidence
+        に置く（不変条件 8）。
+      </dd>
+      <dt>今の処理</dt>
+      <dd>
+        <ul>
+          <li>
+            <code>node:sqlite</code> の
+            <code>&lt;state&gt;/ledger.sqlite</code>、table
+            <code
+              >ledger_events(sequence, identity UNIQUE, campaign_id, event_type,
+              finding_id, input_digest, event_json)</code
+            >。<code>append</code> だけがあり、UPDATE と DELETE の SQL
+            は無い。同じ identity は <code>occurredAt</code> だけ違えば
+            <code>existing</code>、ほかが違えば <code>conflict</code>。
+          </li>
+          <li>
+            event は 39 種の判別 union。artifact ref は
+            <code>{kind, digest: sha256:&lt;64hex&gt;}</code> で、insert 前に
+            Private Evidence で解決できなければ throw。
+          </li>
+          <li>
+            Private Evidence は
+            <code
+              >&lt;state&gt;/private-evidence/&lt;sha256:hex&gt;/content/</code
+            >
+            に <code>wx</code> で書き、0600 / 0700、64 entry、72 MiB まで。
+          </li>
+          <li>
+            読み手:
+            <code>ledger funnel</code
+            >（reached、accepted、raw、verified、inScope、submitted、externalOutcomes
+            など）、<code>scripts/trial-timeline.mjs</code>（時刻、件数、digest
+            だけを出す）、<code>scripts/lead-groups.mjs</code>（<code
+              >pair</code
+            >
+            規則で入口と効果の組）。
+          </li>
+        </ul>
+      </dd>
+      <dt>変える処理</dt>
+      <dd>
+        <p>
+          event の種類は増やさない。<code>discovery-run-finished.observed</code>
+          に <code>coverage</code> と
+          <code>flows</code> を足し（add-only）、<code>trial-timeline</code> と
+          bench30 の scorer がそれを読む。研究 file は既存の
+          <code>research</code> artifact に入る。
+        </p>
+      </dd>
+      <dt>契約</dt>
+      <dd>
+        <code>LedgerEvent v1</code>。欄の追加だけで、既存 event は読み続ける。
+      </dd>
+      <dt>観測と数字</dt>
+      <dd>該当なし（台帳自身が観測）。</dd>
+      <dt>消し方</dt>
+      <dd>欄を書く関数を revert。既存の event は消さない。</dd>
+    </dl>
+  </section>
+
+  <section class="mod">
+    <header>
+      <b>3.11 計測</b><span class="tag c">変える（スキル単位の採点）</span
+      ><span class="who">担い手: Harness の scorer（読むだけ）、AI 操作役</span>
+    </header>
+    <dl>
+      <dt>役割</dt>
+      <dd>
+        設計の採否を 1 つの分母で決める。本番は Codex 1 時間あたりの Lab 発火と
+        Wordfence の結果。較正は bench30 v3（30 本、198 記録、A 群 12 / B 群 10
+        / C 群 8、修正腕あり）。
+      </dd>
+      <dt>今の処理</dt>
+      <dd>
+        bench30 の scorer は Finding の <code>sourceTrace</code> の file
+        と答えの file の一致で hit を数える（<code>any / primary / recall</code
+        >）。v1 の 48 Trial の分析で、表示と実走の Trial 数のずれ、group
+        単位の数、分類と関数の一致を分ける必要が出た（bench30 v1 報告 §8）。
+      </dd>
+      <dt>変える処理</dt>
+      <dd>
+        <ol>
+          <li>
+            scorer に<b>スキル単位の採点</b>を足す。S0 は map、S1 は tsv、S2
+            は表、S3 は <code>flows.tsv</code> の行、S4 は
+            <code>falsified</code>、S5 は <code>observed.tsv</code> と
+            <code>capture.jsonl</code>、S6 は 2 つ目の答えへの到達、を答えの
+            file と関数で照合する。答えは Git 外のまま。
+          </li>
+          <li>
+            hit を「file」「分類も一致」「関数も一致」の 3
+            段で出し、分母は実際に走った Trial にする。
+          </li>
+          <li>
+            修正腕（f1）を 30 本回し、S1 の候補と S4
+            の反証が修正版で消えるかを偽陽性として出す。
+          </li>
+          <li>
+            本番は、同じ 2 週間の wide Trial と、スキルの列を入れた Trial
+            の「Lab 発火 / Codex 時間」を並べる。版が違う比較は unpaired
+            と明記する。
+          </li>
+        </ol>
+      </dd>
+      <dt>契約</dt>
+      <dd>
+        scorer は台帳と Private Evidence
+        を読むだけで、探索へ答えを渡さない（不変条件 1）。
+      </dd>
+      <dt>観測と数字</dt>
+      <dd>上のとおり。</dd>
+      <dt>消し方</dt>
+      <dd>scorer の列を外す。</dd>
+    </dl>
+  </section>
+
+  <h2>4. 変更の一覧と順番</h2>
+  <p>
+    ADR 0045 の「設計変更は月 1 回」の枠は #724（3 つの戦力）である。下の列は
+    #724 の PR 1〜4 を、A / B / C と単体テストの形に書き直したもので、新しい
+    mode も Harness
+    の判定器も含まない。所有者がこの読み替えを認めるかが最初の判断点である。
+  </p>
+  <div class="tbl">
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>変更</th>
+          <th>担い手</th>
+          <th>動かす型</th>
+          <th>決める数字</th>
+          <th>消し方</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="num">0</td>
+          <td>
+            bench30 v3 を走り切る（走行中）。A 群 12 本に host 側で semgrep /
+            psalm と script v3 だけを掛ける
+          </td>
+          <td>AI 操作役</td>
+          <td>A</td>
+          <td>道具だけの再現率が v19 の A 3/10 を超えるか</td>
+          <td>設計変更ではない</td>
+        </tr>
+        <tr>
+          <td class="num">1</td>
+          <td>
+            S1 <code>wbh-tools</code> v2: pattern 追加、semgrep / psalm、JS の
+            sink、再訪時の差分を先頭に。image に道具を同梱
+          </td>
+          <td>スキル + image</td>
+          <td>A</td>
+          <td>答えの入口と sink の再現率、修正腕での消え方</td>
+          <td>skills から外す、image digest を戻す</td>
+        </tr>
+        <tr>
+          <td class="num">2</td>
+          <td>
+            S2 <code>wbh-sources</code> v1（本体保存欄の表）と S3
+            <code>wbh-trace</code>
+            v1（<code>flows.tsv</code>）。目的文から「sink 分類ごとに 1
+            体」を削る
+          </td>
+          <td>スキル</td>
+          <td>B（A の行も通る）</td>
+          <td>B 群の hit、行の再現率、hop 数の分布</td>
+          <td>skills から外す、目的文の削除を revert</td>
+        </tr>
+        <tr>
+          <td class="num">3</td>
+          <td>
+            §3.3 の観測（被覆、flows の集計）と scorer
+            のスキル単位の採点、export v3
+          </td>
+          <td>Harness（観測のみ）</td>
+          <td>—</td>
+          <td>観測なので採否なし。自己申告と観測の差が出る</td>
+          <td>欄と列を revert</td>
+        </tr>
+        <tr>
+          <td class="num">4</td>
+          <td>S4 <code>wbh-falsify</code> v1。段 1b との一致率を測る</td>
+          <td>スキル</td>
+          <td>A / B</td>
+          <td>修正腕で落ちる率、答えの行で残る率、段 1b との一致</td>
+          <td>skills から外す</td>
+        </tr>
+        <tr>
+          <td class="num">5</td>
+          <td>
+            第 2 Trial（ADR 0044、Lab 付き）に S5 <code>wbh-probe</code> と S6
+            <code>wbh-extend</code> を載せる。Lead 止まりの 12 case から始める
+          </td>
+          <td>スキル + 既存の Lab</td>
+          <td>B / C</td>
+          <td>
+            fired の行数、1 つ目の確認から 2 つ目の答えへの到達、Lead → Finding
+            の数
+          </td>
+          <td>skills から外す。ADR 0044 はそのまま</td>
+        </tr>
+        <tr>
+          <td class="num">6</td>
+          <td>
+            Root の終了を
+            <code>wbh-coverage</code>（#686）に置き換え、目的文の停止段落を削る
+          </td>
+          <td>スキル</td>
+          <td>—</td>
+          <td>閉じた時点の被覆、答えの行が未読側に残る数</td>
+          <td>skills から外す、削除を revert</td>
+        </tr>
+        <tr>
+          <td class="num">7</td>
+          <td>
+            S7 <code>wbh-deep</code>: identity の sink を持つ大型 plugin
+            に名指しで、面ごとの子と時間
+          </td>
+          <td>スキル</td>
+          <td>C</td>
+          <td>C 群の hit（1/10 から）</td>
+          <td>skills から外す</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">
+    1〜2 と 4〜7 はスキル本文と支援 file
+    の変更なので、全文と日本語訳と出典対照表を docs/reviews に置き、<code
+      >owner-approved</code
+    >
+    を付ける。3 だけが Harness のコードで、観測の追加に限る。
+  </p>
+
+  <h2>5. 所有者の判断点</h2>
+  <ol>
+    <li>
+      <b>#724 の読み替え。</b>「掃き出し層が候補を大量に出し AI
+      が確認する」から、「道具は A の候補、知識表は B の入口、AI
+      は追跡・反証・推論。それぞれ単体で採点」へ。11 月の 1
+      回の設計変更はこの形で使う、と所有者の言葉で決める。
+    </li>
+    <li>
+      <b>sandbox image への道具の同梱。</b>semgrep と psalm を入れる。image
+      digest が変わる。
+    </li>
+    <li>
+      <b>段 1b の縮退の線。</b>S4 との一致率が何件・何 % で段 1b
+      を確認票に縮めるか。
+    </li>
+    <li>
+      <b>第 1 Trial と第 2 Trial の配分。</b>Lab 付き第 2 Trial は同時 2
+      本から（ADR 0044）。Codex 5 席のうち何席を回すか。
+    </li>
+    <li>
+      <b>目的文の削除。</b>「sink 分類ごとに 1
+      体」と停止段落を削った版は、新版ではなく削除版として扱う（凍結 5
+      の「消す方向」）。この解釈でよいか。
+    </li>
+  </ol>
+
+  <h2>出典</h2>
+  <ul class="note">
+    <li>
+      コード: origin/main 8247631 の
+      <code>src/selection</code
+      >、<code>src/snapshot</code>、<code>src/discovery</code>、<code>src/profiles/wordpress/{selection,discovery,lab,verification,prompts}</code>、<code>src/verification</code>、<code>src/review</code>、<code>src/ledger</code>、<code>src/cli</code>、<code>.claude/skills</code>。
+    </li>
+    <li>
+      記録:
+      docs/reviews/2026-11-01-exploration-design-assessment.md、2026-11-01-noticing-vs-reasoning.md、2026-11-01-bench30-v1-trial-records.md、2026-10-31-exploration-structure-investigation.md、2026-10-30-enumeration-recall-cve-bench.md、2026-10-27-public-harness-repos-responsibility-split.md、docs/evaluation/bench30-2026-11.md、2026-10-26-exploration-lab-arm-v14.md。
+    </li>
+    <li>決定: ADR 0040、0043、0044、0045、0046。Issue #724、#686、#715。</li>
+  </ul>
+</main>
