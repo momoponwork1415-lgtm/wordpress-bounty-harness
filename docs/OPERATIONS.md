@@ -21,7 +21,7 @@
 | 認証 | ホストでCodex CLIにChatGPTログインし（`codex login`）、その `auth.json`（0600、本人所有）のパスをhost設定の `credentialFilePath` に、`authenticationMethod` を `chatgpt-oauth-host` にする。読むのはegress brokerだけで、エージェントには渡らない（下記） | 初回とログイン失効時 |
 | Programmeの写し | wordfence.comは自動取得できないので、公式3ページを人間がpage documentへ写す（雛形は `examples/translatepress-3.3.1/wordfence-programme.example.json`）。35日を超えると選定が止まる | 月1回 |
 | campaign設定 | JSONファイル（`wordpressCampaignConfigSchema`）。Programme Boundary、停止規則、Lab、`resources` を書く。認証情報と鍵は書かない | 方針を変えるとき |
-| 選定方針 | `src/profiles/wordpress/policy/selection.json`（説明は同じ場所の `selection.md`）。インストール数 10k 以上・365 日以内更新・除外 slug を設定し、インストール数と更新日で順序を付ける（ADR 0037 の 2026-10-28 追記） | 月1回程度 |
+| 選定方針 | `src/profiles/wordpress/policy/selection.json`（説明は同じ場所の `selection.md`）。インストール数 10k 以上・180 日以内更新（2026-11-01 まで 365 日）・除外 slug を設定し、インストール数と更新日で順序を付ける（ADR 0037 の 2026-10-28 追記） | 月1回程度 |
 | trust境界宣言 | `src/profiles/wordpress/prompts/trust-boundary-v1.md` をそのまま使う | ほぼ変えない |
 | 対象範囲の方針 | `src/profiles/wordpress/policy/programme-scope.md` を公式ページで見直す | 提出前と月1回 |
 | 履歴mirror | 第5節の手順で更新し、`history status` で鮮度を確かめる。選定は mirror を開かず、screen と dedupe が使う。日次更新は host の cron（19:10 UTC）が旧環境の `refresh_wordfence.py` を回す | 毎日と提出前 |
@@ -274,7 +274,7 @@ harness ledger runtime [--campaign <id>]  # runが記録したmodel、effort、C
 
 `select` は [選定方針 JSON](../src/profiles/wordpress/policy/selection.json) を直接読み、WordPress.org の人気順を列挙する（タグ順は 2026-11-01 に外した。`tags` を書けば従来どおり足せる）。install下限もこの JSON が正本。`pluginDependencySlugs` は `Requires Plugins` ヘッダにも `WC requires at least` / `WC tested up to` ヘッダ（`woocommerce` と決める）にも現れない必要な依存を対象slugごとに列挙し、freeze時点の公式stable版をSnapshotに固定する。手動の開発・歴史的評価対象は `pluginDependencyPins` で版を明示する。台帳の探索開始（`runKind: explore` の `discovery-run-started`）と Finding を照合し、適格な次点候補で補充して `maximumTargets`（3〜10）件までの対象を返す。選定だけで Trial が始まらなかった対象のうち、Snapshot の失敗は `deferred` を除いて除外しない。Snapshot 固定が `deferred`（plugin ヘッダを読めないなど、対象の source に起因する保留）で skip された対象は、同じ選定または campaign で別の対象が固定できていれば、その版に限って `freeze-deferred` で除外し、版が上がれば戻す。どの対象も固定できなかった選定の `deferred` は host 側の失敗かもしれないので数えない。探索用 Lab の供給に失敗した対象は、その版に限って `lab-provision-failed` で除外し、版が上がれば戻す。依存pluginはSnapshotに固定し、Labと探索に同じsourceを渡す。source 0 件・子 0・broker 転送 1 以下で終わった run しか持たない対象は除外しない。終了記録と観測値のない開始記録だけの attempt も Trial に数えない。途中まで走った Trial は数え、再選定しない。provider 上限で終わった初回 run は単独では Trial に数えない。Codex の run は runner が同じ Trial を再開し、再開できずに閉じた対象は理由付き incomplete の Trial 1 回に数え、次の campaign でも同じ版を再実行しない。Claude の run の対象は除外せず、新しい Trial としてやり直す。自動候補源の `revisitPolicy` は `{ "kind": "version-increased" }` とし、現行 stable が台帳に数えた同 slug の全 Trial より高ければ戻す。prompt 版の変更では戻さず、未公開 Finding による除外はしない（ADR 0037 の 2026-10-28 追記）。
 
-選定は人気順の一覧をインストール数の下限か API 終端まで読み、5k 以上（2026-11-01 まで 10k）・365 日以内更新・除外著者と slug 以外を並べる。順序はインストール数の降順、同数なら更新日の降順。同じ版は 1 Trial で、版が上がれば日数を待たずに戻す。未提出 Finding と旧世代の履歴では除外しない。`select --minimum <n>`（既定 3、runner は 1）未満しか固定できないときは、台帳に `target-selected` を書かず `below-minimum` を付けて空の選定を返す。
+選定は人気順の一覧をインストール数の下限か API 終端まで読み、5k 以上（2026-11-01 まで 10k）・180 日以内更新（2026-11-01 まで 365 日）・除外著者と slug 以外を並べる。順序はインストール数の降順、同数なら更新日の降順。同じ版は 1 Trial で、版が上がれば日数を待たずに戻す。未提出 Finding と旧世代の履歴では除外しない。`select --minimum <n>`（既定 3、runner は 1）未満しか固定できないときは、台帳に `target-selected` を書かず `below-minimum` を付けて空の選定を返す。
 
 インストール数、更新日、初回 / 版上昇の理由、除外理由、候補一覧の取得元と観測時刻は標準出力と Git 外の `selection-report` に残る。Snapshot の固定に失敗した候補は `snapshot-unavailable` として除外し、同じ列の次の候補で補う。`target-skipped` と `target-selected` から既存の digest 参照で選定記録・レポート・診断を読める。次の `campaign run --all` は同じ方針 digest の最新バッチを使い、Snapshot が変われば止まる。
 
