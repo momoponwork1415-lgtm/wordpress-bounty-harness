@@ -31,12 +31,20 @@ export function baselineDockerAnswers(
     }
     const constants = env(args, "WBH_BASELINE_CONSTANTS");
     if (constants !== undefined)
+      // #744: a constant reads back as its value, null when undefined.
+      // DISALLOW_FILE_EDIT is the one the baseline defines true.
       return ok(
         JSON.stringify(
           Object.fromEntries(
             (JSON.parse(constants) as string[]).map((name) => [
               name,
-              drift.has(name),
+              name === "DISALLOW_FILE_EDIT"
+                ? drift.has(name)
+                  ? null
+                  : true
+                : drift.has(name)
+                  ? true
+                  : null,
             ]),
           ),
         ),
@@ -54,8 +62,15 @@ export function baselineDockerAnswers(
           ),
         }),
       );
-    if (env(args, "WBH_BASELINE_HTACCESS_LINES") !== undefined)
+    const htaccessLines = env(args, "WBH_BASELINE_HTACCESS_LINES");
+    if (htaccessLines !== undefined) {
+      const hardening = htaccessLines.includes("wbh-hardening");
+      if (hardening)
+        return ok(
+          drift.has("include-only-files") ? '["# BEGIN wbh-hardening"]' : "[]",
+        );
       return ok(drift.has("rewrite-block") ? '["# BEGIN WordPress"]' : "[]");
+    }
     if (args[0] === "exec" && args.includes("find") && args.includes("!"))
       return ok(drift.has("file-mode") ? "/var/www/html/stray\n" : "");
     if (args[0] === "exec" && args.includes("test"))

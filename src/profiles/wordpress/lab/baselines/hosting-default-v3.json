@@ -1,0 +1,88 @@
+{
+  "schema": "wbh-lab-baseline/v1",
+  "id": "hosting-default-v3",
+  "reference": "docs/reviews/2026-10-31-hosting-defaults.md",
+  "settings": [
+    {
+      "target": "wordpress",
+      "name": "bundled-plugins",
+      "value": "absent"
+    },
+    {
+      "target": "wp-config",
+      "name": "AUTOMATIC_UPDATER_DISABLED",
+      "value": null
+    },
+    {
+      "target": "wp-config",
+      "name": "WP_AUTO_UPDATE_CORE",
+      "value": null
+    },
+    {
+      "target": "wp-config",
+      "name": "DISABLE_WP_CRON",
+      "value": null
+    },
+    {
+      "target": "php",
+      "name": "major-version",
+      "value": 8
+    },
+    {
+      "target": "php-ini",
+      "name": "display_errors",
+      "value": false
+    },
+    {
+      "target": "php-ini",
+      "name": "allow_url_include",
+      "value": false
+    },
+    {
+      "target": "php-ini",
+      "name": "allow_url_fopen",
+      "value": true
+    },
+    {
+      "target": "php-ini",
+      "name": "disable_functions",
+      "value": ""
+    },
+    {
+      "target": "file-mode",
+      "name": "directories",
+      "value": "755"
+    },
+    {
+      "target": "file-mode",
+      "name": "files",
+      "value": "644"
+    },
+    {
+      "target": "wordpress",
+      "name": "permalink-structure",
+      "value": "/%postname%/"
+    },
+    {
+      "target": "web-server",
+      "name": "htaccess",
+      "value": "wordpress-rewrite"
+    },
+    {
+      "target": "wp-config",
+      "name": "DISALLOW_FILE_EDIT",
+      "value": true
+    },
+    {
+      "target": "web-server",
+      "name": "include-only-files",
+      "value": "denied"
+    }
+  ],
+  "attacker": {
+    "origin": "foreign",
+    "authenticatedOrigin": "domestic",
+    "adminEndpoints": "lenient",
+    "deniedPaths": []
+  }
+}

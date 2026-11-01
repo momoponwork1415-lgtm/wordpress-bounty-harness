@@ -175,6 +175,18 @@ v1 の Lab はパーマリンクが「基本」（`permalink_structure` が空�
 
 基準ファイルの外の振る舞い（2026-10-31 追記、#718）: campaign 設定の `lab.initialPosts` で作る初期記事は、`core install` が作る管理者（`harness-admin`）を作者にする。通常のサイトに作者のない記事は無いためで、基準ファイルに行を足すと digest が変わるので v2 のファイルは変えない。
 
+### 4.3b `hosting-default-v3`（2026-11-01 追記、#744）
+
+所有者決定（2026-11-01）: 「Wordfence が受け付けるものは制限しない。攻撃面として認める。あとは推奨で。」Wordfence は未認証・subscriber・customer の攻撃者からの、どの URL への経路も受け付けるので、`/wp-login.php`、`/xmlrpc.php`、`/wp-admin` 配下はすべて攻撃面である。v3 は v2 に次を加え、1 つを外す。
+
+- **国外 403 を全部外す（`deniedPaths: []`）。** 4.3 の 2 で置いた国外制限の模擬規則は、Wordfence が受ける入口を Lab で閉じていた。`attacker.origin` と `authenticatedOrigin` の欄は、記録済みの Lab を読むために残す。v3 では何も止めない。
+- **`DISALLOW_FILE_EDIT` を true にする。** WordPress 公式の Hardening ガイド（developer.wordpress.org/advanced-administration/security/hardening/、2026-10-14 版）の「Disable File Editing」。WP-CLI の `config set --raw --type=constant` で書き、`constant()` の値を読み戻す。
+- **`wp-includes/*.php`、`wp-includes/js/tinymce/langs/*.php`、`wp-includes/theme-compat/`、`wp-admin/includes/` への直接要求を `.htaccess` で止める。** 同ガイドの「Securing wp-includes」の書き換え規則を `# BEGIN wbh-hardening` 〜 `# END wbh-hardening` で WordPress ブロックの外（後ろ）に 1 回だけ追記する。plugin のコードは `wp-content` にあるので、plugin の入口は閉じない。
+- 同ガイドは XML-RPC、pingback、trackback、REST API、ユーザー登録、アプリケーションパスワード、コメントに触れていない。これらは WordPress 既定のまま（XML-RPC 有効、pingback 受信可、コメント可）。本体の弱点に依存する連鎖は Lab ではなく `wbh-screen` v5 の規則 3（`core-dependency`）で落とす。
+- 据え置き: PHP の値、ファイル権限 755 / 644、パーマリンク、同梱プラグイン無し、既定テーマ、admin のログイン名、テーブル接頭辞 `wp_`（SQLi の再現文を変えないため）。
+
+v1、v2 のファイルと digest は変えない。検証 Lab と review Lab は v3 を使い、`lab-provisioned.baseline.id` に `hosting-default-v3` を記録する。探索 Lab（ADR 0044 の付属 Lab）への適用は別の Issue で、ランナー再起動の境界で切り替える。
+
 ### 4.4 実機確認が要る残りの問い（推測で埋めなかったもの）
 
 1. `/wp-admin/admin-ajax.php`・`admin-post.php` は、両社の `/wp-admin` 国外制限の対象か。

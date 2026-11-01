@@ -24,6 +24,7 @@ import { baselineDockerAnswers } from "../../support/lab-baseline-docker.js";
 
 // #699: 検証 Lab の基準環境（hosting-default-v1）の置き場、版、記録、読み戻し。
 // #706: v2 はパーマリンク /%postname%/ と WordPress 標準の書き換えブロックを足す。
+// #744: v3 は国外 403 を外し、DISALLOW_FILE_EDIT と wp-includes の遮断ブロックを足す。
 
 const sha = (value: string) => `sha256:${value.repeat(64)}`;
 const directories: string[] = [];
@@ -133,14 +134,15 @@ describe("the verification Lab baseline (#699)", () => {
     ]);
   });
 
-  it("makes hosting-default-v2 current: v1 plus /%postname%/ permalinks and the standard rewrite block (#706)", async () => {
-    expect(CURRENT_WORDPRESS_LAB_BASELINE_ID).toBe("hosting-default-v2");
+  it("keeps hosting-default-v2 as v1 plus /%postname%/ permalinks and the standard rewrite block (#706)", async () => {
     const v1 = await loadWordPressLabBaseline("hosting-default-v1");
-    const v2 = await loadWordPressLabBaseline(
-      CURRENT_WORDPRESS_LAB_BASELINE_ID,
-    );
+    const v2 = await loadWordPressLabBaseline("hosting-default-v2");
     expect(v2.ref.id).toBe("hosting-default-v2");
     expect(v2.ref.digest).not.toBe(v1.ref.digest);
+    // #744: v2 stays as recorded Labs name it.
+    expect(v2.ref.digest).toBe(
+      "sha256:098c20f0ad4da174c013e0e53042bf96ea73c78f4a05bc9eb2d8e6c9db54bbde",
+    );
     expect(v2.baseline.attacker).toEqual(v1.baseline.attacker);
     expect(v2.baseline.settings).toEqual([
       ...v1.baseline.settings.filter((item) => item.target !== "web-server"),
@@ -152,6 +154,100 @@ describe("the verification Lab baseline (#699)", () => {
       { target: "web-server", name: "htaccess", value: "wordpress-rewrite" },
     ]);
   });
+
+  it("makes hosting-default-v3 current: v2 without the foreign 403s, plus DISALLOW_FILE_EDIT and the include-only-files block (#744)", async () => {
+    expect(CURRENT_WORDPRESS_LAB_BASELINE_ID).toBe("hosting-default-v3");
+    const v2 = await loadWordPressLabBaseline("hosting-default-v2");
+    const v3 = await loadWordPressLabBaseline(
+      CURRENT_WORDPRESS_LAB_BASELINE_ID,
+    );
+    expect(v3.ref.id).toBe("hosting-default-v3");
+    expect(v3.ref.digest).not.toBe(v2.ref.digest);
+    // Every entrance Wordfence accepts is attack surface: nothing is denied.
+    expect(v3.baseline.attacker).toEqual({
+      ...v2.baseline.attacker,
+      deniedPaths: [],
+    });
+    expect(v3.baseline.settings).toEqual([
+      ...v2.baseline.settings,
+      { target: "wp-config", name: "DISALLOW_FILE_EDIT", value: true },
+      { target: "web-server", name: "include-only-files", value: "denied" },
+    ]);
+  });
+
+  it("defines DISALLOW_FILE_EDIT through WP-CLI and appends the hardening block once, and leaves every attacker position undenied (#744)", async () => {
+    const f = await labFixture({});
+    const { ref } = await loadWordPressLabBaseline("hosting-default-v3");
+    const ready = await f.lab.provision(
+      f.snapshot,
+      { ...f.setup, baseline: ref },
+      { purpose: "verification" },
+    );
+    expect(ready.status).toBe("ready");
+    if (ready.status !== "ready") return;
+    const commands = f.commands.map(({ args }) => args.join(" "));
+    expect(
+      commands.some((line) =>
+        line.endsWith(
+          "wp config set DISALLOW_FILE_EDIT true --raw --type=constant",
+        ),
+      ),
+    ).toBe(true);
+    const hardening = commands.find((line) =>
+      line.includes("WBH_BASELINE_HARDENING="),
+    );
+    expect(hardening).toBeDefined();
+    expect(hardening).toContain("grep -q '^# BEGIN wbh-hardening'");
+    expect(hardening).toContain("RewriteRule ^wp-admin/includes/ - [F,L]");
+    expect(hardening).toContain(
+      "RewriteRule ^wp-includes/[^/]+\\.php$ - [F,L]",
+    );
+    // The hardening block goes after the WordPress block and before chmod.
+    const rewrite = commands.findIndex((line) =>
+      line.includes("WBH_BASELINE_HTACCESS="),
+    );
+    const appended = commands.findIndex((line) =>
+      line.includes("WBH_BASELINE_HARDENING="),
+    );
+    const chmod = commands.findIndex((line) => line.includes("chmod 644 {} +"));
+    expect(rewrite).toBeGreaterThan(0);
+    expect(appended).toBeGreaterThan(rewrite);
+    expect(chmod).toBeGreaterThan(appended);
+    // The login page and its password reset stay open to an unauthenticated,
+    // foreign attacker (owner, 2026-11-01).
+    for (const position of ["unauthenticated", "subscriber", "customer"]) {
+      const entrance = f.lab.attackerEntrance(ready.handle, position);
+      expect(entrance).toMatchObject({ deniedPaths: [] });
+      for (const path of [
+        "/wp-login.php",
+        "/xmlrpc.php",
+        "/wp-admin/admin.php",
+      ])
+        expect(deniedToAttacker(entrance!.deniedPaths, path)).toBe(false);
+    }
+    expect(
+      deniedToAttacker([], requestPath("/wp-login.php?action=lostpassword")!),
+    ).toBe(false);
+  });
+
+  it.each([["DISALLOW_FILE_EDIT"], ["include-only-files"]])(
+    "stops at the seed stage when %s does not read back under v3 (#744)",
+    async (setting) => {
+      const f = await labFixture({ drift: [setting] });
+      const { ref } = await loadWordPressLabBaseline("hosting-default-v3");
+      const result = await f.lab.provision(
+        f.snapshot,
+        { ...f.setup, baseline: ref },
+        { purpose: "verification" },
+      );
+      expect(result).toMatchObject({
+        status: "incomplete",
+        reason: "provision",
+        stage: "seed",
+        baseline: ref,
+      });
+    },
+  );
 
   it("sets /%postname%/ and writes the rewrite block only when .htaccess has none, before files go to 644 (#706)", async () => {
     const f = await labFixture({});

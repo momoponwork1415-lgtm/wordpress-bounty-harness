@@ -14,9 +14,13 @@ import type { WordPressLabSession } from "./lab-session.js";
  * recorded digest can still be rebuilt. The Harness never reads a verdict
  * from the baseline: it only applies the values and reads them back.
  */
-export const CURRENT_WORDPRESS_LAB_BASELINE_ID = "hosting-default-v2";
+export const CURRENT_WORDPRESS_LAB_BASELINE_ID = "hosting-default-v3";
 
-const KNOWN_BASELINES = new Set(["hosting-default-v1", "hosting-default-v2"]);
+const KNOWN_BASELINES = new Set([
+  "hosting-default-v1",
+  "hosting-default-v2",
+  "hosting-default-v3",
+]);
 
 const setting = z.discriminatedUnion("target", [
   z.discriminatedUnion("name", [
@@ -32,11 +36,15 @@ const setting = z.discriminatedUnion("target", [
       value: z.string().regex(/^\/[A-Za-z0-9%_/-]{0,99}$/),
     }),
   ]),
-  /** `null`: the constant stays undefined, so WordPress keeps its default. */
+  /**
+   * `null`: the constant stays undefined, so WordPress keeps its default.
+   * `true` (#744): the constant is defined true, as the Hardening guide's
+   * `DISALLOW_FILE_EDIT`.
+   */
   z.strictObject({
     target: z.literal("wp-config"),
     name: z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/),
-    value: z.null(),
+    value: z.union([z.null(), z.literal(true)]),
   }),
   z.strictObject({
     target: z.literal("php"),
@@ -57,11 +65,22 @@ const setting = z.discriminatedUnion("target", [
    * `enabled`: `.htaccess` exists. `wordpress-rewrite` (#706): it also holds
    * WordPress's standard rewrite block.
    */
-  z.strictObject({
-    target: z.literal("web-server"),
-    name: z.literal("htaccess"),
-    value: z.enum(["enabled", "wordpress-rewrite"]),
-  }),
+  z.discriminatedUnion("name", [
+    z.strictObject({
+      target: z.literal("web-server"),
+      name: z.literal("htaccess"),
+      value: z.enum(["enabled", "wordpress-rewrite"]),
+    }),
+    /**
+     * #744: the Hardening guide's block that answers 403 to direct requests
+     * for include-only files under `wp-includes` and `wp-admin/includes`.
+     */
+    z.strictObject({
+      target: z.literal("web-server"),
+      name: z.literal("include-only-files"),
+      value: z.literal("denied"),
+    }),
+  ]),
 ]);
 const pathRule = z.discriminatedUnion("match", [
   z.strictObject({
@@ -83,7 +102,9 @@ export const wordPressLabBaselineSchema = z.strictObject({
   /**
    * Where the attacker position stands. `foreign` gets 403 on `deniedPaths`
    * at the Lab's host entrance after setup; `lenient` keeps admin-ajax and
-   * admin-post open (a `strict` variant is reserved by name only).
+   * admin-post open (a `strict` variant is reserved by name only). v3 (#744)
+   * denies nothing: every entrance Wordfence accepts is attack surface
+   * (owner decision 2026-11-01), and the fields stay for recorded Labs.
    * `origin` is for an unauthenticated attacker. A position that logs in
    * (attack.json carries its account) stands at `authenticatedOrigin`: a
    * host's foreign-access block guards the unauthenticated entrances, and
@@ -181,6 +202,24 @@ const WORDPRESS_REWRITE_BLOCK = [
   "",
   "# END WordPress",
 ];
+/**
+ * The Hardening guide's "Securing wp-includes" block (#744), kept outside the
+ * WordPress block as the guide says. Plugins live under `wp-content`, so no
+ * plugin entrance is closed by it.
+ */
+const INCLUDE_ONLY_FILES_BLOCK = [
+  "# BEGIN wbh-hardening",
+  "<IfModule mod_rewrite.c>",
+  "RewriteEngine On",
+  "RewriteBase /",
+  "RewriteRule ^wp-admin/includes/ - [F,L]",
+  "RewriteRule !^wp-includes/ - [S=3]",
+  "RewriteRule ^wp-includes/[^/]+\\.php$ - [F,L]",
+  "RewriteRule ^wp-includes/js/tinymce/langs/.+\\.php - [F,L]",
+  "RewriteRule ^wp-includes/theme-compat/ - [F,L]",
+  "</IfModule>",
+  "# END wbh-hardening",
+];
 const iniValue = (value: boolean | string) =>
   typeof value === "boolean" ? (value ? "On" : "Off") : `"${value}"`;
 const settingName = (item: WordPressLabBaseline["settings"][number]) =>
@@ -232,6 +271,17 @@ export async function applyWordPressLabBaseline(
   for (const item of baseline.settings)
     if (item.target === "wordpress" && item.name === "permalink-structure")
       await lab.wp(["rewrite", "structure", item.value]);
+  // #744: a true constant goes into wp-config.php through WP-CLI, never shell source.
+  for (const item of baseline.settings)
+    if (item.target === "wp-config" && item.value === true)
+      await lab.wp([
+        "config",
+        "set",
+        item.name,
+        "true",
+        "--raw",
+        "--type=constant",
+      ]);
   if (
     baseline.settings.some(
       (item) =>
@@ -249,6 +299,23 @@ export async function applyWordPressLabBaseline(
       "sh",
       "-c",
       `grep -q '^# BEGIN WordPress' ${SITE}/.htaccess 2>/dev/null || { printf '%s' "$WBH_BASELINE_HTACCESS" >> ${SITE}/.htaccess && chown www-data:www-data ${SITE}/.htaccess; }`,
+    ]);
+  if (
+    baseline.settings.some(
+      (item) =>
+        item.target === "web-server" && item.name === "include-only-files",
+    )
+  )
+    // Appended once, after the WordPress block, as the guide places it.
+    await lab.requireDocker([
+      "exec",
+      "--user=root",
+      "--env",
+      `WBH_BASELINE_HARDENING=${INCLUDE_ONLY_FILES_BLOCK.join("\n")}\n`,
+      lab.wordpress,
+      "sh",
+      "-c",
+      `grep -q '^# BEGIN wbh-hardening' ${SITE}/.htaccess 2>/dev/null || { printf '%s' "$WBH_BASELINE_HARDENING" >> ${SITE}/.htaccess && chown www-data:www-data ${SITE}/.htaccess; }`,
     ]);
   // File modes go last so a file written above gets them too.
   for (const item of baseline.settings)
@@ -269,7 +336,7 @@ export async function applyWordPressLabBaseline(
       ]);
 }
 
-const READBACK_PHP = `$names = json_decode((string) getenv("WBH_BASELINE_CONSTANTS"), true); $out = []; foreach ($names as $name) { $out[$name] = defined($name); } echo json_encode($out);`;
+const READBACK_PHP = `$names = json_decode((string) getenv("WBH_BASELINE_CONSTANTS"), true); $out = []; foreach ($names as $name) { $out[$name] = defined($name) ? constant($name) : null; } echo json_encode($out);`;
 
 /**
  * Reads every setting back from the running Lab and throws
@@ -284,11 +351,12 @@ export async function readBackWordPressLabBaseline(
   const constants = baseline.settings.flatMap((item) =>
     item.target === "wp-config" ? [item.name] : [],
   );
-  const defined =
+  // null: undefined in wp-config; otherwise the constant's value.
+  const defined: Record<string, unknown> =
     constants.length === 0
       ? {}
       : z
-          .record(z.string(), z.boolean())
+          .record(z.string(), z.unknown())
           .parse(
             JSON.parse(
               (
@@ -347,7 +415,8 @@ export async function readBackWordPressLabBaseline(
         break;
       }
       case "wp-config":
-        if (defined[item.name] !== false) differs.push(settingName(item));
+        if ((defined[item.name] ?? null) !== item.value)
+          differs.push(settingName(item));
         break;
       case "php":
         if (php.major !== item.value) differs.push(settingName(item));
@@ -383,6 +452,14 @@ export async function readBackWordPressLabBaseline(
         break;
       }
       case "web-server": {
+        if (item.name === "include-only-files") {
+          const missing = await missingHtaccessLines(
+            lab,
+            INCLUDE_ONLY_FILES_BLOCK,
+          );
+          if (missing.length > 0) differs.push(settingName(item));
+          break;
+        }
         const present = await lab.docker([
           "exec",
           lab.wordpress,
@@ -395,23 +472,10 @@ export async function readBackWordPressLabBaseline(
           break;
         }
         if (item.value === "wordpress-rewrite") {
-          const missing = z
-            .array(z.string())
-            .parse(
-              JSON.parse(
-                (
-                  await lab.requireDocker([
-                    "exec",
-                    "--env",
-                    `WBH_BASELINE_HTACCESS_LINES=${JSON.stringify(WORDPRESS_REWRITE_BLOCK.filter((line) => line !== ""))}`,
-                    lab.wordpress,
-                    "php",
-                    "-r",
-                    `$lines = @file("${SITE}/.htaccess", FILE_IGNORE_NEW_LINES); echo json_encode(array_values(array_diff(json_decode((string) getenv("WBH_BASELINE_HTACCESS_LINES"), true), array_map("trim", $lines === false ? [] : $lines))));`,
-                  ])
-                ).stdout.trim(),
-              ) as unknown,
-            );
+          const missing = await missingHtaccessLines(
+            lab,
+            WORDPRESS_REWRITE_BLOCK,
+          );
           if (missing.length > 0) differs.push(`${settingName(item)}:rewrite`);
         }
         break;
@@ -419,6 +483,30 @@ export async function readBackWordPressLabBaseline(
     }
   }
   if (differs.length > 0) throw new WordPressLabBaselineMismatch(differs);
+}
+
+/** The lines of `block` that `.htaccess` does not hold (blank lines ignored). */
+async function missingHtaccessLines(
+  lab: WordPressLabSession,
+  block: readonly string[],
+): Promise<string[]> {
+  return z
+    .array(z.string())
+    .parse(
+      JSON.parse(
+        (
+          await lab.requireDocker([
+            "exec",
+            "--env",
+            `WBH_BASELINE_HTACCESS_LINES=${JSON.stringify(block.filter((line) => line !== ""))}`,
+            lab.wordpress,
+            "php",
+            "-r",
+            `$lines = @file("${SITE}/.htaccess", FILE_IGNORE_NEW_LINES); echo json_encode(array_values(array_diff(json_decode((string) getenv("WBH_BASELINE_HTACCESS_LINES"), true), array_map("trim", $lines === false ? [] : $lines))));`,
+          ])
+        ).stdout.trim(),
+      ) as unknown,
+    );
 }
 
 /**
