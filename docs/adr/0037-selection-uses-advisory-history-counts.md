@@ -166,3 +166,12 @@ amended-by: 本文末尾の 2026-10-19 追記（公開統計による重みの�
 - 母集団、1 batch 10 件、版上昇の再訪、同版 1 Trial は変えない。`version-published` と `installs` の値は残し、過去の方針 digest を読めるままにする。
 
 消し方: `selection.json` の `ordering` を `version-published` に戻して `orderingBands` を外す。
+
+## 2026-11-01 追記 5: deferred の凍結失敗は 7 日で再試行する（#771）
+
+帯優先の最初の選定で、≥1M 帯の 6 件（wpforms-lite、wp-mail-smtp、all-in-one-seo-pack、worker、seo-by-rank-math、complianz-gdpr）が `freeze-deferred` のまま残った。#734 の修正前に `main-plugin-file-ambiguous` で deferred になった記録が台帳にあり、追記（#623）の規則はその版を版が上がるまで除外するので、Harness を直しても再試行されなかった。
+
+- `target-skipped`（stage `freeze`、reason `deferred`）による除外は、skip の `occurredAt` から 7 日の間だけとする。過ぎたら候補に戻り、再び deferred になれば、また 7 日除外される。deferred は Harness 側の都合（ヘッダの読み方、source の取得）で起きることがあり、修正を待って自然に戻る出口が要る。
+- `invalid-archive` は版の性質なので、従来どおり版が上がるまで除外する。
+- 再試行の費用は freeze 1 回分で、#623 の「batch ごとに同じ候補を試す」には戻らない。期限は定数 `FREEZE_DEFERRAL_RETRY_DAYS` で、消せば追記（#623）の規則に戻る。
+

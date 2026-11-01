@@ -438,6 +438,8 @@ export function createWordPressSelection(
 export function openWordPressSelection(input: {
   readonly candidates: WordPressCandidateInspection;
   readonly ledger: Pick<Ledger, "readAll">;
+  /** Clock the ledger exclusions measure the freeze-deferral window against (#771). */
+  readonly clock?: () => Date;
 }): WordPressSelection {
   async function decide(
     policyInput: WordPressSelectionPolicy,
@@ -449,6 +451,7 @@ export function openWordPressSelection(input: {
     const ledgerDecisions = new Map(
       inspectWordPressLedgerExclusions({
         ledger: input.ledger,
+        now: (input.clock ?? (() => new Date()))().getTime(),
         candidates: eligible.map(({ slug, version }) => ({ slug, version })),
         reservedBatches: new Set(options.reservedBatches ?? []),
       }).map((item) => [item.slug, item]),

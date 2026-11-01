@@ -17,7 +17,7 @@ export type WordPressLedgerExclusionReason =
   | "previously-selected"
   /** This exact version failed Lab provisioning (e.g. a missing dependency plugin) and never started a Trial. */
   | "lab-provision-failed"
-  /** This exact version's source freeze was deferred (e.g. an unreadable plugin header) while the same attempt froze another target, or its archive was rejected (#623). */
+  /** This exact version's source freeze was deferred (e.g. an unreadable plugin header) while the same attempt froze another target within the last `FREEZE_DEFERRAL_RETRY_DAYS` days, or its archive was rejected (#623, #771). */
   | "freeze-deferred"
   /** A batch another runner of the state holds selected this slug and has not finished (#604). */
   | "reserved-by-runner";
@@ -41,15 +41,31 @@ function ledgerEvents(
   return ledger.readAll({ type }).map(({ event }) => event);
 }
 
+function withinDeferralWindow(occurredAt: string, now: number): boolean {
+  const at = Date.parse(occurredAt);
+  if (!Number.isFinite(at)) return true;
+  return now - at < FREEZE_DEFERRAL_RETRY_DAYS * 24 * 60 * 60 * 1000;
+}
+
 function snapshotKey(
   event: Pick<LedgerEventV1, "campaignId" | "snapshotDigest">,
 ): string {
   return `${event.campaignId}\0${event.snapshotDigest}`;
 }
 
+/**
+ * How long a deferred freeze keeps its version out of the queue. A deferral
+ * can be the Harness's own fault (a header rule, a source fetch), so the
+ * version is retried once the window has passed; a rejected archive is the
+ * version's own and stays out until the version changes (#771).
+ */
+export const FREEZE_DEFERRAL_RETRY_DAYS = 7;
+
 /** Inspect the append-only ledger; selections without a counted Trial remain eligible. */
 export function inspectWordPressLedgerExclusions(input: {
   readonly ledger: Pick<Ledger, "readAll">;
+  /** Epoch milliseconds the deferral window is measured against; defaults to the wall clock. */
+  readonly now?: number;
   readonly candidates: readonly {
     readonly slug: string;
     readonly version: string;
@@ -57,6 +73,8 @@ export function inspectWordPressLedgerExclusions(input: {
   /** Batches another runner holds; any slug they selected is excluded (#604). */
   readonly reservedBatches?: ReadonlySet<string>;
 }): readonly WordPressLedgerExclusion[] {
+  const now = input.now ?? Date.now();
+  if (!Number.isFinite(now)) throw new Error("Selection clock is invalid");
   const selectedBySlug = new Map<string, EarlierSelection[]>();
   const selectedBySnapshot = new Map<string, string>();
   const versionBySnapshot = new Map<string, string>();
@@ -174,7 +192,8 @@ export function inspectWordPressLedgerExclusions(input: {
     // batch (#623).
     const ownFailure =
       (event.reason === "deferred" &&
-        attemptsThatFroze.has(event.campaignId)) ||
+        attemptsThatFroze.has(event.campaignId) &&
+        withinDeferralWindow(event.occurredAt, now)) ||
       event.reason === "invalid-archive";
     if (!ownFailure) continue;
     const identity = parseWordPressOrgSelectionId(event.selectionId);
