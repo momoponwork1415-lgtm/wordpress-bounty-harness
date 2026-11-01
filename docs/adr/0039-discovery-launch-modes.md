@@ -288,7 +288,7 @@ wide の Trial は、Root が登録簿に「全 sink の対象エントリ群を
 
 - `wp2shell-bounty-v19-wide` を `wide` の `candidate`（`mode: "wide"`）として足す。campaign 設定の `promptId` で名指ししたときだけ走る。本文は v18-wide とバイト単位で同じで、最後の fragment だけを `coordination/stop-wide-v13` から `coordination/stop-wide-v14` に替える。digest は `sha256:a8a73ba7ed5def43d6a0abd0a6f8ff9738ac9b2b84d1b7fa00cbeee06cb5e119`、契約は v4。
 - `stop-wide-v14` は、登録簿に sink 種別ごとに「tools の一覧のうち読んだ行の数と残りの行の数」を書かせ、残りがある間は閉じないことを求める。制限時間に達したら従来どおり正常に閉じる。最後の 2 文（経過時間を作らない、候補 0 件も正常な終わり）は v13 のまま。制限時間と子の数は書かない（追記 4）。対象固有の名前も書かない。
-- v19-wide を名指しする campaign 設定は、`discovery.skills` に `wbh-recon-v1` と `wbh-tools-v1` の両方を名指ししなければならない。
+- v19-wide を名指しする campaign 設定は、`discovery.skills` に `wbh-recon-v1` と `wbh-tools-v1` の両方を名指ししなければならない。（2026-11-01: `wbh-recon-v1` は archived になり、現行は `wbh-recon-v2`。ADR 0043 追記 3）
 - Harness は変えない。制限時間と子の数の強制だけが Harness の仕事で、終了の判断はプロンプト側に置く（AGENTS.md「Harness と AI の責務」）。一覧の行数を Harness が数えて止めることもしない。
 - 変えないもの: v18-wide の行、本文、digest。`wide` の `current`（v14-wide）、比較候補の v15-wide、`deep` の v11、`src/profiles/wordpress/policy/campaign.json`、`examples/campaign-wide-20.json`、`stop-wide-v13`、探索スキルの本文。
 - 測り方: 本番の同じ選定帯で、v18-wide と v19-wide を交互に 20 Trial ずつ回す。子の上限、契約 v4、探索スキル（`wbh-recon` と `wbh-tools`）は両方で同じにする。台帳の `configuration.promptVariant` で分け、次の 4 つを並べる（DEVELOPMENT 第 5 節の 6 段）。
