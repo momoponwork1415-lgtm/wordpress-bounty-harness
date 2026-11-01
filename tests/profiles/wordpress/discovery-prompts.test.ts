@@ -71,7 +71,7 @@ describe("WordPress prompt table", () => {
   it("derives the id lists and the current versions from the table", () => {
     const ids = WORDPRESS_DISCOVERY_PROMPTS.map((row) => row.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(33);
+    expect(ids).toHaveLength(34);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual(ids);
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       ...ids,
@@ -95,7 +95,7 @@ describe("WordPress prompt table", () => {
     ).toHaveLength(WORDPRESS_DISCOVERY_MODES.length);
     expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS).toEqual({
       deep: "wp2shell-bounty-v11",
-      wide: "wp2shell-bounty-v20-wide",
+      wide: "wp2shell-bounty-v21-wide",
     });
     expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID).toBe("wp2shell-bounty-v11");
     // Archived rows carry no mode, so only a current row launches (ADR 0039).
@@ -111,7 +111,7 @@ describe("WordPress prompt table", () => {
     ).toEqual([]);
     expect(WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS).toEqual([
       "wp2shell-bounty-v11",
-      "wp2shell-bounty-v20-wide",
+      "wp2shell-bounty-v21-wide",
     ]);
     expect(
       WORDPRESS_VERIFIER_PROMPTS.filter((row) => row.status === "current"),
@@ -179,6 +179,9 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
     expect(composed.map((row) => row.id)).toContain("wp2shell-bounty-v11");
     expect(composed.map((row) => row.id)).not.toContain(
       "wp2shell-bounty-v20-wide",
+    );
+    expect(composed.map((row) => row.id)).not.toContain(
+      "wp2shell-bounty-v21-wide",
     );
   });
 
@@ -509,7 +512,8 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v17-wide" ||
         id === "wp2shell-bounty-v18-wide" ||
         id === "wp2shell-bounty-v19-wide" ||
-        id === "wp2shell-bounty-v20-wide"
+        id === "wp2shell-bounty-v20-wide" ||
+        id === "wp2shell-bounty-v21-wide"
       )
         expect(text).toContain("one specialist agent per sink class");
       else expect(text).toMatch(/Lead|Finding/);
@@ -554,6 +558,34 @@ describe("WordPress discovery prompt assets", () => {
         (row) => row.id === "wp2shell-bounty-v20-wide",
       ),
     ).not.toHaveProperty("fragments");
+    expect(current.sectionDigests).toBeUndefined();
+  });
+
+  it("makes v21-wide the v20-wide text with the two stale judge and canary sentences removed and nothing added (ADR 0039 追記 19)", async () => {
+    const paragraphs = (text: string) => text.trim().split(/\n\s*\n/);
+    const previous = (
+      await loadWordPressDiscoveryAsset("wp2shell-bounty-v20-wide")
+    ).text;
+    const current = await loadWordPressDiscoveryAsset(
+      "wp2shell-bounty-v21-wide",
+    );
+    const removed = [
+      " Runtime confirmation belongs only to the later, independent Harness-owned deterministic judge, which must observe the corresponding nonce canary outcome in a fresh Lab.",
+      " Runtime confirmation is decided later by the independent Harness judge, not by the discovery agents.",
+    ];
+    let expected = previous;
+    for (const sentence of removed) {
+      expect(expected).toContain(sentence);
+      expected = expected.replace(sentence, "");
+    }
+    expect(current.text).toBe(expected);
+    expect(paragraphs(current.text)).toHaveLength(paragraphs(previous).length);
+    expect(current.text).not.toMatch(/judge|canary/);
+    expect(
+      WORDPRESS_DISCOVERY_PROMPTS.find(
+        (row) => row.id === "wp2shell-bounty-v21-wide",
+      ),
+    ).toMatchObject({ status: "current", mode: "wide", outputContract: "v4" });
     expect(current.sectionDigests).toBeUndefined();
   });
 
@@ -1298,7 +1330,8 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v17-wide" ||
         id === "wp2shell-bounty-v18-wide" ||
         id === "wp2shell-bounty-v19-wide" ||
-        id === "wp2shell-bounty-v20-wide"
+        id === "wp2shell-bounty-v20-wide" ||
+        id === "wp2shell-bounty-v21-wide"
       ) {
         // v5 leaves attacker positions and in-scope effects to the supplied
         // trust boundary and Programme Boundary sections (owner decision, 2026-10-16).

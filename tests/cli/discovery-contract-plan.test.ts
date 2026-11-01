@@ -55,6 +55,7 @@ const MAIN_PLANS: Record<string, Plan> = {
   "wp2shell-bounty-v19-wide": inline("v4"),
   // ADR 0039 addendum 18: one file, the v19-wide text plus the skill-routing paragraph.
   "wp2shell-bounty-v20-wide": inline("v4"),
+  "wp2shell-bounty-v21-wide": inline("v4"),
   "wp2shell-whitebox-v1.7": inline("v2"),
 };
 

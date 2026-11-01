@@ -2895,7 +2895,7 @@ describe("harness CLI vertical slice", () => {
       wordpressCampaignConfigSchema.parse({ ...base, discovery: wide }),
     ).toMatchObject({
       discovery: { mode: "wide", minimumActiveMinutes: 0 },
-      promptId: "wp2shell-bounty-v20-wide",
+      promptId: "wp2shell-bounty-v21-wide",
       runWallTimeMinutes: 120,
     });
     expect(
@@ -2908,7 +2908,7 @@ describe("harness CLI vertical slice", () => {
       wordpressCampaignConfigSchema.parse({
         ...base,
         discovery: wide,
-        promptId: "wp2shell-bounty-v20-wide",
+        promptId: "wp2shell-bounty-v21-wide",
         runWallTimeMinutes: 20,
       }).runWallTimeMinutes,
     ).toBe(20);
@@ -3012,7 +3012,7 @@ describe("harness CLI vertical slice", () => {
     expect(started[0]?.event.type).toBe("discovery-run-started");
     if (started[0]?.event.type === "discovery-run-started")
       expect(started[0].event.configuration).toMatchObject({
-        promptVariant: "wp2shell-bounty-v20-wide",
+        promptVariant: "wp2shell-bounty-v21-wide",
         mode: "wide",
         wallMinutes: 120,
         minimumActiveMinutes: 0,
@@ -4123,7 +4123,7 @@ describe("harness CLI vertical slice", () => {
       refusalSession: true,
       zeroFindings: true,
       config: {
-        promptId: "wp2shell-bounty-v20-wide",
+        promptId: "wp2shell-bounty-v21-wide",
         discovery: { lab: "none", mode: "wide", maxChildren: 3 },
       },
     });
@@ -4156,15 +4156,15 @@ describe("harness CLI vertical slice", () => {
     const original = starts[0];
     if (original?.type !== "discovery-run-started")
       throw new Error("Missing recorded run");
-    const v20 = await loadWordPressDiscoveryAsset("wp2shell-bounty-v20-wide");
+    const v20 = await loadWordPressDiscoveryAsset("wp2shell-bounty-v21-wide");
     expect(original.configuration).toMatchObject({
-      promptVariant: "wp2shell-bounty-v20-wide",
+      promptVariant: "wp2shell-bounty-v21-wide",
       promptDigest: v20.digest,
     });
     expect(starts[1]).toMatchObject({
       resumesRun: first.runId,
       configuration: {
-        promptVariant: "wp2shell-bounty-v20-wide",
+        promptVariant: "wp2shell-bounty-v21-wide",
         promptDigest: v20.digest,
         maxChildren: 3,
       },

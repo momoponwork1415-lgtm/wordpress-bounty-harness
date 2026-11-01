@@ -451,8 +451,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:4674ab42d8e64b2349045ef6b3622363dcf409d3782db1dae2fdd7d0b7b3356b",
     outputContract: "v4",
-    status: "current",
-    mode: "wide",
+    status: "archived",
     // One file, no fragments (owner decision 2026-11-01, ADR 0039 addendum 18,
     // ADR 0045 addendum 1): the v19-wide paragraphs unchanged, plus one
     // paragraph before the registry-count paragraph that says when the Root
@@ -460,7 +459,24 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     // wbh-setup). The fragment files stay for the digests of past Trials;
     // versions from v20 on are kept as whole files. The v19 20-Trial
     // measurement was dropped with the same decision; v14-wide, v15-wide,
-    // v18-wide and v19-wide are archived without a comparison.
+    // v18-wide and v19-wide are archived without a comparison. Archived the
+    // same day, before any Trial ran it, when v21-wide removed the two stale
+    // judge and canary sentences (addendum 19).
+  },
+  {
+    id: "wp2shell-bounty-v21-wide",
+    digest:
+      "sha256:211c22a613c5440946944d4590c3bde27bfe8e8665fb755b4ae8e7623d4d1398",
+    outputContract: "v4",
+    status: "current",
+    mode: "wide",
+    // v20-wide with two sentences removed and nothing added (owner decision
+    // 2026-11-01 "すべて推奨で", ADR 0039 addendum 19; ADR 0045 allows deletions
+    // only): the end of the first paragraph that named the Harness-owned
+    // deterministic judge and the nonce canary, and the end of the Root
+    // paragraph that said the Harness judge decides runtime confirmation. The
+    // judge and canary were deleted in ADR 0040; the sentences described a
+    // Harness that no longer exists.
   },
   {
     id: "wp2shell-whitebox-v1.7",
