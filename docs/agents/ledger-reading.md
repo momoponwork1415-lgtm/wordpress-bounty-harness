@@ -64,6 +64,10 @@ node scripts/trial-timeline.mjs --state <state> --campaign <id> --trial <trialId
 - Codex の委任文は暗号化されていて、委任文の digest は `unavailable`。`task_name` と暗号文の長さだけ出す。
 - 読み方の注意: 出力末尾の「Not derivable today」に、その Trial で取れなかったものを列挙する。取れなかったものを 0 と読まない。
 
+## 同じ経路を別の Snapshot で見たとき
+
+`review` の各 Finding の `group` 行の下に `seen before: group <id>  <n> finding(s)  snapshot <digest>` が出ることがある。同じ対象（`target-selected` の targetId）の別の Snapshot、つまり別の版か再探索で、plugin 側の `file:function` を 1 つでも共有する Finding の群である（#754）。別の plugin で同じ名前の helper が重なっても出ない。順序には使わず、判定も変えない。前の Snapshot の判定（`review decide` の reason）を読み、同じ理由で落とすか、版をまたいで残っている経路として検証へ進めるかは人間が決める。
+
 ## Lead の群を出す
 
 同じ Snapshot の Lead と Finding を、sourceTrace の端点（入口と効果の file と関数）で群にまとめる読取器（#715、`scripts/lead-groups.mjs`）。#424 の review group と同じ重なりの規則を Lead に広げたもので、台帳は変えない。

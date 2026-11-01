@@ -127,7 +127,7 @@ WordPress profile は Finding の `configurationPrecondition` と Verifier attac
 ## 8. 人間レビューとDisclosure
 
 - レビュー列に出すもの: 対象範囲内の Finding は検証の結果に関係なく全件出す。`incomplete(awaiting-human-observation)` はHarnessの捕捉とLab browserの記録、ほかの `incomplete` は次の手を付ける。判定器があった時期の `runtime-confirmed` は証拠refと再現パッケージ、`contradicted` は判定器の証拠refと、あれば反証を付ける（#185、ADR 0031、ADR 0040）。人間は `lab up --for-review` の新しいreview Labで自分の手で再現し、`review observe` と `review decide --reproduced` で記録してから文案を査読する。
-- 並べ方: 同じ Snapshot で plugin 側の `file:function` が 1 つでも重なる Finding は、受理時に同じ群にする（連結成分）。`review` と `verify next` は群の代表（受理順で最初の Finding）を先に出し、残りはその後に群ごとに並べる。捨てない。群は順序と表示だけに使い、判定・判断・提出は Finding ごとに行う（#424）。
+- 並べ方: 同じ Snapshot で plugin 側の `file:function` が 1 つでも重なる Finding は、受理時に同じ群にする（連結成分）。`review` と `verify next` は群の代表（受理順で最初の Finding）を先に出し、残りはその後に群ごとに並べる。捨てない。群は順序と表示だけに使い、判定・判断・提出は Finding ごとに行う（#424）。 同じ対象（`target-selected` の targetId）の別の Snapshot に鍵を共有する群があれば、`review` はその群の識別子と Snapshot を `seen before` として併記する（別の版や再探索で同じ経路が出た合図）。別の対象で同じ file:function が重なっても表示しない。表示だけで、判定は Finding ごとに行う（#754）。
 - 人間が決めること: review Lab（既存の `runtime-confirmed` は再現パッケージ）を使って自分の手でLab上の攻撃を再現し、影響が意味を持つか、意図された動作ではないか、重複でないか、どのprogrammeへ出すか、文案と外部行動を承認する。Labの再構築とプラグイン設定はHarnessが保存したsetup manifestから自動化する。
 - 重複: 検証後・提出前にWordfence Intelligence mirrorの更新と照合を試み、PatchstackとWPScanの公開記録も照合する。照合元と時刻を記録し、staleまたは不明を「重複なし」にしない。候補の同一性は人間が最終判断する。
 - 文案: Harnessは、人間が観測と再現を記録した結果のHTTP捕捉・Lab browserの記録・必要な画面証拠（既存の `runtime-confirmed` では判定器の証拠）に基づき、短い英語レポートとWordfence入力用JSONを作る。新しい証拠を文章で創作しない。提出は人間だけが行う。

@@ -8,6 +8,7 @@ import {
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import {
   readFindingGroups,
+  type FindingGroupElsewhere,
   type FindingGroup,
 } from "../ledger/finding-groups.js";
 import {
@@ -214,6 +215,8 @@ export type ReviewItem = (
 ) & {
   /** #424: the overlap group; it orders the queue, while decisions stay per Finding. */
   readonly group: FindingGroup;
+  /** Groups on other Snapshots sharing a key with this Finding, before any target check. */
+  readonly elsewhere: readonly FindingGroupElsewhere[];
 };
 export type ReviewQueue = {
   readonly items: readonly ReviewItem[];
@@ -241,6 +244,12 @@ export type ReviewListingRow = {
   readonly duplicate: DuplicateCheck | null;
   /** Whether Private Evidence holds a human's Lab result; null without one. */
   readonly manualObservationEvidence: "available" | "unavailable" | null;
+  /**
+   * `item.elsewhere` kept to the Snapshots the profile resolves to the same
+   * target as this Finding's: the same route seen on another version or in a
+   * re-exploration. Empty without a target lookup. Display only.
+   */
+  readonly seenBefore: readonly FindingGroupElsewhere[];
 };
 export type ReviewListing = Omit<ReviewQueue, "items"> & {
   readonly rows: readonly ReviewListingRow[];
@@ -311,6 +320,8 @@ export class Review<TFacts = unknown> {
   readonly #scopeEvaluator: ProgrammeScopeEvaluator<TFacts>;
   readonly #factsProvider: ScopeFactsProvider<TFacts>;
   readonly #duplicateLookup: DuplicateLookup | undefined;
+  readonly #snapshotTarget:
+    ((snapshotDigest: string) => Promise<string | undefined>) | undefined;
   readonly #clock: () => Date;
 
   constructor(options: {
@@ -319,6 +330,10 @@ export class Review<TFacts = unknown> {
     readonly scopeEvaluator: ProgrammeScopeEvaluator<TFacts>;
     readonly factsProvider: ScopeFactsProvider<TFacts>;
     readonly duplicateLookup?: DuplicateLookup;
+    /** The profile's target identity of a Snapshot, for `seenBefore`; undefined when unknown. */
+    readonly snapshotTarget?: (
+      snapshotDigest: string,
+    ) => Promise<string | undefined>;
     readonly clock?: () => Date;
   }) {
     this.#ledger = options.ledger;
@@ -326,6 +341,7 @@ export class Review<TFacts = unknown> {
     this.#scopeEvaluator = options.scopeEvaluator;
     this.#factsProvider = options.factsProvider;
     this.#duplicateLookup = options.duplicateLookup;
+    this.#snapshotTarget = options.snapshotTarget;
     this.#clock = options.clock ?? (() => new Date());
     const identities = z
       .array(id)
@@ -362,11 +378,32 @@ export class Review<TFacts = unknown> {
       }
       return record;
     };
+    const targets = new Map<string, Promise<string | undefined>>();
+    const targetOf = (snapshotDigest: string) => {
+      const lookup = this.#snapshotTarget;
+      if (lookup === undefined) return Promise.resolve(undefined);
+      let target = targets.get(snapshotDigest);
+      if (target === undefined) {
+        target = lookup(snapshotDigest);
+        targets.set(snapshotDigest, target);
+      }
+      return target;
+    };
+    const seenBeforeOf = async (item: ReviewItem) => {
+      if (item.elsewhere.length === 0) return [];
+      const own = await targetOf(item.ref.snapshotDigest);
+      if (own === undefined) return [];
+      const kept: FindingGroupElsewhere[] = [];
+      for (const group of item.elsewhere)
+        if ((await targetOf(group.snapshotDigest)) === own) kept.push(group);
+      return kept;
+    };
     const rows: ReviewListingRow[] = [];
     for (const { item, current, history } of entries) {
       const latest = history.at(-1)?.event;
       rows.push({
         item,
+        seenBefore: await seenBeforeOf(item),
         decisionReason:
           current === null
             ? null
@@ -504,6 +541,7 @@ export class Review<TFacts = unknown> {
         (preconditionClassCounts[classification] ?? 0) + 1;
       const verified = latestVerification.get(key(finding));
       const group = groups.of(finding.campaignId, finding.findingId);
+      const elsewhere = groups.elsewhere(finding.campaignId, finding.findingId);
       const decisions = decisionHistory.get(key(finding)) ?? [];
       if (verified === undefined) {
         unverified++;
@@ -519,6 +557,7 @@ export class Review<TFacts = unknown> {
             category: finding.category,
             decision: current?.decision ?? null,
             group,
+            elsewhere,
           },
           current,
           history: decisions,
@@ -548,6 +587,7 @@ export class Review<TFacts = unknown> {
           refutationDigest: result.refutationDigest ?? null,
           decision,
           group,
+          elsewhere,
         });
       } else if (
         result.status === "runtime-confirmed" ||
@@ -566,6 +606,7 @@ export class Review<TFacts = unknown> {
           reproductionPackageDigest: result.reproductionPackageDigest,
           decision,
           group,
+          elsewhere,
         });
       else {
         // The queue predicts the runner's next pass with nothing changed: same
@@ -607,6 +648,7 @@ export class Review<TFacts = unknown> {
                 },
               }),
           group,
+          elsewhere,
         });
       }
     }

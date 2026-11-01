@@ -1115,6 +1115,7 @@ describe("review queue and decisions", () => {
           size: 1,
           representative: true,
         },
+        elsewhere: [],
       },
     ]);
   });
@@ -1195,6 +1196,7 @@ describe("review queue and decisions", () => {
         size: 1,
         representative: true,
       },
+      elsewhere: [],
     });
   });
 
