@@ -1,0 +1,652 @@
+import { execFileSync } from "node:child_process";
+import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { afterEach, beforeEach, expect, test } from "vitest";
+
+// #701: 検証ループの道具が、台帳の最新の記録から各 Finding を手順の節に振り分ける。
+
+const script = fileURLToPath(
+  new URL("../../scripts/verification-loop.ts", import.meta.url),
+);
+const id = (digit: string) => `sha256:${digit.repeat(64)}`;
+const snapshot = id("e");
+let state: string;
+let sequence = 0;
+const events: Record<string, unknown>[] = [];
+
+/** review-decision の記録を Private Evidence に置き、その digest を返す。 */
+function decisionRecord(reasonCode: string): string {
+  sequence += 1;
+  const digest = `sha256:${sequence.toString(16).padStart(64, "0")}`;
+  const directory = join(state, "private-evidence", digest, "content");
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, "record.json"), JSON.stringify({ reasonCode }));
+  return digest;
+}
+
+const at = (minute: number) =>
+  new Date(Date.UTC(2026, 9, 30, 0, minute)).toISOString();
+function recorded(findingId: string, extra: Record<string, unknown> = {}) {
+  events.push({
+    type: "finding-recorded",
+    campaignId: "prod-fixture-1",
+    findingId,
+    snapshotDigest: snapshot,
+    category: "stored-xss",
+    occurredAt: at(0),
+    ...extra,
+  });
+}
+function decided(
+  findingId: string,
+  decision: string,
+  reason: string,
+  minute = 1,
+) {
+  events.push({
+    type: "review-decided",
+    campaignId: "prod-fixture-1",
+    findingId,
+    decision,
+    occurredAt: at(minute),
+    artifacts: [{ kind: "review-decision", digest: decisionRecord(reason) }],
+  });
+}
+function verified(
+  findingId: string,
+  verificationId: string,
+  result: Record<string, unknown>,
+  minute = 2,
+) {
+  events.push({
+    type: "lab-provisioned",
+    identity: `verification-lab-${verificationId}`,
+    labId: `lab-${verificationId}`,
+    occurredAt: at(minute),
+  });
+  events.push({
+    type: "verification-finished",
+    campaignId: "prod-fixture-1",
+    findingId,
+    verificationId,
+    result,
+    occurredAt: at(minute),
+  });
+}
+
+beforeEach(async () => {
+  state = await mkdtemp(join(tmpdir(), "wbh-verification-loop-"));
+  events.length = 0;
+  events.push({
+    type: "target-selected",
+    snapshotDigest: snapshot,
+    selectionId: "wporg:sample-forms@1.0.1",
+  });
+});
+
+afterEach(async () => {
+  await rm(state, { recursive: true, force: true });
+});
+
+function run(extra: string[] = []) {
+  const ledger = new DatabaseSync(join(state, "ledger.sqlite"));
+  ledger.exec(`CREATE TABLE ledger_events (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    event_json TEXT NOT NULL
+  )`);
+  const insert = ledger.prepare(
+    "INSERT INTO ledger_events (event_type, event_json) VALUES (?, ?)",
+  );
+  for (const event of events)
+    insert.run(event.type as string, JSON.stringify(event));
+  ledger.close();
+  const stdout = execFileSync(
+    process.execPath,
+    [
+      "--experimental-strip-types",
+      script,
+      "--state",
+      state,
+      "--running-labs",
+      "lab-v-held",
+      "--since",
+      "2026-10-29T00:00:00.000Z",
+      "--lab-slots",
+      "4",
+      "--mem-available-gib",
+      "64",
+      "--json",
+      ...extra,
+    ],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+  return JSON.parse(stdout) as {
+    counts: Record<string, number>;
+    labs: { slots: number; held: string[]; free: number; teardown: string[] };
+    next: Record<string, { findingId?: string; findingIds?: string[] }[]>;
+    metric: { findingsReady: number; medianHoursToObservationReady: number };
+  };
+}
+
+const ids = (list: { findingId?: string }[] | undefined) =>
+  (list ?? []).map((item) => item.findingId);
+
+test("routes each Finding by its latest decision, verification and observation", () => {
+  recorded(id("1")); // 記録なし → 段 1
+  recorded(id("2"));
+  decided(id("2"), "defer", "screen-v5-verify"); // 段 1b へ
+  recorded(id("3"));
+  decided(id("3"), "defer", "screen-v5-verify");
+  decided(id("3"), "defer", "source-check-pass", 2); // 単位が無い → 報告単位
+  recorded(id("4"));
+  decided(id("4"), "reject", "screen-v5-chain-fragile"); // 除外
+  recorded(id("5"));
+  decided(id("5"), "defer", "source-check-unknown"); // 所有者
+  recorded(id("6"));
+  verified(id("6"), "v-held", {
+    status: "incomplete",
+    reason: "awaiting-human-observation",
+  });
+  events.push({
+    type: "manual-observation-lab-ready",
+    findingId: id("6"),
+    verificationId: "v-held",
+    occurredAt: at(90),
+  });
+  recorded(id("7"));
+  verified(id("7"), "v-stalled", {
+    status: "incomplete",
+    reason: "precondition",
+  });
+  recorded(id("8"));
+  verified(id("8"), "v-done", { status: "incomplete", reason: "precondition" });
+  decided(id("8"), "defer", "loop-retry-exhausted", 5); // やり直しも止まった → 所有者
+  recorded(id("9"), { campaignId: "tp326-sv3-c1" }); // 開発セットは扱わない
+
+  const result = run();
+  expect(ids(result.next.screen)).toEqual([id("1")]);
+  expect(ids(result.next.sourceCheck)).toEqual([id("2")]);
+  expect(ids(result.next.unit)).toEqual([id("3")]);
+  expect(ids(result.next.awaitingHuman)).toEqual([id("6")]);
+  expect(ids(result.next.stalled)).toEqual([id("7")]);
+  expect(ids(result.next.owner)).toEqual([id("5"), id("8")]);
+  expect(result.counts.done).toBe(1);
+  expect(Object.values(result.counts).reduce((a, b) => a + b)).toBe(8);
+  // 生きている観測待ち Lab が 1 つ。既定の枠 4 から引いて空き 3。
+  expect(result.labs).toMatchObject({
+    slots: 4,
+    held: ["lab-v-held"],
+    free: 3,
+  });
+  // finding-recorded から observation-ready まで 1.5 時間。
+  expect(result.metric).toMatchObject({
+    findingsReady: 1,
+    medianHoursToObservationReady: 1.5,
+  });
+});
+
+test("plans one Lab per report unit, at most five Findings, within the free slots", () => {
+  const unitFindings = ["a", "b", "c", "d", "f", "1"].map(id);
+  for (const findingId of unitFindings) {
+    recorded(findingId);
+    decided(findingId, "defer", "source-check-pass");
+  }
+  recorded(id("2"));
+  decided(id("2"), "defer", "source-check-pass");
+  mkdirSync(join(state, "review-notes"));
+  writeFileSync(
+    join(state, "review-notes", "report-units-2026-10-30.json"),
+    JSON.stringify([
+      {
+        groupId: "u1",
+        representative: "aaaaaaaa",
+        members: ["bbbbbbbb", "cccccccc", "dddddddd", "ffffffff", "11111111"],
+      },
+      { groupId: "u2", representative: "22222222", members: [] },
+    ]),
+  );
+  const result = run(["--lab-slots", "1", "--running-labs", ""]);
+  expect(result.next.lab).toEqual([
+    expect.objectContaining({
+      unit: "u1",
+      findingIds: unitFindings.slice(0, 5),
+    }),
+  ]);
+  expect(result.next.labWaiting).toEqual([
+    expect.objectContaining({ unit: "u2", findingIds: [id("2")] }),
+  ]);
+});
+
+test("sends a human match to the report step and tears down its Lab; a derived Finding replaces its origin", () => {
+  recorded(id("1"));
+  verified(id("1"), "v-held", {
+    status: "incomplete",
+    reason: "awaiting-human-observation",
+  });
+  events.push({
+    type: "manual-observation-lab-ready",
+    findingId: id("1"),
+    verificationId: "v-held",
+    occurredAt: at(10),
+  });
+  events.push({
+    type: "manual-observation-recorded",
+    findingId: id("1"),
+    verificationId: "v-held",
+    result: "match",
+    occurredAt: at(20),
+  });
+  recorded(id("2"));
+  verified(id("2"), "v-old", { status: "incomplete", reason: "precondition" });
+  recorded(id("3"), { derivedFromFindingId: id("2") });
+
+  const result = run();
+  expect(ids(result.next.report)).toEqual([id("1")]);
+  expect(result.labs).toMatchObject({
+    held: [],
+    free: 4,
+    teardown: ["lab-v-held"],
+  });
+  expect(ids(result.next.stalled)).toEqual([]);
+  expect(ids(result.next.screen)).toEqual([id("3")]);
+});
+
+test("skips a Lab for a unit already awaiting a human, and retries a stalled member in its unit's Lab", () => {
+  recorded(id("1"));
+  verified(id("1"), "v-held", {
+    status: "incomplete",
+    reason: "awaiting-human-observation",
+  });
+  events.push({
+    type: "manual-observation-lab-ready",
+    findingId: id("1"),
+    verificationId: "v-held",
+    occurredAt: at(10),
+  });
+  recorded(id("2"));
+  decided(id("2"), "defer", "source-check-pass");
+  // 単位の代表 5 から派生した 6 が観測待ちなら、単位 derived も Lab を立てない。
+  recorded(id("5"));
+  recorded(id("6"), { derivedFromFindingId: id("5") });
+  verified(id("6"), "v-held2", {
+    status: "incomplete",
+    reason: "awaiting-human-observation",
+  });
+  events.push({
+    type: "manual-observation-lab-ready",
+    findingId: id("6"),
+    verificationId: "v-held2",
+    occurredAt: at(10),
+  });
+  recorded(id("7"));
+  decided(id("7"), "defer", "source-check-pass");
+  recorded(id("3"));
+  verified(id("3"), "v-stalled", {
+    status: "incomplete",
+    reason: "precondition",
+  });
+  recorded(id("4"));
+  decided(id("4"), "defer", "source-check-pass");
+  mkdirSync(join(state, "review-notes"));
+  writeFileSync(
+    join(state, "review-notes", "report-units-2026-10-30.json"),
+    JSON.stringify([
+      { groupId: "held", representative: "11111111", members: ["22222222"] },
+      { groupId: "retry", representative: "33333333", members: ["44444444"] },
+      { groupId: "derived", representative: "55555555", members: ["77777777"] },
+    ]),
+  );
+  const result = run();
+  expect(ids(result.next.labCovered)).toEqual([id("2"), id("7")]);
+  expect(result.next.lab).toEqual([
+    expect.objectContaining({ unit: "retry", findingIds: [id("3"), id("4")] }),
+  ]);
+});
+
+test("a later attempt supersedes a held observation Lab: the Finding retries, the Lab is view-only but takes a slot", () => {
+  recorded(id("1"));
+  verified(id("1"), "v-held", {
+    status: "incomplete",
+    reason: "awaiting-human-observation",
+  });
+  events.push({
+    type: "manual-observation-lab-ready",
+    findingId: id("1"),
+    verificationId: "v-held",
+    occurredAt: at(10),
+  });
+  verified(id("1"), "v-second", { status: "incomplete", reason: "recipe" }, 12);
+  const result = run();
+  expect(ids(result.next.awaitingHuman)).toEqual([]);
+  expect(ids(result.next.stalled)).toEqual([id("1")]);
+  expect(result.labs).toMatchObject({
+    held: [],
+    viewOnly: ["lab-v-held"],
+    free: 3,
+  });
+});
+
+test("caps the free Lab slots by the host's available memory", () => {
+  const result = run(["--lab-slots", "12", "--mem-available-gib", "20"]);
+  // 探索に 16 GiB を残す。(20 - 16) / 1.5 → 2 台。
+  expect(result.labs).toMatchObject({ slots: 12, free: 2 });
+});
+
+test("a Finding in a running verify next batch is verifying: its Lab takes one slot and its unit gets no new Lab", () => {
+  const batch = (name: string, members: [string, string][]) => {
+    const directory = join(state, "handoff-loop-fixture", name);
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(
+      join(directory, "batch.json"),
+      JSON.stringify({
+        findings: members.map(([findingId, verificationId], index) => ({
+          findingId,
+          verificationId,
+          position: index + 1,
+        })),
+      }),
+    );
+  };
+  // 一括 1: 1 件目は観測待ちで終わり、2 件目は検証中。1 件目の準備は一括の最後に出る
+  // ので、一括が終わるまでは 1 件目も検証中に数える。Lab は同じ 1 台。
+  recorded(id("1"));
+  verified(id("1"), "b1", {
+    status: "incomplete",
+    reason: "awaiting-human-observation",
+  });
+  recorded(id("2"));
+  decided(id("2"), "defer", "source-check-pass");
+  batch("one", [
+    [id("1"), "b1"],
+    [id("2"), "b2"],
+  ]);
+  // 一括 0: 全員に結果が出て準備も出た。観測待ちで、Lab は保持中として数える。
+  recorded(id("5"));
+  verified(id("5"), "b5", {
+    status: "incomplete",
+    reason: "awaiting-human-observation",
+  });
+  events.push({
+    type: "manual-observation-lab-ready",
+    findingId: id("5"),
+    verificationId: "b5",
+    occurredAt: at(10),
+  });
+  batch("zero", [[id("5"), "b5"]]);
+  // 一括 2: Lab が立ち、結果はまだ無い。同じ単位の 4 には Lab を立てない。
+  recorded(id("3"));
+  decided(id("3"), "defer", "source-check-pass");
+  events.push({
+    type: "lab-provisioned",
+    identity: "verification-lab-b3",
+    labId: "lab-b3",
+    occurredAt: at(11),
+  });
+  batch("two", [[id("3"), "b3"]]);
+  recorded(id("4"));
+  decided(id("4"), "defer", "source-check-pass");
+  mkdirSync(join(state, "review-notes"));
+  writeFileSync(
+    join(state, "review-notes", "report-units-2026-10-30.json"),
+    JSON.stringify([
+      { groupId: "u3", representative: "33333333", members: ["44444444"] },
+    ]),
+  );
+  const result = run(["--running-labs", "lab-b1,lab-b3,lab-b5"]);
+  expect(ids(result.next.awaitingHuman)).toEqual([id("5")]);
+  expect(ids(result.next.verifying)).toEqual([id("1"), id("2"), id("3")]);
+  expect(ids(result.next.labCovered)).toEqual([id("4")]);
+  expect(result.next.lab).toEqual([]);
+  expect(result.labs).toMatchObject({
+    held: ["lab-b5"],
+    active: ["lab-b1", "lab-b3"],
+    free: 1,
+  });
+});
+
+test("a Lab-image block keeps a stalled Finding out of the Lab plan until a later fixed mark", () => {
+  for (const [digit, minute] of [
+    ["1", 0],
+    ["2", 9],
+  ] as const) {
+    recorded(id(digit));
+    verified(id(digit), `v${digit}`, {
+      status: "incomplete",
+      reason: "precondition",
+    });
+    decided(id(digit), "defer", "lab-image-blocked", 5);
+    if (minute > 0) decided(id(digit), "defer", "lab-image-fixed", minute);
+  }
+  mkdirSync(join(state, "review-notes"));
+  writeFileSync(
+    join(state, "review-notes", "report-units-2026-10-30.json"),
+    JSON.stringify([
+      { groupId: "u", representative: "11111111", members: ["22222222"] },
+    ]),
+  );
+  const result = run();
+  expect(ids(result.next.blocked)).toEqual([id("1")]);
+  expect(ids(result.next.stalled)).toEqual([id("2")]);
+  expect(result.next.lab).toEqual([
+    expect.objectContaining({ unit: "u", findingIds: [id("2")] }),
+  ]);
+});
+
+test("a live Lab that no list accounts for, such as a submitted Finding's, still takes a slot", () => {
+  recorded(id("1"));
+  verified(id("1"), "v-sub", {
+    status: "incomplete",
+    reason: "awaiting-human-observation",
+  });
+  events.push({
+    type: "submission-recorded-externally",
+    findingId: id("1"),
+    occurredAt: at(30),
+  });
+  const result = run(["--running-labs", "lab-v-sub,lab-unknown"]);
+  expect(result.counts.done).toBe(1);
+  expect(result.labs).toMatchObject({
+    held: [],
+    other: ["lab-v-sub", "lab-unknown"],
+    free: 2,
+  });
+});
+
+test("an owner-hold defer keeps a unit out of the Lab plan, verified or not", () => {
+  recorded(id("1"));
+  verified(id("1"), "v1", { status: "incomplete", reason: "precondition" });
+  decided(id("1"), "defer", "dependency-unpinnable", 5);
+  recorded(id("2"));
+  decided(id("2"), "defer", "source-check-pass");
+  decided(id("2"), "defer", "dependency-unpinnable", 5);
+  mkdirSync(join(state, "review-notes"));
+  writeFileSync(
+    join(state, "review-notes", "report-units-2026-10-30.json"),
+    JSON.stringify([
+      { groupId: "u", representative: "11111111", members: ["22222222"] },
+    ]),
+  );
+  const result = run();
+  expect(ids(result.next.owner)).toEqual([id("1"), id("2")]);
+  expect(result.next.lab).toEqual([]);
+});
+
+test("a single-Finding verify next (lab.json, no batch.json) is verifying while its Lab is up; an older lab.json is not", () => {
+  const handoff = (name: string, findingId: string) => {
+    const directory = join(state, "handoff-loop-fixture", name);
+    mkdirSync(directory, { recursive: true });
+    const path = join(directory, "lab.json");
+    writeFileSync(
+      path,
+      JSON.stringify({ findingId, snapshotDigest: snapshot }),
+    );
+    return path;
+  };
+  recorded(id("1"));
+  decided(id("1"), "defer", "source-check-pass");
+  handoff("one", id("1"));
+  // 前の周の handoff。同じ Snapshot の新しい Lab より前に書かれたので、その Lab の Finding ではない。
+  recorded(id("2"));
+  decided(id("2"), "defer", "source-check-pass");
+  const old = handoff("two", id("2"));
+  utimesSync(old, new Date(at(1)), new Date(at(1)));
+  events.push({
+    type: "lab-provisioned",
+    identity: "verification-lab-s1",
+    labId: "lab-s1",
+    snapshotDigest: snapshot,
+    occurredAt: at(11),
+  });
+  const result = run(["--running-labs", "lab-s1"]);
+  expect(ids(result.next.verifying)).toEqual([id("1")]);
+  expect(result.labs).toMatchObject({ active: ["lab-s1"], free: 3 });
+  expect(ids(result.next.unit)).toEqual([id("2")]);
+});
+
+test("an owner-hold defer after a judge-era runtime-confirmed keeps it out of the Lab plan", () => {
+  for (const digit of ["1", "2"]) {
+    recorded(id(digit));
+    verified(id(digit), `v${digit}`, { status: "runtime-confirmed" });
+  }
+  decided(id("1"), "defer", "owner-deferred-vendor-account", 5);
+  const result = run();
+  expect(ids(result.next.owner)).toEqual([id("1")]);
+  expect(result.next.lab).toEqual([
+    expect.objectContaining({ findingIds: [id("2")] }),
+  ]);
+});
+
+test("reports days since discovery for awaiting Findings and the median discovery-to-submission days, both from the derivation root", () => {
+  // 1 は派生元。2 は 1 から派生し、観測待ち。経過日数は 1 の記録から数える。
+  recorded(id("1"), { occurredAt: "2026-10-20T03:00:00.000Z" });
+  recorded(id("2"), {
+    occurredAt: "2026-10-30T03:00:00.000Z",
+    derivedFromFindingId: id("1"),
+  });
+  verified(id("2"), "v2", {
+    status: "incomplete",
+    reason: "awaiting-human-observation",
+  });
+  events.push({
+    type: "manual-observation-lab-ready",
+    findingId: id("2"),
+    verificationId: "v2",
+    occurredAt: at(10),
+  });
+  // 3 と 4 は提出済み。日本時間の日付で 2 日と 5 日。
+  recorded(id("3"), { occurredAt: "2026-10-20T16:00:00.000Z" }); // 日本時間 10-21
+  events.push({
+    type: "submission-recorded-externally",
+    findingId: id("3"),
+    submittedOn: "2026-10-23",
+    occurredAt: at(20),
+  });
+  recorded(id("4"), { occurredAt: "2026-10-20T03:00:00.000Z" });
+  events.push({
+    type: "submission-recorded-externally",
+    findingId: id("4"),
+    submittedOn: "2026-10-25",
+    occurredAt: at(21),
+  });
+  const result = run(["--running-labs", "lab-v2"]);
+  const awaiting = result.next.awaitingHuman as unknown as {
+    findingId: string;
+    ageDays: number;
+  }[];
+  expect(awaiting.map((item) => item.findingId)).toEqual([id("2")]);
+  const expected =
+    (Date.now() - Date.parse("2026-10-20T03:00:00.000Z")) / 86_400_000;
+  expect(Math.abs(awaiting[0]!.ageDays - expected)).toBeLessThan(0.2);
+  expect(result.metric).toMatchObject({
+    findingsSubmitted: 2,
+    medianDaysRecordedToSubmitted: 3.5,
+  });
+});
+
+test("an owner-hold defer does not tear down a Lab that another Finding still awaits a human on", () => {
+  for (const digit of ["1", "2"]) {
+    recorded(id(digit));
+    verified(id(digit), `v${digit}`, {
+      status: "incomplete",
+      reason: "awaiting-human-observation",
+    });
+    events.push({
+      type: "lab-provisioned",
+      identity: `verification-lab-v${digit}`,
+      labId: "lab-shared",
+      occurredAt: at(3),
+    });
+    events.push({
+      type: "manual-observation-lab-ready",
+      findingId: id(digit),
+      verificationId: `v${digit}`,
+      occurredAt: at(10),
+    });
+  }
+  // 2 は後の attempt が止まった（保持中の Lab は 2 にとって目視専用になる）。所有者の判断待ちにする。
+  verified(id("2"), "v2b", { status: "incomplete", reason: "recipe" }, 15);
+  decided(id("2"), "defer", "operator-classifier-stopped", 20);
+  const result = run(["--running-labs", "lab-shared"]);
+  expect(ids(result.next.awaitingHuman)).toEqual([id("1")]);
+  expect(ids(result.next.owner)).toEqual([id("2")]);
+  expect(result.labs).toMatchObject({ held: ["lab-shared"], teardown: [] });
+});
+
+test("a fixed-version control is done and does not replace its origin; an unmarked latest-version Finding inherits its origin's stage-1 reject as a screen note", () => {
+  recorded(id("1"));
+  decided(id("1"), "defer", "screen-v5-verify");
+  decided(id("1"), "defer", "source-check-pass", 2);
+  recorded(id("2"), {
+    derivedFromFindingId: id("1"),
+    derivationKind: "fixed-version-control",
+  });
+  verified(id("2"), "v2", { status: "incomplete", reason: "precondition" });
+  recorded(id("3"));
+  decided(id("3"), "reject", "screen-v5-chain-fragile");
+  recorded(id("4"), {
+    derivedFromFindingId: id("3"),
+    derivationKind: "latest-version",
+  });
+  const result = run();
+  expect(ids(result.next.unit)).toEqual([id("1")]);
+  expect(ids(result.next.stalled)).toEqual([]);
+  const screen = result.next.screen as unknown as {
+    findingId: string;
+    note: string;
+  }[];
+  expect(screen.map((item) => item.findingId)).toEqual([id("4")]);
+  expect(screen[0]!.note).toContain("screen-v5-chain-fragile");
+  expect(result.counts.done).toBe(2);
+});
+
+test("an owner defer after an awaiting-human attempt moves it to the owner list; its live Lab still takes a slot", () => {
+  for (const digit of ["1", "2"]) {
+    recorded(id(digit));
+    verified(id(digit), `v${digit}`, {
+      status: "incomplete",
+      reason: "awaiting-human-observation",
+    });
+    events.push({
+      type: "manual-observation-lab-ready",
+      findingId: id(digit),
+      verificationId: `v${digit}`,
+      occurredAt: at(10),
+    });
+  }
+  decided(id("2"), "defer", "owner-passed-observation", 20);
+  const result = run(["--running-labs", "lab-v1,lab-v2"]);
+  expect(ids(result.next.awaitingHuman)).toEqual([id("1")]);
+  expect(ids(result.next.owner)).toEqual([id("2")]);
+  expect(result.labs).toMatchObject({
+    held: ["lab-v1"],
+    other: ["lab-v2"],
+    teardown: [],
+    free: 2,
+  });
+});

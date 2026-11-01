@@ -1,0 +1,7 @@
+{
+  "sha256:record-dddd4444": "screen-v5-core-dependency",
+  "sha256:record-eeee5555": "screen-v5-policy-out-of-scope",
+  "sha256:record-ffff6666": "source-check-reach",
+  "sha256:record-aaaa1111": "source-check-pass",
+  "sha256:record-bbbb8888": "out-of-scope"
+}

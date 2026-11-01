@@ -130,5 +130,6 @@ AI が自分で回す手順は `docs/agents/` に置く。
 - Codex への依頼文: `codex-briefs.md`
 - 台帳の読み方: `ledger-reading.md`
 - 本番ランナーの監視: `production-monitoring.md`
+- 検証ループ（Finding から観測パッケージまで）: `verification-loop.md`
 
 進行中の状態は、Git ではなく Issue のコメントに書く。

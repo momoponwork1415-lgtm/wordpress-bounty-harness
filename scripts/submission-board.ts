@@ -6,13 +6,16 @@
 //
 // 所有者決定 2026-10-27: scripts は AI の道具で、Harness の制御には入れない。
 // 台帳とミラーは読み取り専用で開き、何も書かない。出力 HTML は Git 外に置く。
-// 報告単位の分け方と除外の判定は入力 JSON の側で決まっている。ここでは並べるだけで、
-// `summary` と `noteJa` は入力のまま出す。ペイロード、URL、関数名、再現手順は足さない。
+// 報告単位の分け方は入力 JSON の側で決まっている。除外は台帳の review-decided のうち、
+// 最新が reject で理由コードが screen-v5-* か source-check-* のものを正にする（#701）。
+// 除外判定の JSON は注記（noteJa）にだけ使う。ここでは並べるだけで、`summary` と
+// `noteJa` は入力のまま出す。ペイロード、URL、関数名、再現手順は足さない。
 //
 // 入力:
 //   台帳         <state>/ledger.sqlite の ledger_events（event_type, event_json）
 //   報告単位     <state>/review-notes/report-units-*.json（既定は名前順で最後のもの）
-//   除外判定     <state>/review-notes/exclusion-screen-*.json（同上）
+//   判断の理由   <state>/private-evidence/<digest>/content/record.json（review-decision）
+//   除外判定     <state>/review-notes/exclusion-screen-*.json（同上、注記だけ）
 //   ミラー       ~/wp-bounty-workspace/intelligence/history.sqlite（software, vulnerabilities）
 //   網           WordPress.org の plugin 情報 API と plugins.svn.wordpress.org の trunk。
 //                --no-network のとき、または失敗したときは「未取得」と書いて続ける。
@@ -135,7 +138,7 @@ const verdicts = screenJson.verdicts ?? [];
 interface FindingFacts {
   category?: string;
   snapshotDigest?: string;
-  review?: { decision: string; at: string };
+  review?: { decision: string; reasonCode: string; at: string };
   submissions: { destination: string; submittedOn: string }[];
   labReady: number;
 }
@@ -151,6 +154,35 @@ function facts(findingId: string): FindingFacts {
     findings.set(findingId, value);
   }
   return value;
+}
+
+/** review-decided が指す review-decision の記録から理由コードを読む。読めなければ "unavailable"。 */
+function reasonCodeOf(artifacts: unknown): string {
+  const reference = Array.isArray(artifacts)
+    ? (artifacts as { kind?: unknown; digest?: unknown }[]).find(
+        (item) => item.kind === "review-decision",
+      )
+    : undefined;
+  if (typeof reference?.digest !== "string") return "unreferenced";
+  try {
+    const record = JSON.parse(
+      readFileSync(
+        join(
+          stateDirectory,
+          "private-evidence",
+          reference.digest,
+          "content",
+          "record.json",
+        ),
+        "utf8",
+      ),
+    ) as { reasonCode?: unknown };
+    return typeof record.reasonCode === "string"
+      ? record.reasonCode
+      : "unavailable";
+  } catch {
+    return "unavailable";
+  }
 }
 
 const ledgerPath = join(stateDirectory, "ledger.sqlite");
@@ -186,7 +218,11 @@ if (existsSync(ledgerPath)) {
       const category = text("category");
       if (category !== undefined) entry.category ??= category;
     } else if (type === "review-decided") {
-      entry.review = { decision: text("decision") ?? "?", at };
+      entry.review = {
+        decision: text("decision") ?? "?",
+        reasonCode: reasonCodeOf(event.artifacts),
+        at,
+      };
     } else if (type === "submission-recorded-externally") {
       entry.submissions.push({
         destination: text("destination") ?? "?",
@@ -388,23 +424,15 @@ const REASON_JA: Record<string, string> = {
   "submitted-plugin": "提出済み plugin",
   "unverified-source": "依存ソース未確認",
   "reach-unclear": "到達条件が限定的",
+  // wbh-screen v5 の理由コード（台帳では screen-v5- を前に付ける）。
+  "contrived-usage": "通常利用の範囲外",
+  "installer-transient": "導入時だけの一時スクリプト",
+  "same-root-ticket": "同根の提出あり",
+  // wbh-source-check の理由コード。
+  "source-check-input": "入力を握れない（段 1b）",
+  "source-check-reach": "sink に届かない（段 1b）",
 };
 // 理由の内訳に数えるのは除外の根拠になる符号だけ。残りは明細にだけ出す。
-const EXCLUDING = new Set([
-  "same-root-submitted",
-  "heavy-admin-precondition",
-  "cve-only-grade",
-  "patched-in-latest",
-  "core-dependency",
-  "public-duplicate",
-  "park-impact",
-  "policy-out-of-scope",
-  "admin-misconfig",
-  "chain-fragile",
-  "external-unclear",
-  "pr-mid-or-high",
-  "external-not-writable",
-]);
 const IMPACT_JA: Record<string, string> = {
   "stored-xss": "格納型 XSS",
   "account-takeover": "アカウント乗っ取り",
@@ -571,9 +599,32 @@ const unitRows = sortedUnits
   })
   .join("\n");
 
+// 除外は台帳が正。最新の判断が reject で、段 1 か段 1b の理由コードのものだけを並べる。
+const LEDGER_EXCLUDE = /^(screen-v5-|source-check-)/;
+const noteByFinding = new Map(
+  verdicts.map((verdict) => [verdict.fid, verdict]),
+);
+const excluded: Verdict[] = [];
+for (const [findingId, entry] of findings) {
+  const review = entry.review;
+  if (review?.decision !== "reject" || !LEDGER_EXCLUDE.test(review.reasonCode))
+    continue;
+  const selection = selectionBySnapshot.get(entry.snapshotDigest ?? "") ?? "";
+  const target = /^wporg:(.+)@([^@]+)$/.exec(selection);
+  excluded.push({
+    fid: findingId,
+    short: findingId.replace(/^sha256:/, "").slice(0, 8),
+    slug: target?.[1] ?? "台帳に対象なし",
+    version: target?.[2] ?? "?",
+    verdict: "exclude",
+    codes: [review.reasonCode.replace(/^screen-v5-/, "")],
+    ...(noteByFinding.get(findingId)?.noteJa === undefined
+      ? {}
+      : { noteJa: noteByFinding.get(findingId)!.noteJa! }),
+  });
+}
 const excludedBySlug = new Map<string, Verdict[]>();
-for (const verdict of verdicts) {
-  if (verdict.verdict !== "exclude") continue;
+for (const verdict of excluded) {
   excludedBySlug.set(verdict.slug, [
     ...(excludedBySlug.get(verdict.slug) ?? []),
     verdict,
@@ -589,32 +640,37 @@ const excludedRows = [...excludedBySlug]
   .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
   .map(([slug, items]) => {
     const versions = [...new Set(items.map((item) => item.version))].join("、");
-    const reasons = items.flatMap((item) => {
-      const excluding = item.codes.filter((code) => EXCLUDING.has(code));
-      return excluding.length === 0
-        ? ["その他"]
-        : excluding.map((code) => REASON_JA[code] ?? code);
-    });
+    const reasons = items.flatMap((item) =>
+      item.codes.map((code) => REASON_JA[code] ?? code),
+    );
     const detail = items
       .map(
         (item) =>
           `<li><code>${escape(item.short)}</code> ${escape(impactOf(item))}／${escape(
             item.codes.map((code) => REASON_JA[code] ?? code).join("、"),
-          )} — ${escape(item.noteJa)}</li>`,
+          )}${item.noteJa === undefined ? "" : ` — ${escape(item.noteJa)}`}</li>`,
       )
       .join("");
     return `<tr><td><b>${escape(slug)}</b> ${escape(versions)}</td><td>${items.length}</td><td>${escape(tally(items.map(impactOf)))}</td><td>${escape(tally(reasons))}</td><td><details><summary>明細</summary><ul>${detail}</ul></details></td></tr>`;
   })
   .join("\n");
 
-const keepCount = verdicts.filter(
-  (verdict) => verdict.verdict === "keep",
+// 要検証は、最新の判断が段 1 の要検証か段 1b の成立・未決の印のもの（docs/agents/verification-loop.md）。
+const KEEP_MARKS = new Set([
+  "screen-v5-verify",
+  "screen-v5-reassessment",
+  "source-check-pass",
+  "source-check-unknown",
+]);
+const keepCount = [...findings.values()].filter(
+  (entry) =>
+    entry.review?.decision === "defer" &&
+    KEEP_MARKS.has(entry.review.reasonCode),
 ).length;
-const excludeCount = verdicts.length - keepCount;
-const screenPlugins = new Set(verdicts.map((verdict) => verdict.slug)).size;
+const excludeCount = excluded.length;
 const sources = [
   `報告単位 ${escape(unitsPath.split("/").at(-1))}`,
-  `除外判定 ${escape(screenPath.split("/").at(-1))}${screenJson.recordedAt ? `（${escape(screenJson.recordedAt)}）` : ""}`,
+  `除外の注記 ${escape(screenPath.split("/").at(-1))}${screenJson.recordedAt ? `（${escape(screenJson.recordedAt)}）` : ""}`,
   `台帳 ${ledgerAvailable ? "読込" : "未取得"}`,
   `ミラー ${mirrorAvailable ? "読込" : "未取得"}`,
   `網 ${network ? "使用" : "未使用（--no-network）"}`,
@@ -635,7 +691,7 @@ details ul{margin:4px 0;padding-left:1.2em}details li{margin:2px 0}small{color:v
 .wrap{overflow-x:auto}
 </style></head><body>
 <h1>提出候補（報告単位）と除外（${escape(today)}）</h1>
-<p>除外判定 ${verdicts.length} 件（${screenPlugins} plugin）のうち、要検証 ${keepCount} 件 → <b>報告単位 ${units.length} 件</b>。除外 ${excludeCount} 件（${excludedBySlug.size} plugin）。同じ根本原因の Finding は 1 行にまとめてある。報告単位と除外は AI の中間判断で、台帳には記録していない。Private Evidence なので Git と Issue には貼らない。</p>
+<p>台帳で段 1・1b を通った（要検証・成立・未決の印）Finding ${keepCount} 件 → <b>報告単位 ${units.length} 件</b>。段 1・1b の除外 ${excludeCount} 件（${excludedBySlug.size} plugin）。同じ根本原因の Finding は 1 行にまとめてある。印と除外は AI の中間判断で、台帳に <code>review decide --by ai</code> として記録してある。Private Evidence なので Git と Issue には貼らない。</p>
 <p><small>${sources}。scripts/submission-board.ts が生成。</small></p>
 <h2>要検証（報告単位）</h2>
 <div class="wrap"><table><thead><tr><th>#</th><th>plugin／種類／攻撃者／被害者</th><th>何が起きるか</th><th>Finding 数と代表</th><th>公開記録と最新版・trunk</th><th>次の一手</th><th>台帳（review 判断と提出記録）</th></tr></thead><tbody>
