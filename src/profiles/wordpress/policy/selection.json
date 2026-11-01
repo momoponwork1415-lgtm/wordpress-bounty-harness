@@ -1,7 +1,7 @@
 {
   "kind": "wordpress-selection-policy",
   "schemaVersion": 1,
-  "id": "wordpress-selection-2026-10-28",
+  "id": "wordpress-selection-2026-11-01",
   "promptVariant": "wp2shell-bounty-v11",
   "pluginDependencySlugs": {
     "unlimited-elements-for-elementor": ["elementor"]
@@ -12,23 +12,14 @@
   "wordpressVersion": "7.1.3",
   "candidateSource": {
     "kind": "wordpress-org",
-    "tags": [
-      "forms",
-      "contact-form",
-      "membership",
-      "page-builder",
-      "elementor-addons",
-      "multilingual",
-      "backup",
-      "booking"
-    ],
+    "tags": [],
     "perPage": 50,
     "maxAgeDays": 1
   },
-  "minimumActiveInstallations": 10000,
+  "minimumActiveInstallations": 5000,
   "maximumObservationAgeDays": 2,
   "maximumUpdateAgeDays": 365,
-  "maximumTargets": 5,
+  "maximumTargets": 10,
   "excludedAuthors": [
     "Automattic",
     "Facebook",
