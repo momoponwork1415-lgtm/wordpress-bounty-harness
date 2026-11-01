@@ -40,7 +40,7 @@ case "$digest" in
 esac
 shipped="$(docker run --rm --runtime=runsc --network=none --read-only --cap-drop=ALL \
   --security-opt=no-new-privileges --entrypoint=php "$digest" \
-  -r 'preg_match("/\$wp_version\s*=\s*\x27([0-9A-Za-z.-]{1,32})\x27/", file_get_contents("/usr/src/wordpress/wp-includes/version.php"), $m); echo $m[1];')"
+  -r 'echo preg_match("/wp_version\s*=\s*\x27([0-9A-Za-z.-]{1,32})\x27/", (string) file_get_contents("/usr/src/wordpress/wp-includes/version.php"), $m) ? $m[1] : "";')"
 if [ "$shipped" != "$version" ]; then
   echo "the image ships WordPress ${shipped}, not ${version}" >&2
   exit 1
