@@ -229,6 +229,8 @@ export interface CliProfile {
   ): Promise<CampaignSummary>;
   /** The campaign config's maxConcurrentTargets, the ceiling of `continuous concurrency`. */
   targetCeiling?(configPath: string): Promise<number>;
+  /** Why `continuous run` refuses this campaign config, or undefined when it may run it. */
+  continuousRunRefusal?(configPath: string): Promise<string | undefined>;
   /** The campaign config's per-runtime caps, the ceilings of `continuous concurrency --runtime`. */
   runtimeCeilings?(
     configPath: string,

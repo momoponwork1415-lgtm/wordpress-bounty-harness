@@ -2939,6 +2939,280 @@ describe("harness CLI vertical slice", () => {
     ).toHaveLength(2);
   });
 
+  it("runs a named second Trial on recorded Leads with a Prior leads section, once (ADR 0044)", async () => {
+    const lead = (summary: string) => ({
+      summary,
+      attackerPosition: "subscriber",
+      primitive: "write",
+      storage: { kind: "option", key: "synthetic_plugin_shared" },
+      missingEdge: "consumer",
+      sourceTrace: [
+        { file: "synthetic-plugin.php", function: "synthetic_boot", line: 3 },
+        { file: "includes/synthetic.php", function: "synthetic_save", line: 4 },
+      ],
+      labObservations: "Synthetic partial observation at /synthetic",
+    });
+    const { run, configPath, prompts, ledger, root, profile } = await harness({
+      entryPoints: true,
+      leadsOnCalls: {
+        1: [
+          lead("No reader of the stored value was shown. Second sentence."),
+          lead("It answered POST /wp-admin/admin-ajax.php only."),
+        ],
+      },
+    });
+    const first = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-first",
+      "--config",
+      configPath,
+    );
+    expect(first.code).toBe(0);
+    const leads = ledger()
+      .read({ campaignId: "campaign-first", type: "lead-recorded" })
+      .map(({ event }) => event);
+    expect(leads).toHaveLength(2);
+    const snapshotDigest = leads[0]!.snapshotDigest;
+    const leadIds = leads.flatMap((event) =>
+      event.type === "lead-recorded" ? [event.leadId] : [],
+    );
+    const written = JSON.parse(await readFile(configPath, "utf8"));
+    const second = async (
+      campaignId: string,
+      targets: readonly Record<string, unknown>[],
+    ) => {
+      written.discovery = { lab: "attached", priorLeads: { targets } };
+      await writeFile(configPath, JSON.stringify(written));
+      return run(
+        "campaign",
+        "run",
+        "synthetic-plugin",
+        "--campaign",
+        campaignId,
+        "--config",
+        configPath,
+      );
+    };
+
+    // A Lead of another Snapshot, and a groups file of another rule, stop before any Lab.
+    const otherSnapshot = await second("campaign-other", [
+      { snapshotDigest: sha("a"), leadIds },
+    ]);
+    expect(otherSnapshot.code).toBe(1);
+    expect(otherSnapshot.stderr).toContain("prior-lead-snapshot-differs");
+    const groupsPath = join(root, "lead-groups.json");
+    await writeFile(
+      groupsPath,
+      JSON.stringify({
+        summary: { rule: "overlap" },
+        groups: [
+          {
+            snapshotDigest,
+            representative: { kind: "lead", id: leadIds[0] },
+          },
+        ],
+      }),
+    );
+    const overlap = await second("campaign-overlap", [
+      { snapshotDigest, groupsPath },
+    ]);
+    expect(overlap.code).toBe(1);
+    expect(overlap.stderr).toContain("prior-leads-groups-rule");
+    const missing = await second("campaign-missing", [
+      { snapshotDigest, groupsPath: join(root, "absent.json") },
+    ]);
+    expect(missing.code).toBe(1);
+    expect(missing.stderr).toContain("prior-leads-groups-unreadable");
+    expect(prompts).toHaveLength(1);
+
+    // One Trial per Snapshot: neither --repeat nor the runner runs it again.
+    written.discovery = {
+      lab: "attached",
+      priorLeads: { targets: [{ snapshotDigest, leadIds }] },
+    };
+    await writeFile(configPath, JSON.stringify(written));
+    const repeated = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-repeat",
+      "--config",
+      configPath,
+      "--repeat",
+      "2",
+    );
+    expect(repeated.code).toBe(1);
+    expect(repeated.stderr).toContain("prior-leads-repeat");
+    (profile as { hostStatus?: unknown }).hostStatus = async () => ({
+      loginExpiresAt: new Date("2027-01-01T00:00:00Z"),
+      programmeObservedAt: new Date(now),
+      freeBytes: 100 * 1024 ** 3,
+      loginMarginMinutes: 60,
+    });
+    const runner = await run(
+      "continuous",
+      "run",
+      "--config",
+      configPath,
+      "--selection",
+      join(root, "selection.json"),
+    );
+    expect(runner.code).toBe(1);
+    expect(runner.stderr).toContain(
+      "continuous run does not run discovery.priorLeads",
+    );
+    expect(prompts).toHaveLength(1);
+
+    const named = await second("campaign-second", [
+      { snapshotDigest, leadIds },
+    ]);
+    expect(named.code).toBe(0);
+    expect(prompts).toHaveLength(2);
+    const prompt = prompts[1]!;
+    const section = prompt.slice(
+      prompt.indexOf("## Prior leads"),
+      prompt.indexOf("## Trust boundary"),
+    );
+    expect(prompt.indexOf("## Run parameters")).toBeLessThan(
+      prompt.indexOf("## Prior leads"),
+    );
+    expect(section).toContain(
+      [
+        "### Prior lead 1",
+        "",
+        "- Entry: `synthetic-plugin.php` `synthetic_boot`",
+        "- Effect: `includes/synthetic.php` `synthetic_save`",
+        "- Not shown: No reader of the stored value was shown.",
+      ].join("\n"),
+    );
+    expect(section).toContain("### Prior lead 2");
+    expect(section).toContain("- Not shown: (withheld)");
+    for (const absent of [
+      "Second sentence",
+      "admin-ajax",
+      "synthetic_plugin_shared",
+      "Synthetic partial observation",
+    ])
+      expect(section).not.toContain(absent);
+    expect(prompts[0]).not.toContain("## Prior leads");
+    const started = ledger()
+      .read({ campaignId: "campaign-second", type: "discovery-run-started" })
+      .map(({ event }) => event);
+    expect(started).toHaveLength(1);
+    expect(started[0]).toMatchObject({
+      snapshotDigest,
+      labAttached: true,
+      configuration: {
+        lab: { mode: "attached" },
+        priorLeads: {
+          representatives: 2,
+          leadIds,
+          gapWithheld: 1,
+          sectionDigest: sha256(section.trimEnd()),
+        },
+      },
+    });
+    expect(
+      ledger().read({
+        campaignId: "campaign-first",
+        type: "discovery-run-started",
+      })[0]?.event,
+    ).not.toHaveProperty("configuration.priorLeads");
+
+    // The same Snapshot with the same representatives does not run again.
+    const again = await second("campaign-again", [
+      { snapshotDigest, leadIds: [...leadIds].reverse() },
+    ]);
+    expect(again.code).toBe(1);
+    expect(again.stderr).toContain("prior-leads-already-run");
+    expect(prompts).toHaveLength(2);
+  });
+
+  it("does not resume a second Trial whose Prior leads section would differ (ADR 0044)", async () => {
+    const lead = (summary: string) => ({
+      summary,
+      attackerPosition: "subscriber",
+      primitive: "write",
+      storage: null,
+      missingEdge: "consumer",
+      sourceTrace: [
+        { file: "includes/synthetic.php", function: "synthetic_save", line: 4 },
+      ],
+      labObservations: "Synthetic partial observation",
+    });
+    const fixture = await harness({
+      omitLegacyVerifier: true,
+      entryPoints: true,
+      refuseOnCalls: [2],
+      refusalSession: true,
+      leadsOnCalls: { 1: [lead("First gap."), lead("Second gap.")] },
+    });
+    const { run, configPath, ledger, transportRuns } = fixture;
+    expect(
+      (
+        await run(
+          "campaign",
+          "run",
+          "synthetic-plugin",
+          "--campaign",
+          "campaign-first",
+          "--config",
+          configPath,
+        )
+      ).code,
+    ).toBe(0);
+    const leads = ledger()
+      .read({ campaignId: "campaign-first", type: "lead-recorded" })
+      .flatMap(({ event }) => (event.type === "lead-recorded" ? [event] : []));
+    const snapshotDigest = leads[0]!.snapshotDigest;
+    const written = JSON.parse(await readFile(configPath, "utf8"));
+    const configure = async (leadIds: readonly string[]) => {
+      written.discovery = {
+        lab: "attached",
+        priorLeads: { targets: [{ snapshotDigest, leadIds }] },
+      };
+      await writeFile(configPath, JSON.stringify(written));
+    };
+    await configure(leads.map(({ leadId }) => leadId));
+    expect(
+      (
+        await run(
+          "campaign",
+          "run",
+          "synthetic-plugin",
+          "--campaign",
+          "campaign-second",
+          "--config",
+          configPath,
+        )
+      ).code,
+    ).toBe(0);
+    const refused = transportRuns.at(-1)!;
+    expect(
+      ledger()
+        .read({ campaignId: "campaign-second", type: "discovery-run-started" })
+        .at(0)?.event,
+    ).toMatchObject({ configuration: { priorLeads: { representatives: 2 } } });
+    await configure([leads[0]!.leadId]);
+    const resumed = await run(
+      "campaign",
+      "resume",
+      "--campaign",
+      "campaign-second",
+      "--run",
+      refused.runId,
+      "--config",
+      configPath,
+    );
+    expect(resumed.code).toBe(3);
+    expect(resumed.stderr).toMatch(/^not resumable: prior-leads-differ /);
+    expect(transportRuns.at(-1)).toBe(refused);
+  });
+
   it("stops the campaign on a provider limit and resumes it with the same command", async () => {
     const { run, configPath } = await harness({
       limitOnCalls: [2],

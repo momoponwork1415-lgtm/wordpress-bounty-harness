@@ -114,6 +114,35 @@ const discoveryLabSchema = z
     maxObservations: maxObservations ?? 20,
   }));
 
+const sha256Digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
+
+/**
+ * ADR 0044: one Snapshot of a named second Trial and the Lead representatives
+ * it receives, either as Lead ids or as the `--rule pair --json` output of
+ * `scripts/lead-groups.mjs` (its Lead-represented groups of this Snapshot).
+ * At most 8 per Snapshot (design 2026-10-31 §1).
+ */
+export const MAX_PRIOR_LEADS_PER_SNAPSHOT = 8;
+const priorLeadsTargetSchema = z
+  .strictObject({
+    snapshotDigest: sha256Digest,
+    leadIds: z
+      .array(sha256Digest)
+      .min(1)
+      .max(MAX_PRIOR_LEADS_PER_SNAPSHOT)
+      .refine((ids) => new Set(ids).size === ids.length, {
+        message: "leadIds names each Lead once",
+      })
+      .optional(),
+    groupsPath: z.string().min(1).optional(),
+  })
+  .refine(
+    (target) =>
+      (target.leadIds === undefined) !== (target.groupsPath === undefined),
+    { message: "A prior-leads target names leadIds or groupsPath, not both" },
+  );
+export type WordPressPriorLeadsTarget = z.infer<typeof priorLeadsTargetSchema>;
+
 export const LEGACY_VERIFIER_RETIRED =
   "The legacy Codex Verifier is retired; a verification skill handoff must be explicitly requested";
 
@@ -152,6 +181,16 @@ const commonCampaignFields = {
       skills: z
         .array(z.enum(WORDPRESS_LAUNCHABLE_DISCOVERY_SKILL_IDS))
         .max(MAX_STAGED_SKILLS)
+        .optional(),
+      /**
+       * ADR 0044: present only for a named second Trial. Its targets are the
+       * named Snapshots, not a selection, and each receives the Harness's
+       * `## Prior leads` section; it requires `lab: attached`.
+       */
+      priorLeads: z
+        .strictObject({
+          targets: z.array(priorLeadsTargetSchema).min(1).max(50),
+        })
         .optional(),
     })
     .prefault({}),
@@ -224,6 +263,25 @@ export const wordpressCampaignConfigSchema = z
           code: "custom",
           path: ["discovery", "skills"],
           message: "discovery.skills names each skill once",
+        });
+    }
+    const priorLeads = config.discovery.priorLeads;
+    if (priorLeads !== undefined) {
+      if (config.discovery.lab.mode !== "attached")
+        context.addIssue({
+          code: "custom",
+          path: ["discovery", "priorLeads"],
+          message:
+            "A prior-leads Trial runs with discovery.lab attached (ADR 0044)",
+        });
+      const snapshots = priorLeads.targets.map(
+        (target) => target.snapshotDigest,
+      );
+      if (new Set(snapshots).size !== snapshots.length)
+        context.addIssue({
+          code: "custom",
+          path: ["discovery", "priorLeads", "targets"],
+          message: "discovery.priorLeads names each Snapshot once",
         });
     }
     for (const role of ["enumerator", "partition", "tracer"] as const)

@@ -224,6 +224,21 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       effort: id.optional(),
       /** ADR 0043: the exploration skills staged for the run, by id and file digest; absent when none. */
       skills: z.array(z.strictObject({ id, digest })).min(1).max(8).optional(),
+      /**
+       * ADR 0044: a second Trial's named Lead representatives (one per group),
+       * the digest of the Snapshot and sorted Lead ids, how many gap sentences
+       * were withheld, and the digest of the generated section; absent on
+       * every other Trial.
+       */
+      priorLeads: z
+        .strictObject({
+          representatives: z.number().int().positive(),
+          representativesDigest: digest,
+          leadIds: z.array(digest).min(1).max(8),
+          gapWithheld: z.number().int().nonnegative(),
+          sectionDigest: digest,
+        })
+        .optional(),
       axis: z.literal("history").optional(),
       arm: z.enum(["a", "b"]).optional(),
       arms: z

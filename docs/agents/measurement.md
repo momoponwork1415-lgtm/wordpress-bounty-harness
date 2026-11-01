@@ -75,6 +75,15 @@ PR の「測った数字」に貼る列は固定する。
 - スキルは 1 本ずつ足す。`wbh-tools-v1` は `wbh-recon-v1` の上に乗せて測る（腕: recon のみ / recon + tools）。地図が無い Trial で tools だけを測らない。
 - 既定を有りに切り替えるかは DEVELOPMENT 第 5 節の 6 段で決める。形だけの PR（#682 の PR 1）は数字を持たず、所有者が探索の再開を指示した後に測る。
 
+## 5c. Lead を入力にした第 2 Trial（ADR 0044）
+
+`discovery.priorLeads.targets` を書いた campaign は、名指しした Snapshot だけを対象にし（選定は回さない）、各 Trial に `## Prior leads` 節と探索 Lab（`discovery.lab: attached` が必須）を付ける。台帳の `discovery-run-started.configuration.priorLeads` の有無で第 2 Trial を見分ける。中身は代表の数 `representatives`、代表の `leadIds`、`representativesDigest`、隙間の文を伏せた数 `gapWithheld`、節の `sectionDigest`。
+
+- 代表は対象ごとに `leadIds`（最大 8）か、`scripts/lead-groups.mjs --rule pair --json` の出力ファイル（`groupsPath`、その Snapshot の Lead が代表の群を全部使う）で名指しする。どれを渡すかは AI 操作役が決め、選び方を Issue のコメントに残す。
+- 起動前に拒むもの: 別の Snapshot の Lead、台帳か Private Evidence に無い Lead、公開履歴カタログを受けた Trial の Lead、v8 より前の目的文の Trial の Lead、`pair` 以外の規則の群ファイル、別の campaign が同じ Snapshot と同じ代表の組ですでに走らせたもの。
+- 主な数字: **Finding になった Lead の群の数 / 入力した群の数**。「なった」は、第 2 Trial の Finding を入れて `lead-groups.mjs --snapshot <digest>` を回し、入力した代表と同じ群に入ったこと。既定の `overlap` と `pair` の両方の数を並べる。加えて段 1b（wbh-source-check）を通った Finding の数を、入力した群に入ったものと入らなかったものに分けて書く。
+- 第 2 Trial は v14-wide・v18-wide・v19-wide の Trial と同じ分母に混ぜない。第 1 Trial は Lab なし、第 2 Trial は Lab ありなので、上がっても入力の効果と Lab の効果は分けられないと書く。
+
 ## 6. 記録先
 
 - 再発見 case: `docs/evaluation/<日付>-<用途>.md` に表と注記、Issue #127 に comment。
