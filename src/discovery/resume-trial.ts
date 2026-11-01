@@ -89,7 +89,8 @@ export type ResumeAssessment =
     }
   | { readonly status: "resumable"; readonly plan: ResumePlan };
 
-const researchArchiveSchema = z.looseObject({
+/** The sealed notes archive of a Trial (`collectResearchArchive`). */
+export const researchArchiveSchema = z.looseObject({
   kind: z.literal("research-directory-archive"),
   schemaVersion: z.literal(1),
   entries: z.array(

@@ -158,6 +158,8 @@ async function harness(
     /** A refused receipt names its Root thread and session file, as a cooperative run's does (ADR 0036). */
     readonly refusalSession?: boolean;
     readonly leadsOnCalls?: Readonly<Record<number, readonly unknown[]>>;
+    /** Provider calls (1-based) whose Root seals a notes archive holding a map (ADR 0048). */
+    readonly researchOnCalls?: readonly number[];
     readonly zeroFindings?: boolean;
     /** Candidate slugs; the first is not pinned. */
     readonly candidates?: readonly string[];
@@ -854,8 +856,34 @@ async function harness(
           "findings",
           Buffer.from(JSON.stringify(report)),
         );
+        const research =
+          options.researchOnCalls?.includes(call) === true
+            ? await attachments.put(
+                "research",
+                Buffer.from(
+                  JSON.stringify({
+                    kind: "research-directory-archive",
+                    schemaVersion: 1,
+                    truncated: false,
+                    collectedBytes: 24,
+                    entries: [
+                      {
+                        path: "recon-map.md",
+                        type: "file",
+                        contentBase64: Buffer.from(
+                          `# Map of call ${call}\n`,
+                        ).toString("base64"),
+                      },
+                    ],
+                  }),
+                ),
+              )
+            : undefined;
         return {
           attachment,
+          ...(research === undefined
+            ? {}
+            : { researchArtifact: { attachment: research, truncated: false } }),
           receipt: createNativeRunReceipt({
             runId: run.runId,
             targetSnapshotDigest: run.targetSnapshotDigest,
@@ -1584,6 +1612,107 @@ describe("harness CLI vertical slice", () => {
         skills: [{ id: "wbh-recon-v2", digest: skill.digest }],
       },
     });
+  });
+
+  it("passes an earlier Trial's map to a later Trial of the same target under Prior research, and records why none when there is no earlier Trial (ADR 0048)", async () => {
+    const { run, root, configPath, prompts, ledger, transportRuns } =
+      await harness({
+        config: {
+          discovery: { lab: "none", priorResearch: "same-target" },
+        },
+        researchOnCalls: [1],
+      });
+    expect(
+      await run(
+        "campaign",
+        "run",
+        "synthetic-plugin",
+        "--campaign",
+        "first",
+        "--config",
+        configPath,
+      ),
+    ).toMatchObject({ code: 0 });
+    // The first Trial of the target has nothing to receive and says so.
+    expect(prompts[0]).not.toContain("## Prior research");
+    expect(transportRuns[0]?.priorResearch).toBeUndefined();
+    expect(
+      ledger()
+        .read({ campaignId: "first", type: "discovery-run-started" })
+        .at(0)?.event,
+    ).toMatchObject({
+      configuration: { priorResearch: { none: "no-earlier-trial" } },
+    });
+    // A later version of the same target: another Snapshot, same target id.
+    const policyPath = join(root, "selection.json");
+    const policy = JSON.parse(await readFile(policyPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    await writeFile(
+      policyPath,
+      JSON.stringify({
+        ...policy,
+        pinnedVersions: { "synthetic-plugin": "3.4.0" },
+      }),
+    );
+    expect(
+      await run(
+        "campaign",
+        "run",
+        "synthetic-plugin",
+        "--campaign",
+        "second",
+        "--config",
+        configPath,
+      ),
+    ).toMatchObject({ code: 0 });
+    const earlier = ledger()
+      .read({ campaignId: "first", type: "discovery-run-started" })
+      .at(0)?.event;
+    const later = ledger()
+      .read({ campaignId: "second", type: "discovery-run-started" })
+      .at(0)?.event;
+    if (
+      earlier?.type !== "discovery-run-started" ||
+      later?.type !== "discovery-run-started"
+    )
+      throw new Error("both Trials start");
+    expect(later.snapshotDigest).not.toBe(earlier.snapshotDigest);
+    // The section sits after the Run parameters and names both versions; the
+    // file itself travels to the sandbox, not into the prompt.
+    expect(prompts[1]).toContain(
+      "## Run parameters\n\nThe Harness sets and enforces these values for this Trial.\n",
+    );
+    expect(prompts[1]).toContain(
+      "## Prior research\n\nAn earlier Trial on version 3.3.1 of this same plugin",
+    );
+    expect(prompts[1]).toContain("This Trial reads version 3.4.0.");
+    expect(prompts[1]).toContain(
+      "- /workspace/research/prior/recon-map.md: the map of the plugin that wbh-recon wrote (16 bytes).",
+    );
+    expect(prompts[1]).not.toContain("# Map of call 1");
+    expect(prompts[1]!.indexOf("## Prior research")).toBeGreaterThan(
+      prompts[1]!.indexOf("## Run parameters"),
+    );
+    expect(prompts[1]!.indexOf("## Prior research")).toBeLessThan(
+      prompts[1]!.indexOf("## Trust boundary"),
+    );
+    expect(transportRuns[1]?.priorResearch).toEqual([
+      {
+        path: "prior/recon-map.md",
+        contentBase64: Buffer.from("# Map of call 1\n").toString("base64"),
+      },
+    ]);
+    expect(later.configuration.priorResearch).toMatchObject({
+      sourceRunId: earlier.runId,
+      sourceSnapshotDigest: earlier.snapshotDigest,
+      sourceVersion: "3.3.1",
+      files: [{ name: "recon-map.md", bytes: 16 }],
+    });
+    expect(later.configuration.inputDigest).toBe(
+      `sha256:${createHash("sha256").update(prompts[1]!).digest("hex")}`,
+    );
   });
 
   it("keeps old objective bytes readable but rejects them for new campaigns", async () => {
@@ -2675,6 +2804,7 @@ describe("harness CLI vertical slice", () => {
       mode: "deep",
       maxChildren: 4,
       minimumActiveMinutes: 60,
+      priorResearch: "none",
     });
     expect(
       wordpressCampaignConfigSchema.safeParse({

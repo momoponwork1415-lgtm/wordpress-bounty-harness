@@ -194,6 +194,13 @@ const commonCampaignFields = {
           targets: z.array(priorLeadsTargetSchema).min(1).max(50),
         })
         .optional(),
+      /**
+       * ADR 0048: `same-target` passes the map and setup record of the latest
+       * earlier Trial on another Snapshot of the same target under the
+       * Harness's `## Prior research` section; `none` (the default) passes
+       * nothing.
+       */
+      priorResearch: z.enum(["none", "same-target"]).default("none"),
     })
     .prefault({}),
   selectionPolicyPath: z.string().min(1).optional(),
