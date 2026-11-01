@@ -98,6 +98,11 @@ import {
 } from "./skip-diagnostic.js";
 import { unboundBatch } from "./continuous.js";
 import {
+  PriorLeadsRefusal,
+  resolveWordPressPriorLeads,
+  type ResolvedPriorLeads,
+} from "./wordpress-prior-leads.js";
+import {
   DISCOVERY_RUN_MEMORY_MIB,
   openWordPressCampaignSession,
   readWordPressCampaignConfig,
@@ -497,6 +502,8 @@ type WordPressDiscoveryContext = {
   readonly state: CliState;
   readonly objective: WordPressDiscoveryAsset;
   readonly trustBoundary: WordPressDiscoveryAsset;
+  /** ADR 0044: the named second Trial's Snapshots, by digest; absent for first Trials. */
+  readonly priorLeads?: ReadonlyMap<string, ResolvedPriorLeads>;
 };
 
 /**
@@ -581,6 +588,8 @@ function wordPressDiscoveryPromptText(options: {
   readonly resumedLab?: WordPressLabUsed;
   readonly source: WordPressDiscoverySource;
   readonly runParameters: RunParameters;
+  /** ADR 0044: the generated `## Prior leads` section of a named second Trial. */
+  readonly priorLeadsSection?: string;
 }): string {
   const { objective, trustBoundary, config, lab, source } = options;
   const objectiveOnly = wordPressDiscoveryContractPlan(
@@ -590,6 +599,9 @@ function wordPressDiscoveryPromptText(options: {
     objective.text.trim(),
     ...(objectiveOnly ? [wordPressOutputContractFor(objective.id).text] : []),
     runParametersSection(options.runParameters),
+    ...(options.priorLeadsSection === undefined
+      ? []
+      : [options.priorLeadsSection]),
     "## Trust boundary",
     trustBoundary.text.trim(),
     `## Programme Boundary (${config.programmeBoundary.version})`,
@@ -766,6 +778,12 @@ async function planWordPressDiscovery(
   const maxRuns = repeat;
   const stopRules = { maxRuns, noFindingRuns: 1 };
   const runParameters = wordPressRunParameters(config, runtime.runtimeProfile);
+  // ADR 0044: a named second Trial receives the section its configuration resolved.
+  const prior = context.priorLeads?.get(snapshot.digest);
+  if ((config.discovery.priorLeads === undefined) !== (prior === undefined))
+    throw new Error(
+      "The Snapshot is not one of the campaign's prior-leads targets",
+    );
   // ADR 0043: the campaign's skills, pinned by digest, staged into the CLI's home.
   const skills = await Promise.all(
     (config.discovery.skills ?? []).map(loadWordPressDiscoverySkill),
@@ -778,6 +796,7 @@ async function planWordPressDiscovery(
       lab,
       source,
       runParameters,
+      ...(prior === undefined ? {} : { priorLeadsSection: prior.section }),
     });
   const now = state.clock().getTime();
   return {
@@ -844,6 +863,7 @@ async function planWordPressDiscovery(
           ...(skills.length === 0
             ? {}
             : { skills: skills.map(({ id, digest }) => ({ id, digest })) }),
+          ...(prior === undefined ? {} : { priorLeads: prior.configuration }),
         },
         run: {
           runId: trialId,
@@ -1127,6 +1147,44 @@ async function resumeWordPressRun(
       return budgetDiffers("maxObservations", maxObservations);
     labBudget = { maxResets: recordedLab.maxResets, maxObservations };
   }
+  // ADR 0044: a segment of a second Trial receives the same `## Prior leads`
+  // section, rebuilt from the campaign configuration and checked by digest.
+  let priorLeadsSection: string | undefined;
+  const recordedPriorLeads = started.configuration.priorLeads;
+  if (
+    recordedPriorLeads !== undefined ||
+    config.discovery.priorLeads !== undefined
+  ) {
+    let resolved: ResolvedPriorLeads | undefined;
+    try {
+      [resolved] = await resolveWordPressPriorLeads(
+        state,
+        config.discovery.priorLeads?.targets ?? [],
+        input.campaignId,
+        started.snapshotDigest,
+      );
+    } catch (error) {
+      if (!(error instanceof PriorLeadsRefusal)) throw error;
+      return {
+        status: "refused",
+        reason: "prior-leads-differ",
+        detail: error.message,
+      };
+    }
+    if (
+      resolved?.configuration.sectionDigest !==
+      recordedPriorLeads?.sectionDigest
+    )
+      return {
+        status: "refused",
+        reason: "prior-leads-differ",
+        detail:
+          recordedPriorLeads === undefined
+            ? "the Trial started without a Prior leads section"
+            : `the Trial started with section ${recordedPriorLeads.sectionDigest}`,
+      };
+    priorLeadsSection = resolved?.section;
+  }
   const source = await boundaries.sourceFor(snapshot);
   // A segment enforces the values its Trial recorded, not the campaign's
   // current ones, so the copied configuration stays true (#548). Trials from
@@ -1153,6 +1211,7 @@ async function resumeWordPressRun(
       ...(resumedLab === undefined ? {} : { resumedLab }),
       source,
       runParameters,
+      ...(priorLeadsSection === undefined ? {} : { priorLeadsSection }),
     });
   const prompt = promptWith(undefined);
   const context = {
@@ -1432,17 +1491,32 @@ async function runWordPressCampaign(
   session: WordPressCampaignSession,
 ): ReturnType<CliProfile["runCampaign"]> {
   const { config, boundaries } = session;
-  const policy = await session.policy();
-  const reservedSelections =
-    "candidateSource" in policy
-      ? await bindCampaignSelectionBatch(
+  // ADR 0044: a named second Trial runs on the Snapshots its configuration
+  // names, resolved and checked before any Lab; selection does not run.
+  const priorLeads =
+    config.discovery.priorLeads === undefined
+      ? undefined
+      : await resolveWordPressPriorLeads(
           state,
-          policy,
+          config.discovery.priorLeads.targets,
           input.campaignId,
-          input.target,
-          input.selectionBatchId,
-        )
-      : undefined;
+        );
+  const policy = priorLeads === undefined ? await session.policy() : undefined;
+  const reservedSelections =
+    priorLeads !== undefined
+      ? priorLeads.map(({ target, snapshotDigest }) => ({
+          target,
+          snapshotDigest,
+        }))
+      : "candidateSource" in policy!
+        ? await bindCampaignSelectionBatch(
+            state,
+            policy,
+            input.campaignId,
+            input.target,
+            input.selectionBatchId,
+          )
+        : undefined;
   const reservedDigests = new Map(
     reservedSelections?.map(({ target, snapshotDigest }) => [
       targetSelectionId(target),
@@ -1497,11 +1571,11 @@ async function runWordPressCampaign(
     pipeline: {
       select: async () =>
         (reservedSelections === undefined
-          ? await boundaries.selection.rank(policy)
+          ? await boundaries.selection.rank(policy!)
           : reservedSelections.map(({ target }) => target)
         ).filter(
           (target) =>
-            reservedSelections !== undefined ||
+            (reservedSelections !== undefined && priorLeads === undefined) ||
             input.target === null ||
             target.slug === input.target,
         ),
@@ -1560,6 +1634,16 @@ async function runWordPressCampaign(
           state,
           objective,
           trustBoundary,
+          ...(priorLeads === undefined
+            ? {}
+            : {
+                priorLeads: new Map(
+                  priorLeads.map((resolved) => [
+                    resolved.snapshotDigest,
+                    resolved,
+                  ]),
+                ),
+              }),
         }),
       get verification() {
         return session.verification;

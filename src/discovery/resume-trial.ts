@@ -169,6 +169,7 @@ function configurationOf(
       "model",
       "effort",
       "skills",
+      "priorLeads",
     ]),
   };
 }
