@@ -57,3 +57,12 @@ amends: 0029（単一協調 Trial の主経路）と 0039（探索の mode）に
 - 2 本目は `wbh-tools-v1`。区画分配型（ADR 0042）が持っていた列挙 script 2 本（`enumerate-hooks-v1.sh`、`enumerate-sinks-v2.sh`）と本体機能の固定参照（`core-fixed-list-v1.md`）を `prompts/skills/wbh-tools-v1/` に移し、agent が自分で走らせて地図（`wbh-recon-v1`）と突き合わせる手順を `SKILL.md` に書く。全文と対照表は [docs/reviews/2026-10-30-exploration-skills-wbh-tools-v1.md](../reviews/2026-10-30-exploration-skills-wbh-tools-v1.md)。
 - 「変えないこと」の 2 項目目（区画分配型を比較の腕として残す）は、所有者決定 2026-10-30 で取り消した。区画分配型は #685 で削除し、再利用する部分はスキルとして運ぶ。ADR 0042 の追記を参照。
 - 消し方に足す: `prompts/skills/wbh-tools-v1/` と registry の行、`skill-definition.ts` の `files` と `admittedSkillFiles`、transport schema の `files`、test の支援 file の項を消す。
+
+## 2026-11-01 追記 2: `wbh-setup-v1`（Lab で plugin の通常利用を作る、#749）
+
+- 所有者の指示（2026-11-01「プラグインを単純に有効化するだけではなく、readme.txt というより wp.org などから、プラグインのフォーム設定の通常利用とか、その辺調べて、一通り作る」）で、3 本目は `wbh-setup-v1`。Lab 付きの Trial（`## Lab` 節がある Trial）で、agent が readme.txt と地図（`wbh-recon-v1`）から「site の持ち主が plugin を使うために作る object」を挙げ、plugin 自身の初回設定を既定値で終え、object を 1 つずつ作って公開ページに置き、`/workspace/research/lab-setup.md` に記録する手順を書く。reset の後は記録どおりに作り直す。既定から変えた設定は `configurationPrecondition` に写す。全文と日本語訳と出典対照表は [docs/reviews/2026-11-01-exploration-skills-wbh-setup-v1.md](../reviews/2026-11-01-exploration-skills-wbh-setup-v1.md)。
+- 事実（提案 [2026-11-01-lab-normal-use-setup-proposal.md](../reviews/2026-11-01-lab-normal-use-setup-proposal.md)）: Lab の初期化は plugin の有効化で止まり、Lab 付き探索 30 run のうち `labObserved` が残った 6 run の site への要求は合計 41、observe は 0。検証の止まる理由は `precondition` が 365 件中 135 件で最大。readme.txt は固定ソースの中にあり、新しい入力は要らない（不変条件 1）。
+- Harness は変えない。Lab の初期化（core install、plugin の有効化、基準、account、初期記事）も変えない。plugin の通常利用を作るのは agent の仕事で、Harness にシナリオや plugin 別アダプタを戻さない（#353、AGENTS.md）。sandbox に internet は無く、wp.org の page は取りに行かない。
+- Lab の無い Trial（`discovery.lab: none`）でも名指しはできるが、`## Lab` 節が無いので使われない。本番の v19-wide（Lab なし）の campaign 設定には足さず、Lab 付きの campaign（ADR 0044 の第 2 Trial）で名指しする。
+- 測り方は measurement.md 5b 節に足した。Lab 付き Trial の site への要求数 / Trial、observe の使用回数、`labObservations` が空でない Finding / Lead の数、research artifact の `lab-setup.md` の有無と Objects 行数と Verified の 200 の数。
+- 消し方に足す: `prompts/skills/wbh-setup-v1/` と registry の行、test の launchable の 1 行、この追記、ADR 0044 の追記、measurement 5b の項、reviews/README の行。
