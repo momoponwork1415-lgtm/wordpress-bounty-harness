@@ -7,7 +7,7 @@
 1. [docs/SPEC.md](docs/SPEC.md) — 目的、不変条件、モジュール境界、受け渡し契約、単一協調 Trial の主経路と最初の縦断スライス。
 2. [docs/adr/](docs/adr/) — 番号順に読む。設計の理由と、採らなかった選択肢。
 3. 全体を掴みたいときだけ読む。これらは規則を増やさない。
-   - 流れ: [docs/DESIGN-WALKTHROUGH.md](docs/DESIGN-WALKTHROUGH.md)
+   - 流れ: [docs/SYSTEM.md](docs/SYSTEM.md) — 6 つの段と、段ごとの Harness / AI / 人間の持ち分
    - 開発の流れ: [docs/FACTORY.md](docs/FACTORY.md)
 4. [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) 第 2 節 — 今の Step、完了条件、凍結しているもの。[docs/LESSONS.md](docs/LESSONS.md) — 過去 4 世代の教訓。新しい設計案は、この 2 つに反していないかを先に見る。止めてある案は [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) 末尾の一覧にある。過去 4 世代の実験記録と取り込んだ原本は [docs/knowledge/](docs/knowledge/) にある。新しい問いを立てる前に、同じ問いが無いかを見る。
 
