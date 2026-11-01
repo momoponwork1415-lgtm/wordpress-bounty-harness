@@ -1882,6 +1882,7 @@ export function createWordPressCliProfile(
       const decision = await openWordPressSelection({
         candidates: boundaries.selection,
         ledger: state.ledger,
+        clock: state.clock,
       }).decide(policy, {
         ...(input.reservedBatches === undefined
           ? {}

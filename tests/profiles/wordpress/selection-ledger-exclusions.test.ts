@@ -244,21 +244,26 @@ describe("WordPress ledger exclusions", () => {
     ]);
   });
 
+  const skipped = (
+    slug: string,
+    version: string,
+    campaignId: string,
+    reason = "deferred",
+    skippedAt = occurredAt,
+  ) =>
+    ledgerEventV1Schema.parse({
+      ...base(campaignId, digest("f"), `skip-${campaignId}-${slug}`),
+      type: "target-skipped",
+      selectionId: `wporg:${slug}@${version}`,
+      stage: "freeze",
+      reason,
+      occurredAt: skippedAt,
+    });
+
   it("excludes a version whose source freeze was deferred until the version changes", () => {
-    const skipped = (
-      slug: string,
-      version: string,
-      campaignId: string,
-      reason = "deferred",
-    ) =>
-      ledgerEventV1Schema.parse({
-        ...base(campaignId, digest("f"), `skip-${campaignId}-${slug}`),
-        type: "target-skipped",
-        selectionId: `wporg:${slug}@${version}`,
-        stage: "freeze",
-        reason,
-      });
     const result = inspectWordPressLedgerExclusions({
+      // One day after the skips: every deferral is inside its retry window.
+      now: Date.parse("2026-10-12T12:00:00Z"),
       ledger: reader([
         // The same selection attempt froze another target, so the deferral is the target's own.
         skipped("bad-header", "1.0.0", "selection-1"),
@@ -292,6 +297,50 @@ describe("WordPress ledger exclusions", () => {
       ["bad-archive", "1.0.0", ["freeze-deferred"]],
       ["bad-archive", "1.0.1", []],
       ["recovered", "1.0.0", ["previously-selected"]],
+    ]);
+  });
+
+  it("retries a deferred freeze after the window passes, but never a rejected archive (#771)", () => {
+    const now = Date.parse("2026-11-01T12:00:00Z");
+    const daysAgo = (days: number) =>
+      new Date(now - days * 24 * 60 * 60 * 1000).toISOString();
+    const events = [
+      selected("fine", "1.0.0", "selection-1", digest("a")),
+      selected("fine", "1.0.1", "selection-2", digest("b")),
+      selected("fine", "1.0.2", "selection-3", digest("c")),
+      // Deferred eight days ago: the Harness may have been fixed since, so try again.
+      skipped("stale-deferral", "1.0.0", "selection-1", "deferred", daysAgo(8)),
+      // Deferred six days ago: still inside the window.
+      skipped("fresh-deferral", "1.0.0", "selection-2", "deferred", daysAgo(6)),
+      // Deferred twice, the second time inside the window: the latest skip decides.
+      skipped("retried", "1.0.0", "selection-1", "deferred", daysAgo(20)),
+      skipped("retried", "1.0.0", "selection-3", "deferred", daysAgo(2)),
+      // A rejected archive stays out however old the skip is.
+      skipped(
+        "bad-archive",
+        "1.0.0",
+        "selection-1",
+        "invalid-archive",
+        daysAgo(40),
+      ),
+    ];
+    const result = inspectWordPressLedgerExclusions({
+      now,
+      ledger: reader(events),
+      candidates: [
+        { slug: "stale-deferral", version: "1.0.0" },
+        { slug: "fresh-deferral", version: "1.0.0" },
+        { slug: "retried", version: "1.0.0" },
+        { slug: "bad-archive", version: "1.0.0" },
+      ],
+    });
+    expect(
+      result.map(({ slug, version, reasons }) => [slug, version, reasons]),
+    ).toEqual([
+      ["stale-deferral", "1.0.0", []],
+      ["fresh-deferral", "1.0.0", ["freeze-deferred"]],
+      ["retried", "1.0.0", ["freeze-deferred"]],
+      ["bad-archive", "1.0.0", ["freeze-deferred"]],
     ]);
   });
 
