@@ -3590,7 +3590,7 @@ describe("harness CLI vertical slice", () => {
             event.type === "verification-finished" &&
             event.findingId === findingId,
         );
-    expect(finished()).toMatchObject([{ promptVersion: "wbh-verify/v11" }]);
+    expect(finished()).toMatchObject([{ promptVersion: "wbh-verify/v12" }]);
 
     // The operator named the Finding again: the retry rules of the automatic queue do not apply.
     const second = await run(...handoff);
@@ -3598,7 +3598,7 @@ describe("harness CLI vertical slice", () => {
     expect(second.stdout).toContain(`verified finding ${findingId}`);
     expect(finished()).toHaveLength(2);
     expect(finished()[1]).toMatchObject({
-      promptVersion: "wbh-verify/v11",
+      promptVersion: "wbh-verify/v12",
       attempt: 2,
     });
   });
@@ -3825,7 +3825,7 @@ describe("harness CLI vertical slice", () => {
             ? [event.promptVersion]
             : [],
         ),
-    ).toEqual(queued.map(() => "wbh-verify/v11"));
+    ).toEqual(queued.map(() => "wbh-verify/v12"));
   });
 
   it.each([
@@ -6015,7 +6015,7 @@ describe("harness CLI vertical slice", () => {
       throw new Error("The versioned verification was not recorded");
     expect(verified.snapshotDigest).toBe(derived.snapshotDigest);
     expect(verified.basis?.kind).toBe("latest-version");
-    expect(verified.promptVersion).toBe("wbh-verify/v11");
+    expect(verified.promptVersion).toBe("wbh-verify/v12");
   });
 
   it.each([

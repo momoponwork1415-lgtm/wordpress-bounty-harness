@@ -9,9 +9,11 @@ description: scope 内 Finding 1 件を、Harness が `verify next --handoff` �
 
 新しい `<dir>` を 1 attempt 専用に使う。`lab.json` の `reviewExport` が指す JSON から `finding` の主張・`impact`・`attackerPosition`・`configurationPrecondition` を読む。`lab.json` の `host.url` は Lab への接続先で、HTTP リクエストには `host.hostHeader` を Host header として使う。`lab.json` の `administrator` は前提作り専用である。攻撃者の資格は `lab.json` に含まれず、基線を取り直した後に `lab.json` の `files.attack` が指す `attack.json` で渡される。資格、ペイロード、HTTP 本文を Git や PR・Issue に書かない。
 
+`<dir>/prior-lab-setup.md` があれば、同じ plugin の探索 Trial が探索スキル `wbh-setup` で書いた通常利用の記録（Private Evidence の `lab-setup.md`）を AI 操作役が写したものである。Harness はこの file を読まない。記録は別の Lab と別の版のものなので、書いてある object や設定がこの Lab にあるとは限らない。前提作りの出発点として読み、作ったものはこの attempt の `steps.md` に自分で書く。
+
 ## 手順
 
-- Finding の前提を通常機能の範囲で作る。管理者資格を使えるのはここまで。前提が作れないときは具体的な理由を `<dir>/precondition` に書いてから、`<dir>/abort` に `precondition-unavailable` とだけ書いて終える。
+- Finding の前提を通常機能の範囲で作る。管理者資格を使えるのはここまで。plugin を有効化しただけの Lab には、site の持ち主が作る object（フォーム、ギャラリー、表、予約枠、商品など）と、それを置いた公開ページが無い。Finding の経路が読む object を plugin の管理画面か REST で管理者として作り、shortcode か block を置いた公開ページを object ごとに 1 枚作る。通常の流れで訪問者や低権限者が作るデータが要るなら、その役で 1 件だけ作る。既定から変えた設定は全部記録し、「典型的な site が選ばない」値には変えない。作ったものと変えたものは `steps.md` の前提の部に、次節の最後に書く形で記録する。前提が作れないときは具体的な理由を `<dir>/precondition` に書いてから、`<dir>/abort` に `precondition-unavailable` とだけ書いて終える。
 - 前提作りでは、攻撃者 account の role に触れない。
 - 管理者の操作がすべて終わったら `<dir>/setup-done` を置く。Harness はここで設定管理者のセッションと application password を破棄し、password を変える。前提作りで得た cookie は以後通らないので使わない。Harness が HTTP 捕捉と Lab 状態の基線を取り直して `<dir>/observation-ready` を置くまで、攻撃者の操作を始めない。合図の後に `attack.json` が現れるまで待ち、`runId`・`findingId`・`snapshotDigest` が `lab.json` と一致することを確認する。`attack.json` の `accounts` は Finding の `attackerPosition`（`unauthenticated` / `subscriber` / `customer`）に限る。
 - `setup-done` 以後に Lab へ送る要求は、すべて Harness が捕捉する。形を試す要求は前提作りの段で送る。捕捉は `setup-done` の後に始まるので、その前の要求は記録に混ざらない。
@@ -70,7 +72,7 @@ description: scope 内 Finding 1 件を、Harness が `verify next --handoff` �
 
 上に無い impact は、Finding が主張する効果を攻撃者位置の HTTP で起こし、観測したことを `steps.md` に書く。
 
-**`steps.md` の書き方。** `steps.md` は Private Evidence に残り、所有者が手で再現するときの手順になる。実行した順に、攻撃者位置、各要求の method と path、`victim` に書いた画面と操作、観測した応答や画面を書く。
+**`steps.md` の書き方。** `steps.md` は Private Evidence に残り、所有者が手で再現するときの手順になる。先頭に前提の部を置き、探索スキル `wbh-setup` の `lab-setup.md` と同じ 6 つの節をこの順で書く。Features（Finding の経路が使う機能と、それを使うために作った object）、Settings changed（既定から変えた設定の画面と値。無ければ none）、Objects（object、作り方、管理画面の path、置いた公開ページとその path の表）、Content（訪問者か低権限者として作ったデータと、作った account）、Not built（作らなかった object とその理由）、Verified（`setup-done` の前に管理者以外で開いた公開ページと HTTP status）。address はすべて Lab site 上の path にする。前提の部の後に攻撃の部を置き、実行した順に、攻撃者位置、各要求の method と path、`victim` に書いた画面と操作、観測した応答や画面を書く。
 
 ## しないこと
 
