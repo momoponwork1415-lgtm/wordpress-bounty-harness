@@ -66,7 +66,7 @@ it("starts the checked-in wide v21 campaign with one concurrent target on the La
     }),
   ).toMatchObject({
     promptId: "wp2shell-bounty-v11",
-    discovery: { mode: "deep", minimumActiveMinutes: 60 },
+    discovery: { mode: "deep", minimumActiveMinutes: 0 },
   });
   expect(
     wordpressCampaignConfigSchema.parse({

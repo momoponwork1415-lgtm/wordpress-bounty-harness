@@ -342,3 +342,12 @@ v20-wide（追記 18）は v19-wide の文を消さずに保ったので、1 段
 測った数字: 無し。所有者の決定で、比較の Trial を置かない。v21-wide の本番 Trial を ADR 0045 の分母で数え始める。agent に渡る文章なので `owner-approved` が要る。
 
 消し方: v21-wide の行と file を消し、v20-wide の行を `current`（`mode: "wide"`）に戻し、2 つの campaign 設定の `promptId` を戻す。走った後なら v21-wide の行を `archived` にして本文を照合用に残す。
+
+## 2026-11-01 追記 20: `deep` の既定の最低時間を 0 にする（#686）
+
+- 所有者の問い（2026-10-30、#686）「最低時間はいらないかも。終了判断は AI に判定できる形にする？」と、所有者の言葉（2026-11-01 夜）「deep の最低時間（#686）ができないと探索が浅いまま」。
+- 数字（#686、2026-10-30 時点の本番台帳）: 床 60 分の v8 deep は 272 run で 0.10 Finding / run、床で終わった 59〜61 分の run は 0.13。床の無い v14 wide は 186 run で 0.51、中央値 9 分。床は成果を作っていない。
+- 決定: `WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES` を `deep` も 0 にする。`discovery.minimumActiveMinutes`（0〜119）で床を置く道は残し、1 以上なら従来どおり同一セッションで続ける。終了の判断は `wbh-recon-v3` の手順 9（ADR 0043 追記 4）が持ち、Harness は wall と子の数の強制と、wall・読んだ file 数の記録だけを行う。
+- 床の runner（`minimum-active-runner.ts`、再開段落）は消さない。床 1 以上の設定と、台帳にある床付きの過去 Trial の再開のために残す。消すのは、床を使う設定が無いことを数字で見てから。
+- `deep` と `wide` の差は目的文だけになった。mode を 1 つに畳むかは別の問い。
+- 消し方: 定数を `deep: 60` に戻し、SPEC 第 6 節と AGENTS.md の該当文を戻す。
