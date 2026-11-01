@@ -3,9 +3,9 @@ name: wbh-dedupe
 description: 検証が終わった Finding 1 件について、ローカル Wordfence 履歴 mirror と Patchstack / WPScan の公開情報を slug と正確な版で照合し、possible-match / no-match / unavailable の 3 値と根拠を出す。記録は AI 操作役が review decide --duplicate --by ai で打つ。Web 検索だけで、gVisor も対象の実行も要らない。
 ---
 
-# wbh-dedupe v4
+# wbh-dedupe v5
 
-段 4（ADR 0038）の skill である。対象は、段 3 の検証が終わった review queue の Finding 1 件である。`harness` は repo root で `pnpm build` した後の `node dist/cli/main.js` を指す。台帳の場所は `--state <dir>` か `WBH_STATE_DIRECTORY` で渡す。旧版は `versions/v1.md`、`versions/v2.md`、`versions/v3.md` に残してある。
+段 4（ADR 0038）の skill である。対象は review queue の Finding 1 件で、段 3 の検証が終わった後に必ず 1 回当てる。加えて、段 3 の Lab を立てる前にも同じ照合を 1 回当ててよい（ADR 0038 追記 18）。Lab 前の照合で possible-match が出て、公開記録が同じ plugin の同じ版の同じ経路を指すなら、その結果を利用者に示し、利用者が進めると言わない限り Lab を立てない。Lab 前の照合は Lab 後の照合の代わりにならない。Lab の間に記録が出ることがある。`harness` は repo root で `pnpm build` した後の `node dist/cli/main.js` を指す。台帳の場所は `--state <dir>` か `WBH_STATE_DIRECTORY` で渡す。旧版は `versions/v1.md`、`versions/v2.md`、`versions/v3.md`、`versions/v4.md` に残してある。
 
 ## 読む入力
 
