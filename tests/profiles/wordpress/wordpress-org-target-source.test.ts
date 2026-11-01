@@ -850,6 +850,44 @@ Version: 2.4.1
     },
   );
 
+  it("selects the single root header when the main file is not named after the slug and a secondary header sits in a subdirectory (#734)", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "wporg-target-root-"));
+    const pluginArchive = archive({
+      "root-plugin/index.php":
+        "<?php\n/* Plugin Name: Root Plugin\nVersion: 1.0.0\n*/\n",
+      "root-plugin/addons/extra.php":
+        "<?php\n/* Plugin Name: Root Plugin Addon\nVersion: 1.0.0\n*/\n",
+    });
+    try {
+      const source = openWordPressOrgTargetSource({
+        storageDirectory: directory,
+        adapter: fixtureAdapter("root-plugin", "1.0.0", pluginArchive),
+      });
+      const observed = await source.observe({
+        kind: "wordpress-org-target-observe",
+        schemaVersion: 1,
+        slug: "root-plugin",
+      });
+      if (observed.status !== "observed") {
+        throw new Error("Expected an observation");
+      }
+      await expect(
+        source.acquire({
+          kind: "wordpress-org-target-acquire",
+          schemaVersion: 1,
+          observationRef: observed.observationRef,
+          requestedVersion: "1.0.0",
+          policy: intakePolicy,
+        }),
+      ).resolves.toMatchObject({
+        status: "ready",
+        intake: { status: "ready", packet: { mainPluginFile: "index.php" } },
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("applies quota before expansion and defers an ambiguous Main Plugin File through Target Intake", async () => {
     const directory = await mkdtemp(join(tmpdir(), "wporg-target-policy-"));
     const pluginArchive = archive({
