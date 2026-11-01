@@ -60,9 +60,12 @@ describe("WordPress discovery skills", () => {
     expect(WORDPRESS_LAUNCHABLE_DISCOVERY_SKILL_IDS).toEqual([
       "wbh-tools-v1",
       "wbh-setup-v1",
-      "wbh-recon-v2",
+      "wbh-recon-v3",
     ]);
     expect(wordPressDiscoverySkillRecord("wbh-recon-v1")?.status).toBe(
+      "archived",
+    );
+    expect(wordPressDiscoverySkillRecord("wbh-recon-v2")?.status).toBe(
       "archived",
     );
     const tools = wordPressDiscoverySkillRecord("wbh-tools-v1") as
@@ -91,9 +94,16 @@ describe("WordPress discovery skills", () => {
       expect(frontMatter.description).toMatch(/^Use /);
       // The map lives where every agent of the Trial can read it.
       expect(body).toContain("/workspace/research/recon-map.md");
-      if (row.id === "wbh-recon-v2") {
+      if (row.id === "wbh-recon-v2" || row.id === "wbh-recon-v3") {
         // #752: children start from the files, not from the parent's history.
         expect(body).toContain("without the parent's conversation");
+      }
+      if (row.id === "wbh-recon-v3") {
+        // #714 / #686: the Trial closes on the research files, not on row counts.
+        expect(body).toContain("## Step 9: closing");
+        expect(body).toContain(
+          "read a second time by an agent other than the one that wrote it",
+        );
       }
       if (row.id === "wbh-setup-v1") {
         // #749: the setup record is the hand-over surface, and the skill

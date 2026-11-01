@@ -55,6 +55,7 @@ AI に「調べて報告」を頼んだときの成果物を、日付付きで�
 - [2026-10-30-enumeration-recall-cve-bench.md](2026-10-30-enumeration-recall-cve-bench.md): 既存 CVE 19 件で列挙 script の再現率を測った。[ADR 0043](../adr/0043-exploration-skills-in-the-sandbox.md) の出典。
 - [2026-10-30-exploration-skills-wbh-recon-v1.md](2026-10-30-exploration-skills-wbh-recon-v1.md): 探索スキル `wbh-recon-v1` の全文、日本語訳、出典対照表（#682）。図は [2026-10-30-exploration-skills-architecture.svg](2026-10-30-exploration-skills-architecture.svg)。
 - [2026-11-01-exploration-skills-wbh-recon-v2.md](2026-11-01-exploration-skills-wbh-recon-v2.md): 探索スキル `wbh-recon-v2`（手順 8 に「子は親の履歴を引き継がずに始める」の 1 文）の全文、日本語訳、差分の出典（#752）。
+- [2026-11-01-exploration-skills-wbh-recon-v3.md](2026-11-01-exploration-skills-wbh-recon-v3.md): 探索スキル `wbh-recon-v3`（手順 9「closing」: 終了の判断を研究 file で行う、#714 / #686）の全文、日本語訳、出典対照表。
 - [2026-11-01-exploration-skills-wbh-setup-v1.md](2026-11-01-exploration-skills-wbh-setup-v1.md): 探索スキル `wbh-setup-v1`（Lab で plugin の通常利用を作る）の全文、日本語訳、出典対照表（#749）。提案は [2026-11-01-lab-normal-use-setup-proposal.md](2026-11-01-lab-normal-use-setup-proposal.md)。
 - [2026-10-30-exploration-skills-wbh-tools-v1.md](2026-10-30-exploration-skills-wbh-tools-v1.md): 探索スキル `wbh-tools-v1`（列挙 script 2 本と本体機能の固定参照を支援 file として運ぶ）の全文、日本語訳、出典対照表（#687）。
 - [2026-10-28-adopted-design-for-approval.md](2026-10-28-adopted-design-for-approval.md): 区画分配型の探索の承認用の要約。部分ごとの採否と出典、所有者の決定、問答で決めた 15 点（§6）。図は [architecture](2026-10-28-architecture.svg)。ADR 0042 追記 1 の出典。

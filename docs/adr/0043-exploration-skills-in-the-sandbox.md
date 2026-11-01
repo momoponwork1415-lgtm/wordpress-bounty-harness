@@ -75,3 +75,13 @@ amends: 0029（単一協調 Trial の主経路）と 0039（探索の mode）に
 - 測り方（measurement.md 5b）: rollout の子の最初の `token_count` の入力、Trial の入力 token、読んだ file / Trial、Finding / Lead / Trial。
 - 全文と日本語訳と出典対照表: [docs/reviews/2026-11-01-exploration-skills-wbh-recon-v2.md](../reviews/2026-11-01-exploration-skills-wbh-recon-v2.md)。
 - 消し方: `prompts/skills/wbh-recon-v2/` と registry の行を消し、v1 を `current` に戻す。
+
+## 2026-11-01 追記 4: `wbh-recon-v3`（終了の判断を手順にする、#714 / #686）
+
+- 事実（本番 v21-wide の 10 Trial、2026-11-01）: Root の wall は 9〜54 分（中央値 16 分）で、どの Trial の登録簿も hooks.tsv の全行（34〜221 行）を全 sink 種で「読了 / 残 0」と記録して閉じている。v21 の停止文（行が残る間は閉じない）は守られていて、行を分類した時点で満たせる。子は 1 体 3〜4 分で戻る。読んだ固有 PHP file は plugin の 37〜84%。Finding 6 件に対し Lead 40 件が残り、隙間を詰める段が無い。
+- 所有者の言葉（2026-11-01 夜）: 「Lead の第 2 Trial（#715）と deep の最低時間（#686）の 2 つができないと探索が浅いまま」。床は本番の wide に元々無いので、終了の判断を手順にする側を先に入れる。
+- 決定: `wbh-recon` に手順 9「closing」を足して v3 にする。終われる条件は、(1) 地図の全 entry と一覧の全行が「check か効果まで handler を読んだ（file と行）」か「理由付きの未読」のどちらかになっている、(2) 隙間を残して sink に届いた経路のそれぞれを、書いた agent とは別の agent が file と行と隙間の文から読み直し、「決着（file と行）」か「供給ソースでは決着できない（足りないもの）」を経路の下に書いている、(3) Unread と Open questions の各項が読まれたか、まだ成り立つ理由を持っている、の 3 つ。満たしたら登録簿の末尾に Closing 節（件数と経過時間）を書いてから最終報告する。wall が先に来たら同じ節をその時点の件数で書く。description にも「最終報告の前にもう一度使う」の 1 文を足す。他は v2 と byte 単位で同じ。
+- Harness は変えない。wall と読んだ file 数を記録するだけで、判定は持たない（AGENTS.md「Harness と AI の責務」）。`discovery.minimumActiveMinutes` の既定（deep の 60 分）は別 PR で 0 にする。
+- 測り方: 本番で v3 を名指した 20 Trial を取り、v21 + v2 の 10 Trial（Root 中央値 16 分、Finding 0.6 / Trial、Lead 4.0 / Trial、固有 PHP file 読了 37〜84%）と並べる。見る数字は Root の wall、固有 file 読了率、Finding / Trial、段 1b を通った Finding、Lead / Trial、Closing 節の「決着した経路 / 隙間のあった経路」。対になっていない比較である。
+- 全文と日本語訳と出典対照表: [docs/reviews/2026-11-01-exploration-skills-wbh-recon-v3.md](../reviews/2026-11-01-exploration-skills-wbh-recon-v3.md)。
+- 消し方: `prompts/skills/wbh-recon-v3/` と registry の行を消し、v2 を `current` に戻す。

@@ -26,7 +26,7 @@ flowchart LR
   end
   subgraph A[AI: 目的文とスキル]
     direction LR
-    A3[Codex Root + 子<br/>目的文 v21-wide<br/>wbh-recon v2 → wbh-tools<br/>Lab があれば wbh-setup<br/>prior/ の地図 2 file を読む]
+    A3[Codex Root + 子<br/>目的文 v21-wide<br/>wbh-recon v3 → wbh-tools<br/>Lab があれば wbh-setup<br/>prior/ の地図 2 file を読む]
     A5[6 段のスキル<br/>1 screen → 1b source-check<br/>→ 2 群 → 4 dedupe（Lab 前）<br/>→ 3 wbh-verify → 4 dedupe<br/>→ 5 先 → 6 報告書]
     A6[提出の支度<br/>英語報告書 + form JSON<br/>転帰をメール本文から記録]
   end
