@@ -1,6 +1,9 @@
 {
   "schemaVersion": 1,
-  "discovery": { "lab": "none", "mode": "wide" },
+  "discovery": {
+    "lab": "none",
+    "mode": "wide"
+  },
   "selectionPolicyPath": "src/profiles/wordpress/policy/selection.json",
   "promptId": "wp2shell-bounty-v14-wide",
   "programmeBoundary": {
@@ -13,7 +16,6 @@
     "maxConcurrentTargets": 1,
     "memoryBudgetMiB": 10752
   },
-  "wordpressVersion": "7.1.3",
   "lab": {
     "siteTitle": "Harness Lab",
     "initialPosts": ["Welcome"],

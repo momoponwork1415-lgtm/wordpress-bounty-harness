@@ -188,6 +188,11 @@ async function harness(
     readonly useSelectionPluginDependencies?: boolean;
     /** While it returns an error, the Lab's source resolution throws it inside provision. */
     readonly labProvisionError?: () => Error | undefined;
+    /** #741: the Lab image's core version and what the version check answers. */
+    readonly core?: {
+      readonly image: string;
+      readonly latest: string | "unavailable";
+    };
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-cli-"));
@@ -667,6 +672,22 @@ async function harness(
         cliVersion: profile.codexCliVersion,
         bundledCatalogDigest: profile.bundledCatalogDigest,
       },
+    ...(options.core === undefined
+      ? {}
+      : {
+          coreRelease: async () =>
+            options.core!.latest === "unavailable"
+              ? { status: "unavailable" as const, reason: "status" as const }
+              : {
+                  status: "observed" as const,
+                  version: options.core!.latest,
+                  observedAt: now,
+                  sourceUrl:
+                    "https://api.wordpress.org/core/version-check/1.7/",
+                  responseDigest: sha("d"),
+                },
+          coreImageVersion: async () => options.core!.image,
+        }),
     attachments,
     executor: {
       async execute(run: DiscoveryTransportRun) {
@@ -970,8 +991,8 @@ async function harness(
       },
       // Sequential by default so the call order is deterministic.
       resources: { maxConcurrentRuns: 1, memoryBudgetMiB: 10_752 },
-      ...options.config,
       wordpressVersion: "6.8",
+      ...options.config,
       lab: {
         siteTitle: "Synthetic",
         initialPosts: ["Welcome"],
@@ -6957,5 +6978,103 @@ describe("harness CLI vertical slice", () => {
     const nothing = await run("lab", "down");
     expect(nothing.code).toBe(0);
     expect(nothing.stdout).toContain("no lab recorded by lab up");
+  });
+});
+
+describe("WordPress core follows the latest stable release (#741)", () => {
+  const unpinned = { wordpressVersion: undefined };
+
+  it("freezes on the image's version when it is the latest stable and records it in the report", async () => {
+    const { run, configPath, ledger, state } = await harness({
+      config: unpinned,
+      core: { image: "6.8", latest: "6.8" },
+    });
+    const result = await run("select", "--config", configPath);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain(
+      "wordpress core 6.8 (image)  latest 6.8  ok",
+    );
+    expect(result.stdout).toContain("selection batch ");
+    const selected = ledger().read({ type: "target-selected" });
+    expect(selected.length).toBeGreaterThan(0);
+    const digest = selected[0]!.event.artifacts.find(
+      (artifact) => artifact.kind === "selection-report",
+    )!.digest;
+    const file = await state().store.readFile(
+      digest,
+      "selection-report.json",
+      1024 * 1024,
+    );
+    if (file.status !== "resolved") throw new Error(file.status);
+    expect(JSON.parse(file.bytes.toString("utf8"))).toMatchObject({
+      core: {
+        status: "ok",
+        source: "image",
+        version: "6.8",
+        latest: { version: "6.8", observedAt: now },
+      },
+    });
+  });
+
+  it.each([
+    ["core-image-outdated", "6.9"],
+    ["core-release-unavailable", "unavailable"],
+  ] as const)(
+    "freezes nothing and answers %s when the image is behind or the check is unanswered",
+    async (status, latest) => {
+      const { run, configPath, ledger } = await harness({
+        config: unpinned,
+        core: { image: "6.8", latest },
+      });
+      const result = await run("select", "--config", configPath);
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain(`wordpress core 6.8 (image)`);
+      expect(result.stdout).toContain(status);
+      expect(result.stdout).toContain("no targets selected");
+      expect(ledger().read({ type: "target-selected" })).toHaveLength(0);
+      expect(ledger().read({ type: "target-skipped" })).toHaveLength(0);
+    },
+  );
+
+  it("keeps freezing on a pinned version and only reports the latest beside it", async () => {
+    const { run, configPath, ledger } = await harness({
+      core: { image: "6.8", latest: "6.9" },
+    });
+    const result = await run("select", "--config", configPath);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain(
+      "wordpress core 6.8 (pinned)  latest 6.9  ok",
+    );
+    expect(ledger().read({ type: "target-selected" }).length).toBeGreaterThan(
+      0,
+    );
+  });
+
+  it("names the core beside the Codex items in runtime check and fails when the image is behind", async () => {
+    const current = await harness({
+      config: unpinned,
+      core: { image: "6.8", latest: "6.8" },
+    });
+    const ok = await current.run(
+      "runtime check",
+      "--config",
+      current.configPath,
+    );
+    expect(ok.code).toBe(0);
+    expect(ok.stdout).toContain("wordpress-core  profile 6.8  image 6.8  ok");
+    const behind = await harness({
+      config: unpinned,
+      core: { image: "6.8", latest: "6.9" },
+    });
+    const failed = await behind.run(
+      "runtime check",
+      "--config",
+      behind.configPath,
+    );
+    expect(failed.code).toBe(1);
+    expect(failed.stdout).toContain(
+      "wordpress-core  profile 6.9  image 6.8  differs",
+    );
+    expect(failed.stdout).toContain("refresh-image.sh");
   });
 });

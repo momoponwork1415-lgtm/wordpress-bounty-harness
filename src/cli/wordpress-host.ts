@@ -36,6 +36,7 @@ import {
   createWordPressOrgFetchAdapter,
   openMaterializedSources,
   openPhpRuntimeSource,
+  openWordPressCoreRelease,
   openWordPressCoreSource,
   openWordPressOrgPluginDependencySource,
   openWordPressOrgSnapshotSource,
@@ -224,8 +225,13 @@ export async function createWordPressHostProfile(options: {
   // Public selection and source freezing need no provider credential or Lab.
   const selectionBoundaries = async (
     state: CliState,
-    wordpressVersion: string,
-  ): Promise<Pick<WordPressCampaignBoundaries, "selection" | "freeze">> => {
+    wordpressVersion: string | undefined,
+  ): Promise<
+    Pick<
+      WordPressCampaignBoundaries,
+      "selection" | "freeze" | "coreRelease" | "coreImageVersion"
+    >
+  > => {
     for (const directory of [
       directories.wordpressOrg,
       directories.sources,
@@ -249,7 +255,9 @@ export async function createWordPressHostProfile(options: {
       dockerExecutablePath: host.dockerExecutablePath,
       image: host.images.wordpress,
       stagingDirectory: directories.wordpressCore,
-      expectedVersion: wordpressVersion,
+      ...(wordpressVersion === undefined
+        ? {}
+        : { expectedVersion: wordpressVersion }),
       runDocker: (args, timeoutMs) => runDocker(args, undefined, timeoutMs),
     });
     const phpSource = openPhpRuntimeSource({
@@ -292,6 +300,11 @@ export async function createWordPressHostProfile(options: {
         clock: state.clock,
         ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
       }),
+      coreRelease: openWordPressCoreRelease({
+        clock: state.clock,
+        ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+      }),
+      coreImageVersion: async () => (await coreSource())[0]!.version,
       freeze: async (target) => {
         const snapshot = await snapshotStore.freeze({
           kind: "wordpress-org-target-acquire",
@@ -379,7 +392,9 @@ export async function createWordPressHostProfile(options: {
       dockerExecutablePath: host.dockerExecutablePath,
       image: host.images.wordpress,
       stagingDirectory: directories.wordpressCore,
-      expectedVersion: config.wordpressVersion,
+      ...(config.wordpressVersion === undefined
+        ? {}
+        : { expectedVersion: config.wordpressVersion }),
       runDocker: (args, timeoutMs) => runDocker(args, undefined, timeoutMs),
     });
     const phpSource = openPhpRuntimeSource({
@@ -556,6 +571,12 @@ export async function createWordPressHostProfile(options: {
           dependencySources: sourcePack.dependencies,
         };
       },
+      // #741: the same core check `select` applies, for `runtime check`.
+      coreRelease: openWordPressCoreRelease({
+        clock: state.clock,
+        ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+      }),
+      coreImageVersion: async () => (await coreSource())[0]!.version,
       runtimeProfile,
       probeRuntime: () => sandbox.probe(),
       executor: runtime,

@@ -85,7 +85,7 @@ import {
 import type { HeldVerificationLab } from "../verification/index.js";
 import { createWordPressStateDiffReader } from "../profiles/wordpress/verification/lab-state-diff.js";
 import { createWordPressVerifierRecordReader } from "../profiles/wordpress/verification/verifier-record.js";
-import type { CliProfile, CliState } from "./index.js";
+import type { CliProfile, CliSelectionCore, CliState } from "./index.js";
 import {
   reverifyOnSelectedVersion,
   runCampaignPipeline,
@@ -130,16 +130,13 @@ export {
 /** `select` reads either a bare selection policy or a campaign config naming one. */
 async function loadSelectInput(configPath: string): Promise<{
   readonly policy: WordPressSelectionPolicy;
-  readonly wordpressVersion: string;
+  /** The pinned core version; undefined takes the Lab image's (#741). */
+  readonly wordpressVersion: string | undefined;
   readonly config?: WordPressCampaignConfig;
 }> {
   const value = JSON.parse(await readFile(configPath, "utf8")) as unknown;
   const directPolicy = wordPressSelectionPolicySchema.safeParse(value);
   if (directPolicy.success) {
-    if (directPolicy.data.wordpressVersion === undefined)
-      throw new Error(
-        "Direct selection policy requires wordpressVersion to freeze selections",
-      );
     if (
       directPolicy.data.promptVariant !== undefined &&
       !WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS.some(
@@ -153,11 +150,63 @@ async function loadSelectInput(configPath: string): Promise<{
     };
   }
   const config = await readWordPressCampaignConfig(configPath);
+  const policy = await readWordPressCampaignPolicy(config);
   return {
     config,
-    policy: await readWordPressCampaignPolicy(config),
-    wordpressVersion: config.wordpressVersion,
+    policy,
+    wordpressVersion: policy.wordpressVersion ?? config.wordpressVersion,
   };
+}
+
+/**
+ * The core version a selection freezes (#741): the pinned one, or the Lab
+ * image's, which must be the latest stable release WordPress.org offers.
+ * Nothing is frozen on an outdated image or an unanswered version check.
+ */
+async function resolveSelectionCore(
+  boundaries: Pick<
+    WordPressCampaignBoundaries,
+    "coreRelease" | "coreImageVersion"
+  >,
+  pinned: string | undefined,
+): Promise<CliSelectionCore> {
+  const release =
+    boundaries.coreRelease === undefined
+      ? null
+      : await boundaries.coreRelease();
+  const latest =
+    release === null
+      ? null
+      : release.status === "observed"
+        ? {
+            version: release.version,
+            observedAt: release.observedAt,
+            sourceUrl: release.sourceUrl,
+            responseDigest: release.responseDigest,
+          }
+        : { unavailable: release.reason };
+  if (pinned !== undefined)
+    return { status: "ok", source: "pinned", version: pinned, latest };
+  if (boundaries.coreImageVersion === undefined)
+    throw new Error(
+      "Without a pinned wordpressVersion the host must read the Lab image's core version",
+    );
+  const image = await boundaries.coreImageVersion();
+  if (release === null || release.status !== "observed")
+    return {
+      status: "core-release-unavailable",
+      source: "image",
+      version: image,
+      latest,
+    };
+  return release.version === image
+    ? { status: "ok", source: "image", version: image, latest }
+    : {
+        status: "core-image-outdated",
+        source: "image",
+        version: image,
+        latest,
+      };
 }
 
 type ReservedSelection = {
@@ -1718,6 +1767,16 @@ export function createWordPressCliProfile(
           : await options.selectionBoundaries(state, wordpressVersion);
       if (boundaries === undefined)
         throw new Error("Direct policy selection is unavailable on this host");
+      const core = await resolveSelectionCore(boundaries, wordpressVersion);
+      // #741: an outdated image freezes nothing; the runner holds and retries.
+      if (core.status !== "ok")
+        return {
+          batchId: null,
+          sourceStatus: core.status,
+          core,
+          selected: [],
+          excluded: [],
+        };
       const promptVariant =
         policy.promptVariant ??
         config?.promptId ??
@@ -1791,6 +1850,8 @@ export function createWordPressCliProfile(
         schemaVersion: 1,
         policyDigest: canonicalDigest(policy),
         inspectedAt: state.clock().toISOString(),
+        // #741: which core version the batch froze and where it came from.
+        core,
         sourceStatus: decision.sourceStatus,
         sourceListings: decision.sourceListings,
         inspections: inspected.map((item) => ({
@@ -1856,6 +1917,7 @@ export function createWordPressCliProfile(
       return {
         batchId,
         sourceStatus: decision.sourceStatus,
+        core,
         selected: chosen.map(({ target }) => ({
           targetId: target.targetId,
           version: target.version,
@@ -2007,6 +2069,25 @@ export function createWordPressCliProfile(
         input,
       );
       const measured = await boundaries.probeRuntime();
+      // #741: without a pinned version, the latest stable against the image's.
+      // A pinned version is checked by freeze itself (`not the declared`).
+      const config = await readWordPressCampaignConfig(input.configPath);
+      const core =
+        boundaries.coreImageVersion === undefined ||
+        config.wordpressVersion !== undefined
+          ? []
+          : [
+              {
+                item: "wordpress-core",
+                profile: await (async () => {
+                  const release = await boundaries.coreRelease?.();
+                  return release?.status === "observed"
+                    ? release.version
+                    : "latest-unavailable";
+                })(),
+                image: await boundaries.coreImageVersion(),
+              },
+            ];
       return [
         {
           item: "codex-cli",
@@ -2018,6 +2099,7 @@ export function createWordPressCliProfile(
           profile: boundaries.runtimeProfile.bundledCatalogDigest,
           image: measured.bundledCatalogDigest,
         },
+        ...core,
       ];
     },
     async reverify(state, input) {

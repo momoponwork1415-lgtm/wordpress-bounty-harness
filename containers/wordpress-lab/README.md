@@ -2,10 +2,23 @@
 
 The Lab's WordPress image includes `pdo_mysql` for ordinary plugin database
 features. The base image is pinned in `Dockerfile`; the host-private config pins
-the built image by registry digest. Keep the WordPress core version in the image
-aligned with the selection policy.
+the built image by registry digest.
 
-To update the image:
+The core version the image ships is the version every Snapshot, exploration
+sandbox and Lab uses (#741, ADR 0047). `select` reads the latest stable release
+from WordPress.org's version check and freezes nothing while the image is
+behind it (`core-image-outdated`); `runtime check` prints the same comparison
+as the `wordpress-core` item. Only development and historical runs pin a
+version with `wordpressVersion` in the selection policy or campaign config.
+
+To follow a new WordPress release, run `./refresh-image.sh` in this directory.
+It reads the latest stable version, pulls the matching official
+`wordpress:<version>-php8.3-apache` image, and prints its digest as the
+`images.wordpress` value and as the `WORDPRESS_BASE` line for a custom build.
+With `--write <host.json>` it sets `images.wordpress` in that Git-external host
+config. Restart the runner afterwards; `select` resumes on the next batch.
+
+To update a custom-built image by hand:
 
 1. Set the desired WordPress/PHP base digest in `Dockerfile` and make sure that
    exact image is present locally. For a different core version, pass its
