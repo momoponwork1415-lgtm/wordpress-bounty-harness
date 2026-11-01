@@ -22,6 +22,7 @@ import { stopDockerContainer } from "../infrastructure/stop-docker-container.js"
 import { CLAUDE_RUNNER_SOURCE } from "./claude-runner.js";
 import {
   CODEX_COOPERATIVE_SANDBOX_MEMORY_MIB,
+  admittedPriorResearch,
   admittedResearchSeed,
   collectResearchArchive,
   seedResearch,
@@ -115,6 +116,8 @@ export interface ClaudeSandboxCommand {
   readonly subagentModel: string;
   /** Present exactly when `input.resumeSessionId` is. */
   readonly resume?: ClaudeSandboxResumeSeed;
+  /** ADR 0048: an earlier Trial's notes written under `prior/` in the fresh notes directory; never with `resume`. */
+  readonly priorResearch?: ClaudeSandboxResumeSeed["research"];
   readonly sourceMount: Mount;
   readonly dependencyMounts: readonly (Mount & { readonly path: string })[];
   readonly labHost?: { readonly name: string; readonly ipv4: string };
@@ -360,6 +363,9 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
       (command.resume === undefined
         ? command.input.resumeSessionId !== undefined
         : !admittedResumeSeed(command.resume, command.input.resumeSessionId)) ||
+      (command.priorResearch !== undefined &&
+        (command.resume !== undefined ||
+          !admittedPriorResearch(command.priorResearch))) ||
       !admittedSkills(command) ||
       command.input.resumePrompt === undefined ||
       command.input.outputSchema === undefined ||
@@ -404,6 +410,9 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
       const [staging, home, research] = created as [string, string, string];
       if (command.resume !== undefined)
         await seedResume(home, research, command.resume);
+      // ADR 0048: an earlier Trial's notes, under `prior/`, before the runner starts.
+      if (command.priorResearch !== undefined)
+        await seedResearch(research, command.priorResearch);
       // ADR 0043: Claude Code lists `skills/<name>/SKILL.md` under its config directory.
       if (command.skills !== undefined) await stageSkills(home, command.skills);
       await writeFile(join(staging, "runner.mjs"), CLAUDE_RUNNER_SOURCE, {

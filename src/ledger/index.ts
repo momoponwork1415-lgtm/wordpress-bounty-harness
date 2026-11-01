@@ -253,6 +253,35 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
           sectionDigest: digest,
         })
         .optional(),
+      /**
+       * ADR 0048: the earlier Trial of the same target whose notes this Trial
+       * received under `## Prior research`, the files by name, digest and
+       * size, and the section digest; or why none was passed although the
+       * campaign enabled it. Absent on every other Trial.
+       */
+      priorResearch: z
+        .union([
+          z.strictObject({
+            sourceRunId: id,
+            sourceSnapshotDigest: digest,
+            sourceVersion: z.string().min(1).max(64),
+            files: z
+              .array(
+                z.strictObject({
+                  name: z.enum(["recon-map.md", "lab-setup.md"]),
+                  digest,
+                  bytes: z.number().int().positive(),
+                }),
+              )
+              .min(1)
+              .max(2),
+            sectionDigest: digest,
+          }),
+          z.strictObject({
+            none: z.enum(["no-earlier-trial", "no-files"]),
+          }),
+        ])
+        .optional(),
       axis: z.literal("history").optional(),
       arm: z.enum(["a", "b"]).optional(),
       arms: z

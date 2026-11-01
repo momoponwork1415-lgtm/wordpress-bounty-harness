@@ -81,6 +81,17 @@ export { CLAUDE_RUNNER_DENIALS } from "./claude-runner.js";
 export { runParametersSection, type RunParameters } from "./run-parameters.js";
 export { priorLeadsSection, type PriorLead } from "./prior-leads.js";
 export {
+  MAX_PRIOR_RESEARCH_FILE_BYTES,
+  PRIOR_RESEARCH_DIRECTORY,
+  PRIOR_RESEARCH_FILE_NAMES,
+  priorResearchPath,
+  priorResearchSection,
+  type PriorResearchFile,
+  type PriorResearchFileName,
+  type PriorResearchSectionInput,
+} from "./prior-research.js";
+export { researchArchiveSchema } from "./resume-trial.js";
+export {
   admittedSkillFiles,
   admittedStagedSkills,
   MAX_STAGED_SKILL_BYTES,

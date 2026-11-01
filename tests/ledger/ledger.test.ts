@@ -1164,6 +1164,58 @@ describe("Ledger public interface", () => {
     ).toMatchObject({ result: { status: "runtime-confirmed" } });
   });
 
+  it("records what a Trial received under Prior research, or why nothing (ADR 0048)", async () => {
+    const { ledger } = await fixture();
+    const passed = {
+      sourceRunId: "run-earlier",
+      sourceSnapshotDigest: otherSnapshot,
+      sourceVersion: "3.3.1",
+      files: [{ name: "recon-map.md" as const, digest: revision, bytes: 9000 }],
+      sectionDigest: labSetup,
+    };
+    for (const [identity, priorResearch] of [
+      ["prior-research-passed", passed],
+      ["prior-research-none", { none: "no-earlier-trial" as const }],
+    ] as const) {
+      const appended = await ledger.append({
+        ...common(identity),
+        type: "discovery-run-started",
+        runId: identity,
+        trialId: identity,
+        history: { mode: "none" },
+        configuration: {
+          promptVariant: "wp2shell-bounty-v20-wide",
+          priorResearch,
+        },
+      });
+      expect(appended.status).toBe("appended");
+    }
+    expect(
+      ledger
+        .read({ type: "discovery-run-started" })
+        .map(({ event }) =>
+          event.type === "discovery-run-started"
+            ? event.configuration.priorResearch
+            : undefined,
+        ),
+    ).toEqual([passed, { none: "no-earlier-trial" }]);
+    await expect(
+      ledger.append({
+        ...common("prior-research-bad"),
+        type: "discovery-run-started",
+        runId: "prior-research-bad",
+        history: { mode: "none" },
+        configuration: {
+          promptVariant: "wp2shell-bounty-v20-wide",
+          priorResearch: {
+            ...passed,
+            files: [{ ...passed.files[0], name: "sql.md" }],
+          },
+        },
+      } as never),
+    ).rejects.toThrow();
+  });
+
   it("records a verification Lab's relay destinations on lab-provisioned (ADR 0046)", async () => {
     const { ledger } = await fixture();
     const appended = await ledger.append({

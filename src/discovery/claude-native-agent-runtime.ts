@@ -555,6 +555,16 @@ export class ClaudeNativeAgentRuntime {
                 },
                 subagentModel: profile.subagent.modelId,
                 ...(run.skills === undefined ? {} : { skills: run.skills }),
+                ...(run.priorResearch === undefined
+                  ? {}
+                  : {
+                      priorResearch: run.priorResearch.map(
+                        ({ path, contentBase64 }) => ({
+                          path,
+                          content: Buffer.from(contentBase64, "base64"),
+                        }),
+                      ),
+                    }),
                 ...(run.resume === undefined
                   ? {}
                   : {

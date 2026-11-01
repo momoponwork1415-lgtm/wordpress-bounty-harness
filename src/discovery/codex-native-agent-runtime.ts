@@ -297,6 +297,8 @@ export interface CodexSandboxCommand {
   readonly resumePrompt?: string;
   /** Operator-triggered resume: start with `exec resume <threadId>` on the restored session. */
   readonly resume?: CodexSandboxResumeSeed;
+  /** ADR 0048: an earlier Trial's notes written under `prior/` in the fresh notes directory; never with `resume`. */
+  readonly priorResearch?: CodexSandboxResumeSeed["research"];
   /** With `resume`: Harness-generated text put before the pinned directive on the first turn only. */
   readonly resumeNotice?: string;
   /**
@@ -432,6 +434,15 @@ export interface DiscoveryTransportRun {
    * segment this run is. Children listed here were recorded by earlier segments.
    */
   readonly resume?: DiscoveryResumeInput;
+  /**
+   * ADR 0048: an earlier Trial's notes placed under `/workspace/research/prior`
+   * before the run starts; never with `resume`, whose restored archive
+   * already holds them.
+   */
+  readonly priorResearch?: readonly {
+    readonly path: string;
+    readonly contentBase64: string;
+  }[];
   /** Discovery requires the cooperative profile; absent, a run is cooperative whenever the profile permits children. */
   readonly coordination?: "cooperative";
   /** Verification uses the same isolated transport with a different sealed report. */
@@ -510,6 +521,9 @@ const discoveryResumeInputSchema = z.strictObject({
 });
 export type DiscoveryResumeInput = z.infer<typeof discoveryResumeInputSchema>;
 
+/** ADR 0048: `prior/<name>.md`, the two names `PRIOR_RESEARCH_FILE_NAMES` admits. */
+const PRIOR_RESEARCH_PATH = /^prior\/(?:recon-map|lab-setup)\.md$/;
+
 const discoveryTransportRunSchema = z.strictObject({
   runId: z.string().min(1).max(128),
   targetSnapshotDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
@@ -526,6 +540,16 @@ const discoveryTransportRunSchema = z.strictObject({
   resumePrompt: z.string().min(1).max(2_048).optional(),
   resumeNotice: z.string().min(1).max(4_096).optional(),
   resume: discoveryResumeInputSchema.optional(),
+  priorResearch: z
+    .array(
+      z.strictObject({
+        path: z.string().regex(PRIOR_RESEARCH_PATH),
+        contentBase64: z.string().min(1),
+      }),
+    )
+    .min(1)
+    .max(2)
+    .optional(),
   coordination: z.literal("cooperative").optional(),
   outputKind: z.literal("verification").optional(),
   lab: z
@@ -1732,6 +1756,14 @@ function sandboxCommand(
               content: Buffer.from(contentBase64, "base64"),
             })),
           },
+        }),
+    ...(run.priorResearch === undefined
+      ? {}
+      : {
+          priorResearch: run.priorResearch.map(({ path, contentBase64 }) => ({
+            path,
+            content: Buffer.from(contentBase64, "base64"),
+          })),
         }),
     stdin: run.prompt,
     ...(run.skills === undefined ? {} : { skills: run.skills }),
