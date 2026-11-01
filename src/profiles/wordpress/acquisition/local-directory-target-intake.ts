@@ -341,6 +341,15 @@ class LocalDirectoryTargetIntake implements TargetIntake {
           : candidates.find(
               (candidate) => candidate.file.path === `${officialSlug}.php`,
             );
+      // A main file not named after the slug (index.php, plugin.php) next to a
+      // secondary header in a subdirectory: like WordPress's get_plugins(), only a
+      // header at the plugin root counts, and a single one is unambiguous (#734).
+      if (selected === undefined && officialSlug !== undefined) {
+        const rootCandidates = candidates.filter(
+          (candidate) => !candidate.file.path.includes("/"),
+        );
+        if (rootCandidates.length === 1) selected = rootCandidates[0];
+      }
       if (selected === undefined)
         return this.#persistDisposition(
           "deferred",
