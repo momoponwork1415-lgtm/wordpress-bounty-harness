@@ -58,10 +58,13 @@ describe("WordPress discovery skills", () => {
       .map((entry) => entry.name);
     expect(onDisk.sort()).toEqual([...WORDPRESS_DISCOVERY_SKILL_IDS].sort());
     expect(WORDPRESS_LAUNCHABLE_DISCOVERY_SKILL_IDS).toEqual([
-      "wbh-recon-v1",
       "wbh-tools-v1",
       "wbh-setup-v1",
+      "wbh-recon-v2",
     ]);
+    expect(wordPressDiscoverySkillRecord("wbh-recon-v1")?.status).toBe(
+      "archived",
+    );
     const tools = wordPressDiscoverySkillRecord("wbh-tools-v1") as
       { files?: readonly unknown[] } | undefined;
     expect(tools?.files?.length).toBe(3);
@@ -88,6 +91,10 @@ describe("WordPress discovery skills", () => {
       expect(frontMatter.description).toMatch(/^Use /);
       // The map lives where every agent of the Trial can read it.
       expect(body).toContain("/workspace/research/recon-map.md");
+      if (row.id === "wbh-recon-v2") {
+        // #752: children start from the files, not from the parent's history.
+        expect(body).toContain("without the parent's conversation");
+      }
       if (row.id === "wbh-setup-v1") {
         // #749: the setup record is the hand-over surface, and the skill
         // applies only to Trials whose `## Lab` section names a site.

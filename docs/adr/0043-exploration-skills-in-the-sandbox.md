@@ -66,3 +66,12 @@ amends: 0029（単一協調 Trial の主経路）と 0039（探索の mode）に
 - Lab の無い Trial（`discovery.lab: none`）でも名指しはできるが、`## Lab` 節が無いので使われない。本番の v19-wide（Lab なし）の campaign 設定には足さず、Lab 付きの campaign（ADR 0044 の第 2 Trial）で名指しする。
 - 測り方は measurement.md 5b 節に足した。Lab 付き Trial の site への要求数 / Trial、observe の使用回数、`labObservations` が空でない Finding / Lead の数、research artifact の `lab-setup.md` の有無と Objects 行数と Verified の 200 の数。
 - 消し方に足す: `prompts/skills/wbh-setup-v1/` と registry の行、test の launchable の 1 行、この追記、ADR 0044 の追記、measurement 5b の項、reviews/README の行。
+
+## 2026-11-01 追記 3: `wbh-recon-v2`（子は親の履歴を引き継がずに始める、#752）
+
+- 事実（本番 v19 の Codex 0.164 の rollout、2026-11-01）: 子は Root の会話を丸ごと引き継いで始まる。子の rollout の先頭 59〜61 件は Root の履歴で、その直後に「You are now a newly spawned child agent. The preceding conversation is inherited parent context.」が入る。子の最初の turn の入力は約 40,000 token（Root の最初の turn は 14,000）。`spawn_agent` の引数 `fork_turns` は既定 `all` で、`none` にすると親の履歴なしで始まる。`[agents]` 設定や custom agent の TOML にこの切り替えは無い。Harness の設定では変えられず、Root が spawn のたびに選ぶ。
+- 所有者決定 2026-11-01（開発計画 2.3「全部提案どおり」）: `wbh-recon` の手順 8 に 1 文を足して v2 にする。「spawn の道具がその選択を許すなら、子は親の会話を引き継がずに始め、単位の地図の節、要る研究 file の行、task を最初の message に入れる」。runtime 固有の引数名は書かない。本文の他の部分は v1 と byte 単位で同じ。v1 は `archived`（過去 Trial の digest 照合のため）。
+- campaign 設定は `wbh-recon-v2` を名指しする。v1 を名指すと `discovery.skills` の検証で拒まれる。ADR 0039 追記 16 の「v19-wide は recon と tools の両方を名指す」は v2 で読む。
+- 測り方（measurement.md 5b）: rollout の子の最初の `token_count` の入力、Trial の入力 token、読んだ file / Trial、Finding / Lead / Trial。
+- 全文と日本語訳と出典対照表: [docs/reviews/2026-11-01-exploration-skills-wbh-recon-v2.md](../reviews/2026-11-01-exploration-skills-wbh-recon-v2.md)。
+- 消し方: `prompts/skills/wbh-recon-v2/` と registry の行を消し、v1 を `current` に戻す。

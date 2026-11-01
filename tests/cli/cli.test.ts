@@ -1555,7 +1555,7 @@ describe("harness CLI vertical slice", () => {
 
   it("stages the campaign's exploration skills into the Trial and records them by id and digest (ADR 0043)", async () => {
     const { run, configPath, prompts, ledger, transportRuns } = await harness({
-      config: { discovery: { lab: "none", skills: ["wbh-recon-v1"] } },
+      config: { discovery: { lab: "none", skills: ["wbh-recon-v2"] } },
     });
     const result = await run(
       "campaign",
@@ -1567,7 +1567,7 @@ describe("harness CLI vertical slice", () => {
       configPath,
     );
     expect(result.code).toBe(0);
-    const skill = await loadWordPressDiscoverySkill("wbh-recon-v1");
+    const skill = await loadWordPressDiscoverySkill("wbh-recon-v2");
     expect(transportRuns[0]?.skills).toEqual([
       { name: "wbh-recon", content: skill.text },
     ]);
@@ -1581,7 +1581,7 @@ describe("harness CLI vertical slice", () => {
     expect(started).toMatchObject({
       configuration: {
         promptVariant: "wp2shell-bounty-v11",
-        skills: [{ id: "wbh-recon-v1", digest: skill.digest }],
+        skills: [{ id: "wbh-recon-v2", digest: skill.digest }],
       },
     });
   });
