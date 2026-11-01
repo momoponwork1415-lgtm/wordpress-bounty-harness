@@ -130,6 +130,24 @@ describe("WordPress prompt table", () => {
     for (const row of WORDPRESS_DISCOVERY_PROMPTS)
       expect(row).not.toHaveProperty("entryIndexCoverage");
   });
+
+  it("ends every launchable objective with the resume directive its mode expects (ADR 0039; #731)", async () => {
+    // `wordPressResumeParagraph` (src/cli/wordpress.ts) takes the last paragraph as the
+    // directive early Root resumes receive and skips the target when the prefix is wrong.
+    const prefix = { deep: "Before giving up,", wide: "Stop when" } as const;
+    for (const row of WORDPRESS_DISCOVERY_PROMPTS) {
+      if (row.status === "archived" || row.mode === undefined) continue;
+      const text = (await loadWordPressDiscoveryAsset(row.id)).text;
+      const last =
+        text
+          .trim()
+          .split(/\n\s*\n/)
+          .at(-1) ?? "";
+      expect(`${row.id}: ${last.slice(0, 40)}`).toMatch(
+        new RegExp(`^${row.id}: ${prefix[row.mode]}`),
+      );
+    }
+  });
 });
 
 const sectionsUrl = new URL(
@@ -191,7 +209,7 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
         "sha256:1ffb15f4f3f7ad6de70e330e10fd24c31513e41d250c8e0d6885b760a0a5c1f3",
       // v18-wide with the stop fragment replaced (ADR 0039 addendum 16, #714).
       "wp2shell-bounty-v19-wide":
-        "sha256:21ade74ca94a70c57083b48ce6325803e5f00f7b5c7f6ae417f04a132241e9aa",
+        "sha256:a8a73ba7ed5def43d6a0abd0a6f8ff9738ac9b2b84d1b7fa00cbeee06cb5e119",
     } as const;
     for (const row of composed) {
       const bytes = (await promptBytes(row.id)).toString("utf8");
@@ -958,12 +976,16 @@ describe("WordPress discovery prompt assets", () => {
     const text = (await loadWordPressDiscoveryAsset("wp2shell-bounty-v19-wide"))
       .text;
     const now = paragraphs(text);
-    expect(now.slice(0, -1)).toEqual(old.slice(0, -1));
-    const stop = now.at(-1)!;
-    expect(stop).toContain("/workspace/research/tools/hooks.tsv");
-    expect(stop).toContain(
+    // The stop fragment is two paragraphs since #731: the registry count, then
+    // the stop rule the Harness reads as the resume directive ("Stop when").
+    expect(now.slice(0, -2)).toEqual(old.slice(0, -1));
+    const registry = now.at(-2)!;
+    expect(registry).toContain("/workspace/research/tools/hooks.tsv");
+    expect(registry).toContain(
       "Do not close while any sink class has rows remaining.",
     );
+    const stop = now.at(-1)!;
+    expect(stop).toMatch(/^Stop when no sink class has rows remaining/);
     expect(stop).toContain("or when the Trial wall is reached");
     // The closing sentences of the v13 stop rule stay as they were.
     for (const sentence of [

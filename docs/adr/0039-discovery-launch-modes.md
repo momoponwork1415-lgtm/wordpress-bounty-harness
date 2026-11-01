@@ -286,7 +286,7 @@ wide の Trial は、Root が登録簿に「全 sink の対象エントリ群を
 
 決定:
 
-- `wp2shell-bounty-v19-wide` を `wide` の `candidate`（`mode: "wide"`）として足す。campaign 設定の `promptId` で名指ししたときだけ走る。本文は v18-wide とバイト単位で同じで、最後の fragment だけを `coordination/stop-wide-v13` から `coordination/stop-wide-v14` に替える。digest は `sha256:21ade74ca94a70c57083b48ce6325803e5f00f7b5c7f6ae417f04a132241e9aa`、契約は v4。
+- `wp2shell-bounty-v19-wide` を `wide` の `candidate`（`mode: "wide"`）として足す。campaign 設定の `promptId` で名指ししたときだけ走る。本文は v18-wide とバイト単位で同じで、最後の fragment だけを `coordination/stop-wide-v13` から `coordination/stop-wide-v14` に替える。digest は `sha256:a8a73ba7ed5def43d6a0abd0a6f8ff9738ac9b2b84d1b7fa00cbeee06cb5e119`、契約は v4。
 - `stop-wide-v14` は、登録簿に sink 種別ごとに「tools の一覧のうち読んだ行の数と残りの行の数」を書かせ、残りがある間は閉じないことを求める。制限時間に達したら従来どおり正常に閉じる。最後の 2 文（経過時間を作らない、候補 0 件も正常な終わり）は v13 のまま。制限時間と子の数は書かない（追記 4）。対象固有の名前も書かない。
 - v19-wide を名指しする campaign 設定は、`discovery.skills` に `wbh-recon-v1` と `wbh-tools-v1` の両方を名指ししなければならない。
 - Harness は変えない。制限時間と子の数の強制だけが Harness の仕事で、終了の判断はプロンプト側に置く（AGENTS.md「Harness と AI の責務」）。一覧の行数を Harness が数えて止めることもしない。
@@ -299,3 +299,13 @@ wide の Trial は、Root が登録簿に「全 sink の対象エントリ群を
 - 採否はこの 4 つの数字で決め、採る版を `current`、もう一方を `archived` にして `candidate` の行を残さない（追記 8）。
 - 測った数字: 上の 30 Trial の構造だけ（[構造調査](../reviews/2026-10-31-exploration-structure-investigation.md)）。v19-wide の数字は 20 Trial の後に #714 に書く。採否の判断は所有者委任の AI が行う（ADR 0032 の 2026-10-18 節）。agent に渡る文章なので `owner-approved` が要る。
 - 消し方: Trial が走る前なら、v19-wide の行、`wp2shell-bounty-v19-wide.md`、`sections/coordination/stop-wide-v14.md` を消す。走った後なら、v19-wide の行を `archived` にして `mode` を外し、本文と fragment は照合用に残す。
+
+## 2026-11-01 追記 17: v19-wide の停止段落を分ける（#731）
+
+追記 16 の `coordination/stop-wide-v14` は、登録簿の数え方の文と停止文を 1 つの段落に書いていた。Harness は目的文の最後の段落を再開の指示として読み、`wide` ではそれが「Stop when」で始まることを求める（`wordPressResumeParagraph`）。v19-wide の最後の段落は「Keep in the registry」で始まるため、v19-wide を名指しした Trial はすべて `Versioned minimum exploration directive is missing` で対象を skip していた（2026-11-01 の bench30 と prod-v19 の起動で判明。v19-wide の Trial は 0 件）。
+
+- `stop-wide-v14` と `wp2shell-bounty-v19-wide.md` の同じ箇所に段落の区切りを 1 つ入れる。語は変えない。digest は `sha256:a8a73ba7ed5def43d6a0abd0a6f8ff9738ac9b2b84d1b7fa00cbeee06cb5e119` になる。Trial が 0 件なので版は上げない。
+- 起動できる行（`current` と `candidate`）のすべてについて、最後の段落が mode の接頭辞で始まることをテストで守る。
+
+消し方: この追記の PR を revert する。v19-wide は再び起動できなくなる。
+

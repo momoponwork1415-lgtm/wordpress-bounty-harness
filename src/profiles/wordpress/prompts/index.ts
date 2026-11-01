@@ -426,7 +426,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
   {
     id: "wp2shell-bounty-v19-wide",
     digest:
-      "sha256:21ade74ca94a70c57083b48ce6325803e5f00f7b5c7f6ae417f04a132241e9aa",
+      "sha256:a8a73ba7ed5def43d6a0abd0a6f8ff9738ac9b2b84d1b7fa00cbeee06cb5e119",
     outputContract: "v4",
     status: "candidate",
     mode: "wide",
