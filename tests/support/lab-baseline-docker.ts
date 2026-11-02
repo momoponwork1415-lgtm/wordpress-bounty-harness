@@ -23,10 +23,18 @@ export function baselineDockerAnswers(
       if (command[0] === "option" && command[2] === "permalink_structure")
         return ok(drift.has("permalink-structure") ? "\n" : "/%postname%/\n");
       if (command[0] === "plugin" && command[1] === "list")
+        // #782: the list always carries a must-use plugin and a drop-in, as a
+        // site with wp-staging or w3-total-cache activated has; the read-back
+        // must not count them. A bundled plugin left behind is drift.
         return ok(
-          [...plugins, ...(drift.has("bundled-plugins") ? ["akismet"] : [])]
-            .map((name) => `${name}\n`)
-            .join(""),
+          JSON.stringify([
+            ...[...plugins].map((name) => ({ name, status: "inactive" })),
+            { name: "wp-staging-optimizer", status: "must-use" },
+            { name: "advanced-cache.php", status: "dropin" },
+            ...(drift.has("bundled-plugins")
+              ? [{ name: "akismet", status: "inactive" }]
+              : []),
+          ]) + "\n",
         );
     }
     const constants = env(args, "WBH_BASELINE_CONSTANTS");
