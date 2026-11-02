@@ -132,6 +132,9 @@ async function readerQuery(
       `--user=${READ_ONLY_DATABASE_USER}`,
       `--password=${lab.readerPassword}`,
       ...(options.header ? [] : ["--skip-column-names"]),
+      // Without this the client echoes the failed statement (and the SET
+      // STATEMENT wrapper) to stderr before the ERROR line.
+      "--skip-print-query-on-error",
       "--batch",
       "--execute",
       limitStatement(sql),
@@ -278,7 +281,12 @@ export async function queryExplorationLab(
     return { status: "unavailable" };
   }
   if (result.exitCode !== 0) {
-    const first = result.stderr.split("\n").find((line) => line.trim() !== "");
+    // The database's own line starts with ERROR; anything before it is the
+    // client's decoration (a ruler, the echoed statement) and is not the error.
+    const lines = result.stderr.split("\n");
+    const first =
+      lines.find((line) => /^ERROR\b/.test(line.trim())) ??
+      lines.find((line) => line.trim() !== "");
     return {
       status: "refused",
       reason: "sql-error",

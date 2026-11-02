@@ -243,6 +243,7 @@ describe("queryExplorationLab", () => {
       "mariadb",
       "--user=wbh_reader",
       "--password=reader-secret",
+      "--skip-print-query-on-error",
       "--batch",
       "--execute",
       "SET STATEMENT max_statement_time=20 FOR SELECT id, value FROM t LIMIT 201",
@@ -268,13 +269,16 @@ describe("queryExplorationLab", () => {
     const { lab } = fakeLab(() => ({
       exitCode: 1,
       stdout: "",
-      stderr: `ERROR 1146 (42S02) at line 1: Table 'wordpress.nowhere' doesn't exist ${"x".repeat(400)}\nmore\n`,
+      // The pinned MariaDB client prints a ruler and the echoed statement
+      // before the ERROR line unless --skip-print-query-on-error is given.
+      stderr: `--------------\nSET STATEMENT max_statement_time=20 FOR SELECT * FROM nowhere\n--------------\n\nERROR 1146 (42S02) at line 1: Table 'wordpress.nowhere' doesn't exist ${"x".repeat(400)}\nmore\n`,
     }));
     const result = await queryExplorationLab(lab, "SELECT * FROM nowhere");
     expect(result).toMatchObject({ status: "refused", reason: "sql-error" });
     if (result.status !== "refused") throw new Error(result.status);
     expect(result.message).toHaveLength(300);
     expect(result.message).toContain("Table 'wordpress.nowhere' doesn't exist");
+    expect(result.message.startsWith("ERROR 1146")).toBe(true);
     // A kill for time or size comes back without a message: a fixed one stands in.
     const silent = fakeLab(() => ({ exitCode: -1, stdout: "", stderr: "" }));
     expect(await queryExplorationLab(silent.lab, "SELECT 1")).toMatchObject({
