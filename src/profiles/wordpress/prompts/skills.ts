@@ -100,6 +100,13 @@ export const WORDPRESS_DISCOVERY_SKILLS = [
       "sha256:9281aae8e625cac7c0b3bb905a697e50f9cec7012482bd1da0d64c6195b5c46e",
     status: "current",
   },
+  {
+    id: "wbh-lab-v1",
+    name: "wbh-lab",
+    digest:
+      "sha256:58548360a44e53b3e1049f7214eee411679ed6c86ffde6771e99c0f6dd5e6f35",
+    status: "current",
+  },
 ] as const satisfies readonly WordPressDiscoverySkillRecord[];
 
 export type WordPressDiscoverySkillId =

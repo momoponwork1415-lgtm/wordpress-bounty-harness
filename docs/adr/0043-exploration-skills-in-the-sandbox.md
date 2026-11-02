@@ -105,3 +105,13 @@ amends: 0029（単一協調 Trial の主経路）と 0039（探索の mode）に
 - 測り方（measurement.md 5b）: bench h32 は 6 対象 × 1 Trial に絞る（所有者決定）。v1 で失った直接 sink 型の記録が戻るか、v1 で増えた到達を失わないか、Root の時間、自力で 120 分に当たった件数。採否の線は #791。
 - 全文と日本語訳と出典対照表: [docs/reviews/2026-11-02-exploration-skills-wbh-falsify-v2.md](../reviews/2026-11-02-exploration-skills-wbh-falsify-v2.md)。
 - 消し方: `prompts/skills/wbh-falsify-v2/` と registry の行を消し、v1 を `current` に戻す。test の launchable の 1 行、この追記、measurement 5b の項、reviews/README の行を消す。
+
+## 2026-11-02 追記 7: `wbh-lab-v1`（Lab の命令をどの行に、どの順で使うかを手順にする、#793 決定 E）
+
+- 事実（bench h34 と本番、2026-11-02）: Lab の Find / Query / Trace を第 1 Trial から付けても（ADR 0049）、bench h34 の 6 対象で lookups は 1〜10 / Trial、F は 12 → 9 で L が 5 → 12。本番の再開後 17 Root は 11〜47 分で閉じ、lookups は 0〜3。`## Lab` 節は命令の body と予算を言うだけで、recon / tools / setup / falsify のどのスキルも Lab の命令に触れていなかった。所有者の問い「道具の使い方が書いてないだけ？」に対する答えがこれで、「じゃあ進めてください」（2026-11-02）。
+- 決定: 5 本目のスキル `wbh-lab-v1`。open の行（歩きで store 書き込みに止まった行、not found の Store / Transformation 行、次の hop の無い route、欠けた hop が保存・読み戻し・関数の Lead 下書き）を 1 つ取り、問いを「値 X を role R で entry E に送るとどこに保存されどこで読み戻されるか」の形にし、marker を site の普通の使い方で植え（lab-facts.md に先に書く）、Find で保存先、Query で保存された形、Trace で走った関数を歩きの hop の隣に並べ、読み戻しの要求を Trace と Observe で見て、行の下に Lab 行を追記する。trace は `lab-traces/` に保存して再送しない。最終報告の前に、Trial を調整する agent が Lab の答えられる open の行を全部この手順に通し、Closing 節に数を書く。
+- 目的文は別 PR で v22-wide にし、hooks.tsv の行数で閉じる 2 段落を削除だけで消す（ADR 0039 の 2026-11-02 追記）。終わり方は wbh-recon v3 の手順 9 とこのスキルの手順 9 と Trial の wall に置く。
+- Harness は変えない。命令と予算と `lookupLog` の記録は ADR 0049 のまま。lab-facts.md の中身は Harness が読まない。
+- 測り方（measurement.md 5b）: 本番で `wbh-lab-v1` を名指した Trial と、再開後に名指していない v21-wide の Trial を、Root の wall、lookups / Trial（kind の内訳）、observations、F / Trial、L / Trial、Lab 発火 / Codex 時間で並べる。bench は 6 対象 × 2 Trial を後で 1 回だけ組む（所有者決定 2026-11-02「6 対象くらいに絞って」）。
+- 全文と日本語訳と出典対照表: [docs/reviews/2026-11-02-exploration-skills-wbh-lab-v1.md](../reviews/2026-11-02-exploration-skills-wbh-lab-v1.md)。
+- 消し方: `prompts/skills/wbh-lab-v1/` と registry の行、test の launchable の 1 行と本文の検査、この追記、measurement 5b の項、reviews/README の行を消し、campaign 設定の `discovery.skills` から外す。

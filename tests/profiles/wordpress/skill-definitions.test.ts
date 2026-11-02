@@ -62,6 +62,7 @@ describe("WordPress discovery skills", () => {
       "wbh-setup-v1",
       "wbh-recon-v3",
       "wbh-falsify-v2",
+      "wbh-lab-v1",
     ]);
     expect(wordPressDiscoverySkillRecord("wbh-falsify-v1")?.status).toBe(
       "archived",
@@ -132,6 +133,20 @@ describe("WordPress discovery skills", () => {
         expect(body).toContain("## Step 4: read the rows not found");
         expect(body).toContain(
           "The agent that writes the table is not the agent that walked the unit",
+        );
+      }
+      if (row.id === "wbh-lab-v1") {
+        // #793 E: a marked request through the site's ordinary use, Find for
+        // the store, Trace for the functions, Observe for the read-back, one
+        // record per use, and every open row the Lab can answer taken before
+        // the final report.
+        expect(body).toContain("/workspace/research/lab-facts.md");
+        expect(body).toContain("/workspace/research/lab-traces/");
+        expect(body).toContain("## Step 9: before the final report");
+        expect(body).toContain("`## Lab` section");
+        expect(body).toContain("an observation, not a confirmation");
+        expect(frontMatter.description).toMatch(
+          /^Use when the Trial has a Lab/,
         );
       }
       if (row.id === "wbh-setup-v1") {
