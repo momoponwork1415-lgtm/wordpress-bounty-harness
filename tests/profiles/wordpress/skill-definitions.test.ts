@@ -61,6 +61,7 @@ describe("WordPress discovery skills", () => {
       "wbh-tools-v1",
       "wbh-setup-v1",
       "wbh-recon-v3",
+      "wbh-falsify-v1",
     ]);
     expect(wordPressDiscoverySkillRecord("wbh-recon-v1")?.status).toBe(
       "archived",
@@ -76,6 +77,9 @@ describe("WordPress discovery skills", () => {
     );
     expect(wordPressDiscoverySkillRecord("wbh-setup-v1")?.name).toBe(
       "wbh-setup",
+    );
+    expect(wordPressDiscoverySkillRecord("wbh-falsify-v1")?.name).toBe(
+      "wbh-falsify",
     );
     expect(wordPressDiscoverySkillRecord("wbh-other-v1")).toBeUndefined();
   });
@@ -104,6 +108,16 @@ describe("WordPress discovery skills", () => {
         expect(body).toContain(
           "read a second time by an agent other than the one that wrote it",
         );
+      }
+      if (row.id === "wbh-falsify-v1") {
+        // #786: one assumptions table per unit, every "not found" row read
+        // both ways, and prior leads taken first when the Trial states them.
+        expect(body).toContain("/workspace/research/assumptions");
+        expect(body).toContain("/workspace/research/traces");
+        expect(body).toContain("## Step 3: read the rows not found");
+        expect(body).toContain("Backward to every producer");
+        expect(body).toContain("`## Prior leads` section");
+        expect(frontMatter.description).toMatch(/^Use after the map exists/);
       }
       if (row.id === "wbh-setup-v1") {
         // #749: the setup record is the hand-over surface, and the skill
