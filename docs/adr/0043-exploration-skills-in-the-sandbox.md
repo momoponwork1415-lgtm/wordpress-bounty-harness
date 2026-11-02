@@ -88,7 +88,7 @@ amends: 0029（単一協調 Trial の主経路）と 0039（探索の mode）に
 
 ## 2026-11-02 追記 5: `wbh-falsify-v1`（単位ごとの仮定の表と、強制されていない行の両方向の読み、#786）
 
-- 事実（bench h30 #726、2026-11-02、30 プラグイン各 1 Trial）: 当たった 69 記録は「要求の値が handler の中で直接 sink に届く」形。外れ 35 記録は、最終 HTML を書き換える最適化系 12、訪問者の値が管理画面や JavaScript の表で描画される 12、署名・token・権限の論理 9、保存→再利用の形の崩れ 3、連結 SQL の Lead 止まり 2。本番の Lead の `missingEdge` は producer が Lead 入力 Trial で 124 / 168、v21 第 1 Trial で 86 / 128。agent は sink に届くが、「その値を誰が書けるか」「この変換は何を保つと仮定しているか」「この署名はどの欄を覆うか」を読む手順を持たない。
+- 事実（bench h30 #726、2026-11-02、30 プラグイン各 1 Trial）: 当たった 69 記録は「要求の値が handler の中で直接 sink に届く」形。外れ 45 記録（要求上限で止まった 3 Trial を含む）は、最終 HTML を書き換える最適化系 12、訪問者の値が管理画面や JavaScript の表で描画される 14、署名・token・権限の論理 11、保存→再利用の形の崩れ 6、連結 SQL の Lead 止まり 2。本番の Lead の `missingEdge` は producer が Lead 入力 Trial で 124 / 168、v21 第 1 Trial で 86 / 128。agent は sink に届くが、「その値を誰が書けるか」「この変換は何を保つと仮定しているか」「この署名はどの欄を覆うか」を読む手順を持たない。
 - 所有者の選択（2026-11-02「推奨で」）: 形ごとの対策ではなく、1 つの読み方の変更でまとめて狙う。本 ADR の決定が「後続」に挙げた「反証」がこれに当たる。
 - 決定: 4 本目は `wbh-falsify-v1`。子は自分の単位について、Reach / Value / Store / Transformation / Proof / State の 6 種の仮定を 1 行 1 文で表にし（頼っている file と行、強制している file と行、無ければ not found）、not found の行を producer 側（store の書き手、引数の供給元、それぞれの入口と門）と consumer 側（描画、query、file、unserialize、比較）に 1 hop ずつ読み、enforced / not enforced / open で決着させる。not enforced の hop 列が下書きの `sourceTrace` になる。`## Prior leads` がある Trial では、その lead の単位を先に取る。終わりに Counts 節を書き、`wbh-recon` v3 の手順 9 がそれを読む。#697（`wbh-trace` の下書き）の hop ごとの追跡は手順 3〜5 に取り込み、#697 は close する。
 - Harness、目的文（v21-wide）、出力契約は変えない。campaign 設定の `discovery.skills` に名指しするだけ。
