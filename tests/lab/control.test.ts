@@ -75,7 +75,13 @@ describe("exploration Lab control endpoint", () => {
         status: 404,
         body: {
           status: "unknown-command",
-          commands: ["POST /reset", "POST /observe", "POST /find", "POST /sql"],
+          commands: [
+            "POST /reset",
+            "POST /observe",
+            "POST /find",
+            "POST /sql",
+            "POST /trace",
+          ],
         },
       });
     expect(await nextControlRequest(directory, 50, 10)).toBeNull();
@@ -112,11 +118,20 @@ describe("exploration Lab control endpoint", () => {
     expect(await nextControlRequest(directory, 50, 10)).toBeNull();
   });
 
-  it("relays find and sql bodies as they came, reading neither (ADR 0049)", async () => {
+  it("relays find, sql and trace bodies as they came, reading none (ADR 0049)", async () => {
     const { directory, call } = await fixture();
     for (const [path, body] of [
       ["/find", { marker: "1234567890" }],
       ["/sql", { select: "SELECT 1; DROP TABLE wp_options" }],
+      [
+        "/trace",
+        {
+          method: "POST",
+          path: "/wp-admin/admin-ajax.php",
+          cookie: "wordpress_logged_in=abc",
+          body: "action=x",
+        },
+      ],
     ] as const) {
       const pending = call("POST", path, JSON.stringify(body));
       const request = await nextControlRequest(directory, 2_000, 10);

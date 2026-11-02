@@ -61,3 +61,15 @@ Issue #793 の A〜E を決定とする。
 ## 消し方
 
 A は `discovery.lab` の既定を `none` に戻す。B は `CONTROL_COMMANDS` から 2 つを外し、`lab-lookup.ts` と `exploration-lab.ts` の find / sql の経路、`## Lab` 節の 2 段落、`maxLookups` を消す。C は設定項目を外す。D は渡す file を 2 つに戻す。記録済みの `lookupLog` と台帳の `labObserved.lookups` / `configuration.lab.maxLookups` は読み続ける（任意項目のまま残す）。
+
+## 2026-11-02 追記 1: `trace` を実装した（#793 の PR 2）
+
+B の 3 つ目の観測器 `POST /trace` を、決定どおりに実装した。体は `{"method": "GET" | "POST", "path": "/...", "cookie"?, "contentType"?, "body"?}` で、path の規則は `observe` と同じ、contentType は `application/x-www-form-urlencoded` / `application/json` / `text/plain` のいずれか、body は 8192 文字まで、GET の body は `invalid-request`（`field: body`）で拒否する。Harness はその 1 リクエストを WordPress container の中から curl で site（`http://wordpress`、自身の loopback）に送り、Xdebug の function trace（format 1）から plugin / mu-plugin ディレクトリ内の関数の入口だけを呼び出し順に取り出して、HTTP status、各 entry の深さ・関数名・file（site root 相対）・行、`entryCount`（上限前の総数）、`truncated` を返す。entry は 2000 件まで。
+
+- 予算は `find` / `sql` と同じ `discovery.lab.maxLookups` を共有し、新しい設定項目は無い。記録は `lookupLog` の `command: "trace"` で、request には method、path、contentType、body（agent の入力なので本文を残す）、bodyLength、cookieLength（cookie は値を残さず長さだけ）を書く。答え（entry の列を含む）は `answer` に封じる。拒否の理由は `budget` / `invalid-request` / `unavailable` / `harness-error`、失敗は `failed`。
+- Lab image（`containers/wordpress-lab/Dockerfile`）に Xdebug 3.4.7 を trigger mode（`xdebug.mode=trace`、`start_with_request=trigger`）で入れた。起動値 `xdebug.trigger_value` は container 起動時の環境変数 `WBH_XDEBUG_TRIGGER` で、Harness が Lab ごとに乱数（32 hex）を作り、Lab session にだけ持つ。handle にも、agent に渡る文章にも入れない。Xdebug は起動値を GET / POST / cookie / 環境変数からしか読まない（header は読まない）ので、Harness はその 1 リクエストに `XDEBUG_TRIGGER=<値>` の cookie を付けて送る。agent が cookie を渡したときは、その後ろに続ける。
+- 旧 image（Xdebug 無し）の Lab では trace 用ディレクトリが無く、`trace` は `unavailable` で拒否する。供給は失敗しない。
+- `trace` の curl は container 内の loopback へ送るので、recorder の捕捉（`capture.jsonl`）には残らない。要求と答えは `lookupLog` が持つ。
+- **操作者の手順**: Dockerfile が変わったので image の digest が変わる。`containers/wordpress-lab/README.md` の手順で image を再 build（`pecl install` のため build に network が要る）、push し、host 設定の `images.wordpress` を新しい digest に再 pin して runner を再起動する。再 pin まで、Lab は旧 image で動き `trace` は `unavailable` を返す。
+- 計測: bench h34（h33 と同じ 6 対象、37 record）。合格線は HTML 書き換え・変換系の record への到達が増え、Finding が h33 を下回らないこと。[measurement.md](../agents/measurement.md) 5b に行を足した。
+- 消し方: `CONTROL_COMMANDS` から `trace` を外し、`lab-trace.ts` と driver の経路、`## Lab` 節の Trace 段落を消し、image から Xdebug を外す。記録済みの `lookupLog` の `trace` は読み続ける。

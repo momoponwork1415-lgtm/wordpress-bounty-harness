@@ -17,6 +17,10 @@ import {
   wordpressExplorationObserveSchema,
   type WordPressExplorationObserveRequest,
 } from "./lab-observation.js";
+import {
+  wordpressExplorationTraceSchema,
+  type WordPressExplorationTraceRequest,
+} from "./lab-trace.js";
 
 /** The Private Evidence bundle one Trial's exploration Lab leaves behind. */
 export const EXPLORATION_LAB_CAPTURE_FILE = "capture.jsonl";
@@ -57,11 +61,24 @@ type ObservationRecord = {
   /** The answer did not reach labctl, even after one retry. */
   readonly answerDropped?: true;
 };
-/** One `find` or `sql` lookup (ADR 0049); the two share the Trial's `maxLookups`. */
+type LookupCommand = "find" | "sql" | "trace";
+/**
+ * The request of one `trace` as the agent sent it: the body is its input and
+ * is kept whole; of the cookie only the length is kept, never its value.
+ */
+type TraceRequestRecord = {
+  readonly method: WordPressExplorationTraceRequest["method"];
+  readonly path: string;
+  readonly contentType?: WordPressExplorationTraceRequest["contentType"];
+  readonly body?: string;
+  readonly bodyLength: number;
+  readonly cookieLength?: number;
+};
+/** One `find`, `sql` or `trace` lookup (ADR 0049); the three share the Trial's `maxLookups`. */
 type LookupRecord = {
   readonly requestedAt: string;
   readonly answeredAt: string;
-  readonly command: "find" | "sql";
+  readonly command: LookupCommand;
   readonly status: "answered" | "refused" | "failed";
   readonly reason?:
     | "budget"
@@ -71,8 +88,8 @@ type LookupRecord = {
     | "harness-error";
   /** With `invalid-request`: the name of the first field that failed, never its value. */
   readonly field?: string;
-  /** The marker, or the SELECT text, as the agent sent it. */
-  readonly request?: string;
+  /** The marker or the SELECT text as the agent sent it; for `trace`, the request record. */
+  readonly request?: string | TraceRequestRecord;
   readonly answer: Readonly<Record<string, unknown>>;
   /** The answer did not reach labctl, even after one retry. */
   readonly answerDropped?: true;
@@ -105,8 +122,8 @@ function invalidField(
 /**
  * One Trial's exploration Lab as the Harness drives it (ADR 0003, 2026-10-25
  * addendum): it answers `POST /reset` within `maxResets`, `POST /observe`
- * within `maxObservations`, and `POST /find` and `POST /sql` within one shared
- * `maxLookups` (ADR 0049), takes the site state before and after every Lab
+ * within `maxObservations`, and `POST /find`, `POST /sql` and `POST /trace`
+ * within one shared `maxLookups` (ADR 0049), takes the site state before and after every Lab
  * generation, and at the end seals the recorder's capture with those states,
  * the observations and the lookups. It judges nothing; whether anything fired
  * is the agent's report (`labObservations`) and the human's call.
@@ -122,6 +139,7 @@ export function openWordPressExplorationLab(options: {
     | "observeExplorationPage"
     | "findInExplorationLab"
     | "queryExplorationLab"
+    | "traceExplorationRequest"
   >;
   readonly handle: WordPressLabHandle;
   readonly maxResets: number;
@@ -130,7 +148,7 @@ export function openWordPressExplorationLab(options: {
   readonly maxObservations: number;
   /** Observations earlier segments of the same Trial used. */
   readonly observationsUsedBefore?: number;
-  /** Find and sql lookups together (ADR 0049). */
+  /** Find, sql and trace lookups together (ADR 0049). */
   readonly maxLookups: number;
   /** Lookups earlier segments of the same Trial used. */
   readonly lookupsUsedBefore?: number;
@@ -148,7 +166,7 @@ export function openWordPressExplorationLab(options: {
   const observedInTrial = () =>
     observationsUsedBefore +
     observations.filter((entry) => entry.status !== "refused").length;
-  /** Find and sql lookups the Trial has used so far, across its segments. */
+  /** Find, sql and trace lookups the Trial has used so far, across its segments. */
   const lookedUpInTrial = () =>
     lookupsUsedBefore +
     lookups.filter((entry) => entry.status !== "refused").length;
@@ -376,8 +394,8 @@ export function openWordPressExplorationLab(options: {
   /** The refusals a lookup shares with observe, before the Lab is asked; null when it may run. */
   const lookupRefusal = (
     request: ControlRequest,
-    command: "find" | "sql",
-    asked: string,
+    command: LookupCommand,
+    asked: string | TraceRequestRecord,
   ): Promise<void> | null => {
     if (broken)
       return answerLookup(
@@ -506,6 +524,78 @@ export function openWordPressExplorationLab(options: {
       },
     );
   };
+  const handleTrace = async (request: ControlRequest): Promise<void> => {
+    const parsed = wordpressExplorationTraceSchema.safeParse(request.body);
+    if (!parsed.success)
+      return answerLookup(
+        request,
+        {
+          command: "trace",
+          status: "refused",
+          reason: "invalid-request",
+          field: invalidField(parsed.error.issues),
+        },
+        400,
+      );
+    const asked = parsed.data;
+    const record: TraceRequestRecord = {
+      method: asked.method,
+      path: asked.path,
+      ...(asked.contentType === undefined
+        ? {}
+        : { contentType: asked.contentType }),
+      ...(asked.body === undefined ? {} : { body: asked.body }),
+      bodyLength: asked.body?.length ?? 0,
+      ...(asked.cookie === undefined
+        ? {}
+        : { cookieLength: asked.cookie.length }),
+    };
+    if (asked.method === "GET" && asked.body !== undefined)
+      return answerLookup(
+        request,
+        {
+          command: "trace",
+          status: "refused",
+          reason: "invalid-request",
+          field: "body",
+          request: record,
+        },
+        400,
+      );
+    const refused = lookupRefusal(request, "trace", record);
+    if (refused !== null) return refused;
+    const traced = await lab
+      .traceExplorationRequest(handle, asked)
+      .catch(() => ({ status: "unavailable" }) as const);
+    if (traced.status === "unavailable")
+      return answerLookup(
+        request,
+        {
+          command: "trace",
+          status: "refused",
+          reason: "unavailable",
+          request: record,
+        },
+        503,
+      );
+    if (traced.status === "failed")
+      return answerLookup(
+        request,
+        { command: "trace", status: "failed", request: record },
+        502,
+      );
+    return answerLookup(
+      request,
+      { command: "trace", status: "answered", request: record },
+      200,
+      {
+        httpStatus: traced.httpStatus,
+        entries: traced.entries,
+        entryCount: traced.entryCount,
+        truncated: traced.truncated,
+      },
+    );
+  };
   /**
    * Runs one command. A throw answers it `failed` with a fixed reason (no
    * message, no stack), counts the attempt and is logged with its command,
@@ -517,6 +607,7 @@ export function openWordPressExplorationLab(options: {
       else if (request.command === "observe") await handleObserve(request);
       else if (request.command === "find") await handleFind(request);
       else if (request.command === "sql") await handleSql(request);
+      else if (request.command === "trace") await handleTrace(request);
     } catch {
       if (request.command === "reset") {
         // The site state the next generation starts from is no longer known.
@@ -526,7 +617,11 @@ export function openWordPressExplorationLab(options: {
           { status: "failed", reason: "harness-error" },
           500,
         ).catch(() => undefined);
-      } else if (request.command === "find" || request.command === "sql")
+      } else if (
+        request.command === "find" ||
+        request.command === "sql" ||
+        request.command === "trace"
+      )
         await answerLookup(
           request,
           {

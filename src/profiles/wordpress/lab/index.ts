@@ -54,6 +54,11 @@ import type {
   WordPressExplorationQueryResult,
 } from "./lab-lookup.js";
 import * as observe from "./lab-observation.js";
+import * as trace from "./lab-trace.js";
+import type {
+  WordPressExplorationTraceRequest,
+  WordPressExplorationTraceResult,
+} from "./lab-trace.js";
 import type {
   WordPressExplorationObservation,
   WordPressExplorationObserveRequest,
@@ -262,6 +267,16 @@ export interface WordPressLab extends LabProvisioner<
     handle: WordPressLabHandle,
     select: string,
   ): Promise<WordPressExplorationQueryResult>;
+  /**
+   * Exploration Labs only (ADR 0049): sends one request to the site from
+   * inside its container with Xdebug's trace trigger and reports the
+   * functions it ran in the plugin directories. `unavailable` when the handle
+   * is not an exploration Lab or the image left no trace.
+   */
+  traceExplorationRequest(
+    handle: WordPressLabHandle,
+    request: WordPressExplorationTraceRequest,
+  ): Promise<WordPressExplorationTraceResult>;
   /** Removes the `exposeToHost` gateway before teardown; true when it is gone. */
   withdrawFromHost(handle: WordPressLabHandle): Promise<boolean>;
   /**
@@ -756,6 +771,12 @@ export function openWordPressLab(options: {
       const lab = lookupSessionFor(handle);
       if (lab === undefined) return { status: "unavailable" };
       return lookup.queryExplorationLab(lab, select);
+    },
+    async traceExplorationRequest(handle, request) {
+      const lab = sessionFor(handle);
+      if (lab === undefined || !lab.exploration)
+        return { status: "unavailable" };
+      return trace.traceExplorationRequest(lab, request);
     },
     async captureState(handle) {
       const lab = sessionFor(handle);

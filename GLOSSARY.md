@@ -47,7 +47,7 @@
 | Lead | ソースに根拠があり、影響までに未解決の辺が残る手がかり。Finding でも検証結果でもない。`review leads` で人間が全件を見る。 |
 | VerificationResult | Lab での検証 attempt の結果。新しい検証は `incomplete` だけを出し、Harness の捕捉が残ったものは `incomplete(awaiting-human-observation)` として人間の観測を待つ（ADR 0040）。 |
 | Lab 観測（`review observe`） | 人間が review Lab か検証 Lab で見た結果を `match` / `mismatch` / `unavailable` で記録するもの。`review decide --reproduced match` と揃って初めて確定の根拠になる（不変条件 3）。所有者が会話で結果を明言したときは AI 操作役が所有者の名前で代行記録し、attestation を Private Evidence に残す（ADR 0040 追記 3）。 |
-| 保存先の観測器（lookup） | 探索 Lab の制御口の `POST /find`（植えた印がどの table / column / file に入ったか）と `POST /sql`（読み取り専用ユーザーで SELECT 1 文）。2 つで 1 つの予算 `discovery.lab.maxLookups` を使う。答えは観測で、Harness は読まず判定しない（ADR 0049）。 |
+| 保存先の観測器（lookup） | 探索 Lab の制御口の `POST /find`（植えた印がどの table / column / file に入ったか）、`POST /sql`（読み取り専用ユーザーで SELECT 1 文）、`POST /trace`（1 リクエストの plugin 内の関数呼び出し列）。3 つで 1 つの予算 `discovery.lab.maxLookups` を使う。答えは観測で、Harness は読まず判定しない（ADR 0049）。 |
 | Reproduction Package | 人間が Lab を再構築し、遠隔攻撃者の手順で同じ結果を確かめるための証拠と手順。 |
 | Submission Candidate | 最新版で確認済みの脆弱性、提出先、文案の版を結び付けたレビュー対象。 |
 | Private Evidence | HTTP 記録、ペイロード、画像、認証情報、未公開の発見を置く Git 外の保管先。 |
