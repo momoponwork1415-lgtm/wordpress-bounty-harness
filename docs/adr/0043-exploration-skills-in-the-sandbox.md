@@ -115,3 +115,10 @@ amends: 0029（単一協調 Trial の主経路）と 0039（探索の mode）に
 - 測り方（measurement.md 5b）: 本番で `wbh-lab-v1` を名指した Trial と、再開後に名指していない v21-wide の Trial を、Root の wall、lookups / Trial（kind の内訳）、observations、F / Trial、L / Trial、Lab 発火 / Codex 時間で並べる。bench は 6 対象 × 2 Trial を後で 1 回だけ組む（所有者決定 2026-11-02「6 対象くらいに絞って」）。
 - 全文と日本語訳と出典対照表: [docs/reviews/2026-11-02-exploration-skills-wbh-lab-v1.md](../reviews/2026-11-02-exploration-skills-wbh-lab-v1.md)。
 - 消し方: `prompts/skills/wbh-lab-v1/` と registry の行、test の launchable の 1 行と本文の検査、この追記、measurement 5b の項、reviews/README の行を消し、campaign 設定の `discovery.skills` から外す。
+
+## 2026-11-02 追記 8: `wbh-falsify-v2` を採らず `archived` にした（#791）
+
+- 事実（bench h32、6 対象 37 record、2026-11-02）: v2 で F 12 / L 5 / 未到達 20。h30（recon + tools + setup のみ）の 12 / 8 / 17 と同じ F で Lead が減り、未到達が増えた。plugin ごとの振れは ±4 で、6 対象 1 Trial の bench では ±2 を分けられない。
+- 決定: `wbh-falsify-v2` を `archived` にする。v1 もすでに `archived`。本番の campaign 設定は v2 を名指していないので、本番は変わらない。走った Trial の台帳（`configuration.skills` の digest）はそのまま読める。
+- 「仮定の表」の読み方そのものは捨てない。Store 行と Transformation 行の語は `wbh-lab-v1`（追記 7）が open の行の種類として使い、Lab の事実で埋める。次に反証の手順を戻すなら、Lab の事実を入力にする形で v3 として出す。
+- 消し方: registry の status を `current` に戻し、test の 1 行を launchable 一覧に戻す。
