@@ -333,6 +333,8 @@ export function openWordPressLab(options: {
   readonly source: WordPressSourceResolver;
   readonly runner?: DockerRunner;
   readonly healthAttempts?: number;
+  /** ADR 0046 relays: resolves a destination on the host; tests inject a fixed answer. */
+  readonly resolveEgressHost?: (host: string) => Promise<readonly string[]>;
   /**
    * Dependency injection for isolated Lab tests; hosts use the one shared path.
    * Discovery owner records are read from its sibling `discovery-owners` (#550).
@@ -503,6 +505,7 @@ export function openWordPressLab(options: {
           lab,
           attempts,
           context?.egress,
+          options.resolveEgressHost,
         );
         // Probe the running runsc image before installing the target plugin.
         // PHP exits 43 only when the required extension is absent.
