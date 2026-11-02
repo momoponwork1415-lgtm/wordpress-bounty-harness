@@ -76,6 +76,7 @@ PR の「測った数字」に貼る列は固定する。
 - `wbh-recon-v2`（#752）は v1 の手順 8 に「子は親の履歴を引き継がずに始める」の 1 文を足したもの。腕を分けるときは rollout の子の最初の `token_count` の入力（v1 の既定では約 40,000）と、Trial の入力 token、読んだ file / Trial（子が読み直す分）を並べる。
 - `wbh-recon-v3`（#714 / #686）は v2 に手順 9「closing」と description の 1 文を足したもの。v3 を名指した Trial は、Root の wall、固有 PHP file 読了率（read-paths の plugin 相対 path の固有数 / plugin の PHP file 数）、Finding / Trial、Lead / Trial、登録簿の Closing 節の「決着した経路 / 隙間のあった経路」を、v21 + v2 の 10 Trial と並べる（ADR 0043 追記 4）。対になっていない。
 - `wbh-setup-v1`（#749）は Lab 付きの Trial（`discovery.lab: attached`）でだけ意味を持つ。腕は recon + tools / recon + tools + setup で、台帳の `labObserved` から Trial あたりの site への要求数（`requests`）、`observations`、`resets` を出し、Finding / Lead の `labObservations` が空でない数を数える。research artifact では `lab-setup.md` の有無、Objects 表の行数、Verified の 200 の数、Not built の行数を書く。中身は読まない。Lab の無い Trial にこのスキルを数えない。
+- `wbh-falsify-v1`（#786）は recon + tools（Lab 付きなら + setup）の上に乗せる。research artifact では `assumptions/*.md` の有無と行数、Counts 節の enforced / not enforced / open、`traces/*.md` の数を書く。中身は読まない。bench（#726 の残り 20 件）では、最適化系の記録、論理系のプラグイン、Lead 止まりだった記録のうち Finding に進んだ数と、全体の当たり（基準 9 / 20）を並べる。本番の分母は ADR 0045 のまま。
 - 既定を有りに切り替えるかは DEVELOPMENT 第 5 節の 6 段で決める。形だけの PR（#682 の PR 1）は数字を持たず、所有者が探索の再開を指示した後に測る。
 
 ## 5c. Lead を入力にした第 2 Trial（ADR 0044）
