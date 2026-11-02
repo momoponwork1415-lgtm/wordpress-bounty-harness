@@ -61,9 +61,12 @@ describe("WordPress discovery skills", () => {
       "wbh-tools-v1",
       "wbh-setup-v1",
       "wbh-recon-v3",
-      "wbh-falsify-v2",
       "wbh-lab-v1",
     ]);
+    // #791: v2 was measured on bench h32 and not adopted; it stays readable.
+    expect(wordPressDiscoverySkillRecord("wbh-falsify-v2")?.status).toBe(
+      "archived",
+    );
     expect(wordPressDiscoverySkillRecord("wbh-falsify-v1")?.status).toBe(
       "archived",
     );

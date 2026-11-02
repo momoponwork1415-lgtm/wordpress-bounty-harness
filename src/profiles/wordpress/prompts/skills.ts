@@ -98,7 +98,7 @@ export const WORDPRESS_DISCOVERY_SKILLS = [
     name: "wbh-falsify",
     digest:
       "sha256:9281aae8e625cac7c0b3bb905a697e50f9cec7012482bd1da0d64c6195b5c46e",
-    status: "current",
+    status: "archived",
   },
   {
     id: "wbh-lab-v1",
