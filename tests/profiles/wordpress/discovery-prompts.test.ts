@@ -71,7 +71,7 @@ describe("WordPress prompt table", () => {
   it("derives the id lists and the current versions from the table", () => {
     const ids = WORDPRESS_DISCOVERY_PROMPTS.map((row) => row.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(34);
+    expect(ids).toHaveLength(35);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual(ids);
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       ...ids,
@@ -95,7 +95,7 @@ describe("WordPress prompt table", () => {
     ).toHaveLength(WORDPRESS_DISCOVERY_MODES.length);
     expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS).toEqual({
       deep: "wp2shell-bounty-v11",
-      wide: "wp2shell-bounty-v21-wide",
+      wide: "wp2shell-bounty-v22-wide",
     });
     expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID).toBe("wp2shell-bounty-v11");
     // Archived rows carry no mode, so only a current row launches (ADR 0039).
@@ -111,7 +111,7 @@ describe("WordPress prompt table", () => {
     ).toEqual([]);
     expect(WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS).toEqual([
       "wp2shell-bounty-v11",
-      "wp2shell-bounty-v21-wide",
+      "wp2shell-bounty-v22-wide",
     ]);
     expect(
       WORDPRESS_VERIFIER_PROMPTS.filter((row) => row.status === "current"),
@@ -182,6 +182,9 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
     );
     expect(composed.map((row) => row.id)).not.toContain(
       "wp2shell-bounty-v21-wide",
+    );
+    expect(composed.map((row) => row.id)).not.toContain(
+      "wp2shell-bounty-v22-wide",
     );
   });
 
@@ -513,7 +516,8 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v18-wide" ||
         id === "wp2shell-bounty-v19-wide" ||
         id === "wp2shell-bounty-v20-wide" ||
-        id === "wp2shell-bounty-v21-wide"
+        id === "wp2shell-bounty-v21-wide" ||
+        id === "wp2shell-bounty-v22-wide"
       )
         expect(text).toContain("one specialist agent per sink class");
       else expect(text).toMatch(/Lead|Finding/);
@@ -581,11 +585,69 @@ describe("WordPress discovery prompt assets", () => {
     expect(current.text).toBe(expected);
     expect(paragraphs(current.text)).toHaveLength(paragraphs(previous).length);
     expect(current.text).not.toMatch(/judge|canary/);
+    // Archived on 2026-11-02 (ADR 0039 追記 21); the row stays for ledger matching.
     expect(
       WORDPRESS_DISCOVERY_PROMPTS.find(
         (row) => row.id === "wp2shell-bounty-v21-wide",
       ),
+    ).toMatchObject({ status: "archived", outputContract: "v4" });
+    expect(current.sectionDigests).toBeUndefined();
+  });
+
+  it("makes v22-wide the v21-wide text with the row-count closing rule deleted and nothing added (ADR 0049 決定 E、ADR 0039 追記 21)", async () => {
+    const paragraphs = (text: string) => text.trim().split(/\n\s*\n/);
+    const previous = (
+      await loadWordPressDiscoveryAsset("wp2shell-bounty-v21-wide")
+    ).text;
+    const current = await loadWordPressDiscoveryAsset(
+      "wp2shell-bounty-v22-wide",
+    );
+    const removed = [
+      "\n\nKeep in the registry, for each sink class, how many rows of the hook listing at /workspace/research/tools/hooks.tsv its specialists have read and how many remain. Do not close while any sink class has rows remaining.",
+      "; the hook listing named below is the one it saves",
+      "no sink class has rows remaining, or when ",
+      ", whichever comes first",
+    ];
+    let expected = previous;
+    for (const passage of removed) {
+      expect(expected.split(passage)).toHaveLength(2);
+      expected = expected.replace(passage, "");
+    }
+    expect(current.text).toBe(expected);
+    expect(paragraphs(current.text)).toHaveLength(
+      paragraphs(previous).length - 1,
+    );
+    expect(current.text).not.toMatch(/hooks\.tsv|rows remaining|named below/);
+    // Every word of v22-wide is a word of v21-wide: deletions only (ADR 0045).
+    const words = (text: string) =>
+      new Set(text.split(/[\s.,;:()]+/).filter((word) => word !== ""));
+    const before = words(previous);
+    for (const word of words(current.text)) expect(before).toContain(word);
+    // The resume directive still opens the last paragraph (ADR 0039).
+    const stop = paragraphs(current.text).at(-1)!;
+    expect(stop).toMatch(/^Stop when the Trial wall is reached\. /);
+    expect(stop).toContain(
+      "Reporting zero candidates after bounded closure is a normal ending.",
+    );
+    // The skill paragraph is otherwise unchanged and still routes to the three skills.
+    const routing = paragraphs(current.text).find((paragraph) =>
+      paragraph.startsWith("Three skills are installed for this Trial"),
+    )!;
+    for (const skill of ["wbh-recon", "wbh-tools", "wbh-setup"])
+      expect(routing).toContain(skill);
+    expect(routing).toContain(
+      "under /workspace/research/tools, and cross-checks them against the map. Read wbh-setup",
+    );
+    expect(
+      WORDPRESS_DISCOVERY_PROMPTS.find(
+        (row) => row.id === "wp2shell-bounty-v22-wide",
+      ),
     ).toMatchObject({ status: "current", mode: "wide", outputContract: "v4" });
+    expect(
+      WORDPRESS_DISCOVERY_PROMPTS.find(
+        (row) => row.id === "wp2shell-bounty-v22-wide",
+      ),
+    ).not.toHaveProperty("fragments");
     expect(current.sectionDigests).toBeUndefined();
   });
 
@@ -1331,7 +1393,8 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v18-wide" ||
         id === "wp2shell-bounty-v19-wide" ||
         id === "wp2shell-bounty-v20-wide" ||
-        id === "wp2shell-bounty-v21-wide"
+        id === "wp2shell-bounty-v21-wide" ||
+        id === "wp2shell-bounty-v22-wide"
       ) {
         // v5 leaves attacker positions and in-scope effects to the supplied
         // trust boundary and Programme Boundary sections (owner decision, 2026-10-16).

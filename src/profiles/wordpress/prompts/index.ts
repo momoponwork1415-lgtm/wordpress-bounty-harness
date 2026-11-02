@@ -468,15 +468,33 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:211c22a613c5440946944d4590c3bde27bfe8e8665fb755b4ae8e7623d4d1398",
     outputContract: "v4",
-    status: "current",
-    mode: "wide",
+    status: "archived",
     // v20-wide with two sentences removed and nothing added (owner decision
     // 2026-11-01 "すべて推奨で", ADR 0039 addendum 19; ADR 0045 allows deletions
     // only): the end of the first paragraph that named the Harness-owned
     // deterministic judge and the nonce canary, and the end of the Root
     // paragraph that said the Harness judge decides runtime confirmation. The
     // judge and canary were deleted in ADR 0040; the sentences described a
-    // Harness that no longer exists.
+    // Harness that no longer exists. Archived on 2026-11-02 when v22-wide
+    // removed the row-count closing rule (addendum 21); kept for the digests
+    // of the production Trials it ran.
+  },
+  {
+    id: "wp2shell-bounty-v22-wide",
+    digest:
+      "sha256:7d7481e6f6e04ce15e1d47dfad687ef26abc2d68240c94121ee2468b5ce4147f",
+    outputContract: "v4",
+    status: "current",
+    mode: "wide",
+    // v21-wide with three deletions and nothing added (ADR 0049 decision E,
+    // ADR 0039 addendum 21; ADR 0045 allows deletions only): the whole
+    // registry paragraph that counted the rows of the hook listing per sink
+    // class and forbade closing while rows remained, the clause of the skill
+    // paragraph that pointed at that listing, and the row-count half of the
+    // stop paragraph, which now reads "Stop when the Trial wall is reached."
+    // Production v21-wide Roots satisfied the row rule by classifying rows and
+    // closed at 11 to 47 minutes; the closing condition lives in the skills
+    // (wbh-recon step 9) and the Trial wall.
   },
   {
     id: "wp2shell-whitebox-v1.7",

@@ -351,3 +351,24 @@ v20-wide（追記 18）は v19-wide の文を消さずに保ったので、1 段
 - 床の runner（`minimum-active-runner.ts`、再開段落）は消さない。床 1 以上の設定と、台帳にある床付きの過去 Trial の再開のために残す。消すのは、床を使う設定が無いことを数字で見てから。
 - `deep` と `wide` の差は目的文だけになった。mode を 1 つに畳むかは別の問い。
 - 消し方: 定数を `deep: 60` に戻し、SPEC 第 6 節と AGENTS.md の該当文を戻す。
+
+## 2026-11-02 追記 21: v21-wide から行数で閉じる規則を消した v22-wide を `wide` の current にする（消すだけ、ADR 0049 決定 E）
+
+v19-wide の追記 16 で入れた停止規則は、登録簿に sink 種ごとの `hooks.tsv` の読了行数と残り行数を保ち、行が残る間は閉じないというものだった。本番の v21-wide の Trial では、Root はこの規則を行を分類した時点で満たし、11〜47 分で閉じ、Lab の使用は 0〜3 回だった（ADR 0043 の 2026-11-01 の 10 Trial でも、どの登録簿も全行を「読了 / 残 0」と記録して中央値 16 分で閉じている）。行数は読んだ量ではなく分類した量を数えるので、早く閉じる癖を止めていない。所有者が 2026-11-02 に承認した [ADR 0049](0049-lab-resident-exploration.md) の決定 E は「目的文の手順段落の削除」を含む。終わってよいかの判断は、スキル `wbh-recon` v3 の手順 9（ADR 0043 追記 4）と Trial の wall に移っている。
+
+決定:
+
+- `wp2shell-bounty-v22-wide` を `wide` の `current` にする。本文は 1 file（`prompts/wp2shell-bounty-v22-wide.md`）で、v21-wide から次の 3 か所を消しただけである。語は足していない。digest は `sha256:7d7481e6f6e04ce15e1d47dfad687ef26abc2d68240c94121ee2468b5ce4147f`、契約は v4、11 段落。差分と日本語訳は [review 文書](../reviews/2026-11-02-objective-v22-wide.md) にある。
+  1. 11 段落目の全体「Keep in the registry, for each sink class, how many rows of the hook listing at /workspace/research/tools/hooks.tsv its specialists have read and how many remain. Do not close while any sink class has rows remaining.」
+  2. 10 段落目（スキルへの routing）の節「; the hook listing named below is the one it saves」。文は「/workspace/research/tools, and cross-checks them against the map.」で終わる。
+  3. 最終段落の冒頭文のうち「no sink class has rows remaining, or when 」と「, whichever comes first」。冒頭文は「Stop when the Trial wall is reached.」になる。段落の残りは変えない。最終段落は引き続き「Stop when」で始まり、再開段落の規則（本 ADR の帰結、`src/cli/wordpress.ts` の `WORDPRESS_RESUME_PARAGRAPH_PREFIX`）を満たす。
+- v21-wide は `archived` にして `mode` を外す。本番の Trial を走らせた版なので、本文と digest は登録簿に残し、台帳の `promptVariant` / `promptDigest` の照合にだけ使う。campaign 設定で `promptId: wp2shell-bounty-v21-wide` を名指すと、v15-wide などの旧版と同じく、設定の検査（`runnablePrompt` の enum）で拒否される。
+- `src/profiles/wordpress/policy/campaign.json` と `examples/campaign-wide-20.json` の `promptId` を v22-wide にする。`discovery.skills` の名指しは変えない。
+- ADR 0045 の凍結 5 の第 5 項「消す方向にしか触らない」の範囲内の変更である。11 月の設計変更としては ADR 0049 の 1 まとまりに入る。
+- Harness の code は変えない。登録簿の行と設定 file の id だけを変える。
+
+最終段落に残る「Reaching either bound」「the registry with those counts」「the rows and entry points left unread」は、消した規則を指していた語である。語を足さずに直せないので残した。Root は登録簿の数と読み残しを報告する文として読む。
+
+測った数字: 未計測。本番で v22-wide の Trial を v21-wide の Trial と並べる（[measurement.md](../agents/measurement.md) 5b）。削除のみなので bench は組まない。agent に渡る文章なので `owner-approved` が要る。
+
+消し方: v22-wide の行と file を消し、v21-wide の行を `current`（`mode: "wide"`）に戻し、2 つの campaign 設定の `promptId` を戻す。走った後なら v22-wide の行を `archived` にして本文を照合用に残す。

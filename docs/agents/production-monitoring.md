@@ -38,7 +38,7 @@ cd /home/dev/wordpress-bounty-harness-prod7 && node dist/cli/main.js --state ~/.
 5〜10 分おきに次を見る。
 
 1. **選定**: 選ばれた slug と版、インストール数、更新日、初回 / 版上昇の理由、除外理由の件数。選定レポートは `target-selected` の artifact digest から Private Evidence を辿る。読むのは slug・版・数字だけ。
-2. **Trial**: `discovery-run-started` の prompt 版が mode の現行版（`deep` は v11、`wide` は v21-wide。2026-11-01 以降、比較候補は無い）か、同時に走る Root の数、Root ごとの子の数、wall、観測値（読んだ file 数、token）。2026-11-01 の追記 19 で、v20-wide から判定器と canary の古い 2 文を消した v21-wide を current にし、v20-wide は archived にした。
+2. **Trial**: `discovery-run-started` の prompt 版が mode の現行版（`deep` は v11、`wide` は v22-wide。2026-11-01 以降、比較候補は無い）か、同時に走る Root の数、Root ごとの子の数、wall、観測値（読んだ file 数、token）。2026-11-01 の追記 19 で、v20-wide から判定器と canary の古い 2 文を消した v21-wide を current にし、v20-wide は archived にした。2026-11-02 の追記 21 で、v21-wide から hooks.tsv の行数で閉じる規則を消した v22-wide を current にし、v21-wide は archived にした。
 3. **失敗**: provider 429（`provider-limited`）、`provider-cyber-policy` の拒否、`run-failed`、schema error、停滞（終了 event が無く出力も 30 分以上止まる run。2026-10-17 は websocket 426 の後に無言で止まり wall も発火しなかった）。host の memory（`free -g`）と container 数（`docker ps --format '{{.Names}}'` の `wbh-`）。
 4. **Finding**: 件数だけ。category 別、`finding-parked` か対象範囲内か。本文、payload、path、証拠は読まない・引用しない。
 5. **runner の停止**: `stopped(<理由>)` になったら理由と直前の例外を記録する。再起動はしない。

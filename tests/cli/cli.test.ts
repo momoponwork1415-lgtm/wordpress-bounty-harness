@@ -3060,7 +3060,7 @@ describe("harness CLI vertical slice", () => {
       wordpressCampaignConfigSchema.parse({ ...base, discovery: wide }),
     ).toMatchObject({
       discovery: { mode: "wide", minimumActiveMinutes: 0 },
-      promptId: "wp2shell-bounty-v21-wide",
+      promptId: "wp2shell-bounty-v22-wide",
       runWallTimeMinutes: 120,
     });
     expect(
@@ -3073,19 +3073,23 @@ describe("harness CLI vertical slice", () => {
       wordpressCampaignConfigSchema.parse({
         ...base,
         discovery: wide,
-        promptId: "wp2shell-bounty-v21-wide",
+        promptId: "wp2shell-bounty-v22-wide",
         runWallTimeMinutes: 20,
       }).runWallTimeMinutes,
     ).toBe(20);
     // An archived version cannot be named (ADR 0039 addendum 18: no wide
-    // candidate since 2026-11-01).
-    expect(() =>
-      wordpressCampaignConfigSchema.parse({
-        ...base,
-        discovery: wide,
-        promptId: "wp2shell-bounty-v15-wide",
-      }),
-    ).toThrow();
+    // candidate since 2026-11-01; addendum 21: v21-wide retired on 2026-11-02).
+    for (const archived of [
+      "wp2shell-bounty-v15-wide",
+      "wp2shell-bounty-v21-wide",
+    ])
+      expect(() =>
+        wordpressCampaignConfigSchema.parse({
+          ...base,
+          discovery: wide,
+          promptId: archived,
+        }),
+      ).toThrow();
     // Phase D1: an attached exploration Lab, its reset budget defaulting to 2.
     expect(
       wordpressCampaignConfigSchema.parse({
@@ -3193,7 +3197,7 @@ describe("harness CLI vertical slice", () => {
     expect(started[0]?.event.type).toBe("discovery-run-started");
     if (started[0]?.event.type === "discovery-run-started")
       expect(started[0].event.configuration).toMatchObject({
-        promptVariant: "wp2shell-bounty-v21-wide",
+        promptVariant: "wp2shell-bounty-v22-wide",
         mode: "wide",
         wallMinutes: 120,
         minimumActiveMinutes: 0,
@@ -4414,7 +4418,7 @@ describe("harness CLI vertical slice", () => {
       refusalSession: true,
       zeroFindings: true,
       config: {
-        promptId: "wp2shell-bounty-v21-wide",
+        promptId: "wp2shell-bounty-v22-wide",
         discovery: { lab: "none", mode: "wide", maxChildren: 3 },
       },
     });
@@ -4447,16 +4451,16 @@ describe("harness CLI vertical slice", () => {
     const original = starts[0];
     if (original?.type !== "discovery-run-started")
       throw new Error("Missing recorded run");
-    const v20 = await loadWordPressDiscoveryAsset("wp2shell-bounty-v21-wide");
+    const v22 = await loadWordPressDiscoveryAsset("wp2shell-bounty-v22-wide");
     expect(original.configuration).toMatchObject({
-      promptVariant: "wp2shell-bounty-v21-wide",
-      promptDigest: v20.digest,
+      promptVariant: "wp2shell-bounty-v22-wide",
+      promptDigest: v22.digest,
     });
     expect(starts[1]).toMatchObject({
       resumesRun: first.runId,
       configuration: {
-        promptVariant: "wp2shell-bounty-v21-wide",
-        promptDigest: v20.digest,
+        promptVariant: "wp2shell-bounty-v22-wide",
+        promptDigest: v22.digest,
         maxChildren: 3,
       },
     });
