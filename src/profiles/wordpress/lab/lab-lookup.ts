@@ -208,11 +208,12 @@ export async function findInExplorationLab(
         database.push({
           table,
           column,
+          // A table without a primary key selects the literal NULL, which `--batch` prints as "NULL".
           keys: [
             ...new Set(
               matched
                 .map((row) => row[0] ?? "")
-                .filter((value) => value !== ""),
+                .filter((value) => value !== "" && value !== "NULL"),
             ),
           ],
         });

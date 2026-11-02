@@ -188,7 +188,11 @@ describe("findInExplorationLab", () => {
       if (sql.includes("information_schema.COLUMNS"))
         return ok("wp_options\toption_value\n");
       if (sql.includes("information_schema.KEY_COLUMN_USAGE")) return ok("");
-      return ok(Array.from({ length: 20 }, () => "\\N\t1").join("\n") + "\n");
+      return ok(
+        Array.from({ length: 20 }, (_, i) =>
+          i % 2 ? "NULL\t1" : "\\N\t1",
+        ).join("\n") + "\n",
+      );
     });
     const found = await findInExplorationLab(cut.lab, "1234567890");
     expect(found.status).toBe("found");
