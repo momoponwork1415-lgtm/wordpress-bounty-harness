@@ -54,3 +54,7 @@ Lead は「筋はよいが 1 歩足りない」ルートで、同じ固定ソー
 ## 2026-11-01 追記 2: 探索 Lab の通常利用はスキルが作る（#749）
 
 第 2 Trial の探索 Lab は Harness の setup（core install、plugin の有効化、基準 `hosting-default-v3`、account、初期記事）までで止まる。plugin の通常利用（初回設定、object、公開ページ、訪問者や低権限者の data）は、探索スキル `wbh-setup-v1`（ADR 0043 追記 2）を `discovery.skills` に名指しして agent に作らせる。Harness は `## Lab` 節と setup を変えない。reset は従来どおり Harness の setup だけに戻すので、作り直しも agent の仕事である。消し方は ADR 0043 追記 2 と同じ。
+
+## 2026-11-02 追記 3: ランナーが第 2 Trial を自動で組む（ADR 0049 決定 C）
+
+「自動の追加 Trial ではなく、名指しでだけ走る」は ADR 0049 の決定 C で例外を持つ。campaign 設定の `discovery.followUp` が `leads`（`lab: attached` のときの既定）なら、連続ランナーは、終了した Trial に Lead が 1 件以上あり同じ Snapshot に第 2 Trial が無いとき、新しい対象より先にこの ADR の第 2 Trial を 1 回組む。入力と節はこの ADR のままで、Harness は Lead の件数と台帳順の id（先頭 8 件）しか読まない。台帳では `configuration.followUp` の有無で名指しの第 2 Trial と分ける。同じ Snapshot に同じ代表の組で 2 回目を走らせない規則（`prior-leads-already-run`）はそのまま上限で、拒否は `target-skipped` の `follow-up-refused` に残る。詳細は [ADR 0049 の追記 2](0049-lab-resident-exploration.md#2026-11-02-追記-2-lead-が残った-trial-の第-2-trial-をランナーが自動で組む793-の-pr-3決定-c)。

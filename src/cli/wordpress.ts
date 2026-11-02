@@ -99,6 +99,7 @@ import {
 import { unboundBatch } from "./continuous.js";
 import {
   PriorLeadsRefusal,
+  resolveWordPressFollowUp,
   resolveWordPressPriorLeads,
   type ResolvedPriorLeads,
 } from "./wordpress-prior-leads.js";
@@ -110,6 +111,7 @@ import {
   DISCOVERY_RUN_MEMORY_MIB,
   openWordPressCampaignSession,
   readWordPressCampaignConfig,
+  wordPressFollowUpPolicy,
   readWordPressCampaignPolicy,
   wordPressRuntimeCaps,
   wordPressRuntimeCeilings,
@@ -854,9 +856,10 @@ async function planWordPressDiscovery(
   const maxRuns = repeat;
   const stopRules = { maxRuns, noFindingRuns: 1 };
   const runParameters = wordPressRunParameters(config, runtime.runtimeProfile);
-  // ADR 0044: a named second Trial receives the section its configuration resolved.
+  // ADR 0044: a second Trial (named, or scheduled by the runner under ADR
+  // 0049 C) receives the section its campaign resolved for this Snapshot.
   const prior = context.priorLeads?.get(snapshot.digest);
-  if ((config.discovery.priorLeads === undefined) !== (prior === undefined))
+  if ((context.priorLeads === undefined) !== (prior === undefined))
     throw new Error(
       "The Snapshot is not one of the campaign's prior-leads targets",
     );
@@ -953,6 +956,9 @@ async function planWordPressDiscovery(
             ? {}
             : { skills: skills.map(({ id, digest }) => ({ id, digest })) }),
           ...(prior === undefined ? {} : { priorLeads: prior.configuration }),
+          ...(prior?.followUp === undefined
+            ? {}
+            : { followUp: prior.followUp }),
           ...(priorResearch === undefined
             ? {}
             : { priorResearch: priorResearch.configuration }),
@@ -1251,6 +1257,8 @@ async function resumeWordPressRun(
   }
   // ADR 0044: a segment of a second Trial receives the same `## Prior leads`
   // section, rebuilt from the campaign configuration and checked by digest.
+  // A follow-up Trial the runner scheduled (ADR 0049 C) has no configuration
+  // naming it: its section is rebuilt from the representatives it recorded.
   let priorLeadsSection: string | undefined;
   const recordedPriorLeads = started.configuration.priorLeads;
   if (
@@ -1261,7 +1269,15 @@ async function resumeWordPressRun(
     try {
       [resolved] = await resolveWordPressPriorLeads(
         state,
-        config.discovery.priorLeads?.targets ?? [],
+        started.configuration.followUp !== undefined &&
+          recordedPriorLeads !== undefined
+          ? [
+              {
+                snapshotDigest: started.snapshotDigest,
+                leadIds: [...recordedPriorLeads.leadIds],
+              },
+            ]
+          : (config.discovery.priorLeads?.targets ?? []),
         input.campaignId,
         started.snapshotDigest,
       );
@@ -1631,16 +1647,31 @@ async function runWordPressCampaign(
       "prior-leads-repeat",
       "a prior-leads campaign runs one Trial per Snapshot; drop --repeat",
     );
+  // ADR 0049 C: a follow-up campaign the runner scheduled runs the listed
+  // Snapshots as second Trials; it needs the Lab a second Trial has and
+  // cannot also name targets.
+  if (input.followUp !== undefined) {
+    if (config.discovery.priorLeads !== undefined)
+      throw new Error(
+        "A follow-up campaign cannot also name discovery.priorLeads",
+      );
+    if (config.discovery.lab.mode !== "attached")
+      throw new Error(
+        "A follow-up Trial runs with discovery.lab attached (ADR 0049)",
+      );
+  }
   // ADR 0044: a named second Trial runs on the Snapshots its configuration
   // names, resolved and checked before any Lab; selection does not run.
   const priorLeads =
-    config.discovery.priorLeads === undefined
-      ? undefined
-      : await resolveWordPressPriorLeads(
-          state,
-          config.discovery.priorLeads.targets,
-          input.campaignId,
-        );
+    input.followUp !== undefined
+      ? await resolveWordPressFollowUp(state, input.campaignId, input.followUp)
+      : config.discovery.priorLeads === undefined
+        ? undefined
+        : await resolveWordPressPriorLeads(
+            state,
+            config.discovery.priorLeads.targets,
+            input.campaignId,
+          );
   const policy = priorLeads === undefined ? await session.policy() : undefined;
   const reservedSelections =
     priorLeads !== undefined
@@ -2170,6 +2201,9 @@ export function createWordPressCliProfile(
       undefined
         ? undefined
         : "continuous run does not run discovery.priorLeads; use campaign run (ADR 0044)",
+    // ADR 0049 C: absent `discovery.followUp` follows the Lab.
+    followUpPolicy: async (configPath) =>
+      wordPressFollowUpPolicy(await readWordPressCampaignConfig(configPath)),
     targetCeiling: async (configPath) =>
       (await readWordPressCampaignConfig(configPath)).resources
         .maxConcurrentTargets,

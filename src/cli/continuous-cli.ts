@@ -326,6 +326,9 @@ export async function continuousCommand(
         configPath,
         selectionPolicyPath: selectionPath,
       }),
+    ...(profile.followUpPolicy === undefined
+      ? {}
+      : { followUpPolicy: () => profile.followUpPolicy!(configPath) }),
     discardStaleSelection: async (campaignId) =>
       (await profile.discardStaleSelection?.(state, {
         campaignId,

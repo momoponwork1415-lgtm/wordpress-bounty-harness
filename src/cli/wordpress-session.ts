@@ -210,6 +210,13 @@ const commonCampaignFields = {
        * nothing.
        */
       priorResearch: z.enum(["none", "same-target"]).default("none"),
+      /**
+       * ADR 0049 C: whether the continuous runner schedules one follow-up
+       * Trial (ADR 0044's second Trial, with Lab) for an ended Trial that left
+       * Leads. Absent, it follows the Lab: `leads` with `lab: attached`,
+       * `none` with `lab: none` (`wordPressFollowUpPolicy`).
+       */
+      followUp: z.enum(["leads", "none"]).optional(),
     })
     .prefault({}),
   selectionPolicyPath: z.string().min(1).optional(),
@@ -284,6 +291,16 @@ export const wordpressCampaignConfigSchema = z
           message: "discovery.skills names each skill once",
         });
     }
+    if (
+      config.discovery.followUp === "leads" &&
+      config.discovery.lab.mode !== "attached"
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["discovery", "followUp"],
+        message:
+          "A follow-up Trial runs with discovery.lab attached (ADR 0049); name followUp none with lab none",
+      });
     const priorLeads = config.discovery.priorLeads;
     if (priorLeads !== undefined) {
       if (config.discovery.lab.mode !== "attached")
@@ -484,6 +501,20 @@ export type WordPressVerification = Verification<
 >;
 
 /** The campaign config file, validated; a budget below one discovery run stops here. */
+/**
+ * ADR 0049 C: whether the runner schedules follow-up Trials under this
+ * configuration. Absent `discovery.followUp` follows the Lab, so a campaign
+ * that names `lab: none` schedules none without naming it.
+ */
+export function wordPressFollowUpPolicy(
+  config: WordPressCampaignConfig,
+): "leads" | "none" {
+  return (
+    config.discovery.followUp ??
+    (config.discovery.lab.mode === "attached" ? "leads" : "none")
+  );
+}
+
 export async function readWordPressCampaignConfig(
   configPath: string,
 ): Promise<WordPressCampaignConfig> {

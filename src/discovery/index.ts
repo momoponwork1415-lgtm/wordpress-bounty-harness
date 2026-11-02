@@ -6,6 +6,7 @@ export {
   type CampaignInputV1,
   type PlannedDiscoveryRun,
   type PriorLeadsConfiguration,
+  type FollowUpConfiguration,
   type PlannedTrial,
 } from "./campaign.js";
 export {
