@@ -12,7 +12,7 @@
 
 ## 何を変えるか（数字）
 
-bench h30（#726、2026-11-02）の外れ 35 記録の形は、最終 HTML を書き換える最適化系 12、訪問者の値が管理画面や JavaScript の表で描画される 12、署名・token・権限の論理 9、保存→再利用の形の崩れ 3、連結 SQL の Lead 止まり 2。当たった 69 記録は「要求の値が handler の中で直接 sink に届く」形だった。本番の Lead の `missingEdge` は producer が Lead 入力 Trial で 124 / 168、v21 第 1 Trial で 86 / 128。いまの agent は「sink はどこか」を探す。外れた形に共通するのは、sink ではなく「コードが暗黙に頼っている仮定が破れている」ことなので、仮定を表にして強制されていない行を読む手順を 1 本にした。
+bench h30（#726、2026-11-02）の外れ 45 記録（要求上限で止まった 3 Trial を含む）の形は、最終 HTML を書き換える最適化系 12、訪問者の値が管理画面や JavaScript の表で描画される 14、署名・token・権限の論理 11、保存→再利用の形の崩れ 6、連結 SQL の Lead 止まり 2。機械の sink 一覧が鍵の関数を名指していたのは 45 件中 10 件だけで、残りは列挙できる sink 呼び出しを持たない形である（#786 の切り分け comment）。当たった 69 記録は「要求の値が handler の中で直接 sink に届く」形だった。本番の Lead の `missingEdge` は producer が Lead 入力 Trial で 124 / 168、v21 第 1 Trial で 86 / 128。いまの agent は「sink はどこか」を探す。外れた形に共通するのは、sink ではなく「コードが暗黙に頼っている仮定が破れている」ことなので、仮定を表にして強制されていない行を読む手順を 1 本にした。
 
 ## 全文（英語、staging される byte そのもの）
 
@@ -118,7 +118,7 @@ Trial に Lab があり、単位の setup が /workspace/research/lab-setup.md �
 | 要素 | 本文の場所 | 出典 |
 | --- | --- | --- |
 | スキル 1 本 1 手順で「反証」を受け持つ。どの仮定が大事か、対象範囲内かは書かない | 冒頭の段落 | ADR 0043「後続は … 反証を、それぞれ 1 本ずつ PR にする」「本文の規則: 手順だけを書く」。所有者決定 2026-11-02「推奨で」（案 A） |
-| sink の名前ではなく「コードが頼っている仮定」を読む。4 つの例（保存先の書き手、署名の覆う欄、書き換えが保つ境界、保存の形） | 冒頭の段落、手順 2 の 6 種 | bench h30 の外れ 35 記録の形（#726 の 2026-11-02 comment、#786「背景」）: 最適化系 12、遠い描画先 12、論理 9、保存→再利用 3 |
+| sink の名前ではなく「コードが頼っている仮定」を読む。4 つの例（保存先の書き手、署名の覆う欄、書き換えが保つ境界、保存の形） | 冒頭の段落、手順 2 の 6 種 | bench h30 の外れ 45 記録の形（#726 の 2026-11-02 comment、#786「背景」と訂正 comment）: 最適化系 12、遠い描画先 14、論理 11、保存→再利用 6 |
 | 固定ソースの置き場、記憶ではなく供給ソースを読む、/workspace/research の共有 | Inputs | `wbh-recon-v3` Inputs、`wbh-tools-v1` Inputs（同じ文） |
 | 地図の節・Wrappers 表・共有の門の関数・Corrections を先に読む。単位は手順 8 の渡し方のまま | Inputs、手順 1 | `wbh-recon-v3` 手順 8「a subsystem with its entries, its shared helpers and its stores is one unit … reads the map before the source」 |
 | `## Prior leads` があればその lead を先に取り、2 つの場所と文から始める | 手順 1 | ADR 0044「節に入れるのは … file と関数の名前と … 示せなかったことの一文」。本番の Lead の producer 止まり 124 / 168（#715 の 2026-11-02 comment） |
@@ -126,13 +126,13 @@ Trial に Lab があり、単位の setup が /workspace/research/lab-setup.md �
 | Reach の行: 役割、ログイン、nonce / token、要求元 | 手順 2 | `wbh-recon-v3` 手順 4「capability checks, nonce or token checks, login checks, ownership checks, and where each check sits」 |
 | 検査が置かれた場所と覆う範囲（共有 wrapper / handler 内 / handler 任せ） | 手順 2 末尾 | `wbh-recon-v3` 手順 4「A check in a shared registration wrapper covers every entry behind the wrapper; …」 |
 | Store の行: option、meta、custom table、transient、file、外部サービスの data。読み戻しの場所 | 手順 2 | `wbh-recon-v3` 手順 5「list what the plugin stores and where … Record where stored values are read back out and rendered」 |
-| Transformation の行: 出力バッファの filter、minifier、placeholder、正規表現、serializer、template engine | 手順 2 | bench h30 の最適化系 12 記録と保存→再利用 3 記録（#786「背景」）。`wbh-recon-v3` 手順 5「serialization helpers, and the plugin's own escaping or validation functions」 |
-| Proof の行: 署名・token・鍵の比較が覆う欄と覆わない欄、再提出 | 手順 2・3 | bench h30 の論理系 9 記録（#786「背景」）。`wbh-recon-v3` 手順 4「nonce or token checks」 |
+| Transformation の行: 出力バッファの filter、minifier、placeholder、正規表現、serializer、template engine | 手順 2 | bench h30 の最適化系 12 記録と保存→再利用 6 記録（#786「背景」）。`wbh-recon-v3` 手順 5「serialization helpers, and the plugin's own escaping or validation functions」 |
+| Proof の行: 署名・token・鍵の比較が覆う欄と覆わない欄、再提出 | 手順 2・3 | bench h30 の論理系 11 記録（#786「背景」）。`wbh-recon-v3` 手順 4「nonce or token checks」 |
 | State の行: 設定、別のプラグイン、mode、順序。設定に依存する行を落とさない | 手順 2・3 | 所有者決定 2026-10-26「探索は広く出し、落とすのはレビュー側で行う」（AGENTS.md）。出力契約 v4 の設定の前提の欄（ADR 0038 追記 15。欄の名前は本文に写さない） |
 | helper は名前でなく本体で、扱う形についてだけ強制する | 手順 2 末尾 | `wbh-recon-v3` 手順 4「State what you read, not what the plugin's comments or option names claim」、`wbh-trace` 下書き手順 5「Read the body of each function … rather than relying on its name」 |
 | 書き手側へ遡る: 保存先の書き手と引数の供給元を全部並べ、各 entry の門を記録する | 手順 3 | `wbh-trace` 下書き手順 3「list every caller that reaches it … follow each caller back to the entries that supply its arguments」。本番 Lead の `missingEdge` producer（#786） |
 | 読み手側へ進む: 描画、JavaScript、file、query、include、unserialize、比較 | 手順 3 | `wbh-trace` 下書き手順 2・4（write → read-back、JavaScript が置く最後の hop）、`wbh-recon-v3` 手順 6 |
-| 訪問者のヘッダ、フォーム、comment、profile の欄、外部サービスの data も書き手 | 手順 3 | bench h30 の遠い描画先 12 記録（#786）。所有者決定 2026-10-26 の追記「外部サービス由来の経路は本物になり得る」（AGENTS.md、ADR 0046） |
+| 訪問者のヘッダ、フォーム、comment、profile の欄、外部サービスの data も書き手 | 手順 3 | bench h30 の遠い描画先 14 記録（#786）。所有者決定 2026-10-26 の追記「外部サービス由来の経路は本物になり得る」（AGENTS.md、ADR 0046） |
 | 一覧の行は読むまでは hop でなく読む場所 | 手順 3 冒頭 | `wbh-tools-v1` 手順 5「A match in either list is a place to read, not a conclusion」、`wbh-trace` 下書き手順 3 |
 | Lab での試行は setup 後、行が名指す位置から。観測は到達を示すが hop は要る | 手順 3 末尾 | ADR 0044「Lab を付けるのは、到達性を agent 自身が確かめる場を与えるためで、判定は人間に残す」、`wbh-setup-v1`（lab-setup.md の記録、setup 後に要求を送る） |
 | 行の 3 状態（enforced / not enforced / open）、推測に印、file と行の無い行は未決着 | 手順 4 | `wbh-recon-v3` 手順 9 の (2)「決着（file と行）か、供給ソースでは決着できない（足りないもの）」、手順 7「mark anything inferred as inferred」 |
