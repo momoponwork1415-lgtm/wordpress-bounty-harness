@@ -83,8 +83,17 @@ export { runParametersSection, type RunParameters } from "./run-parameters.js";
 export { priorLeadsSection, type PriorLead } from "./prior-leads.js";
 export {
   MAX_PRIOR_RESEARCH_FILE_BYTES,
+  MAX_PRIOR_RESEARCH_FILES,
+  MAX_PRIOR_RESEARCH_TOTAL_BYTES,
+  PRIOR_RESEARCH_DIRECTORIES,
   PRIOR_RESEARCH_DIRECTORY,
   PRIOR_RESEARCH_FILE_NAMES,
+  PRIOR_RESEARCH_NAME,
+  PRIOR_RESEARCH_STORES_FILE,
+  capPriorResearch,
+  isPriorResearchName,
+  isPriorResearchPath,
+  priorResearchOrder,
   priorResearchPath,
   priorResearchSection,
   type PriorResearchFile,

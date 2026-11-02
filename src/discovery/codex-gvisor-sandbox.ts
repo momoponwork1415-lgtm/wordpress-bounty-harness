@@ -48,6 +48,12 @@ import type {
   CodexSandboxResumeSeed,
   CodexSandboxResult,
 } from "./codex-native-agent-runtime.js";
+import {
+  MAX_PRIOR_RESEARCH_FILE_BYTES,
+  MAX_PRIOR_RESEARCH_FILES,
+  MAX_PRIOR_RESEARCH_TOTAL_BYTES,
+  isPriorResearchPath,
+} from "./prior-research.js";
 import { admittedStagedSkills, stageSkills } from "./skill-definition.js";
 import { MINIMUM_ACTIVE_RUNNER_SOURCE } from "./minimum-active-runner.js";
 import {
@@ -84,8 +90,6 @@ const MAX_SESSION_HEADER_BYTES = 64 * 1024;
 const MAX_SESSION_BYTES = 60 * 1024 * 1024;
 const MAX_CAPTURE_BYTES = 300 * 1024 * 1024;
 const MAX_RESEARCH_BYTES = 8 * 1024 * 1024;
-/** ADR 0048: a passed prior file is whole and at most this size. */
-const MAX_PRIOR_RESEARCH_FILE_BYTES = 64 * 1024;
 const MAX_RESEARCH_ENTRIES = 256;
 const MAX_RESEARCH_DEPTH = 16;
 const MAX_RESEARCH_PATH_BYTES = 1024;
@@ -351,23 +355,29 @@ export function admittedResearchSeed(
   return researchBytes <= MAX_RESEARCH_BYTES;
 }
 
-/** ADR 0048: at most the two named files, each whole and bounded, under `prior/`. */
+/**
+ * ADR 0048 / ADR 0049 D: only names of the prior-research set, each whole and
+ * bounded, under `prior/`, within the total size and count.
+ */
 export function admittedPriorResearch(
   files: CodexSandboxResumeSeed["research"],
 ): boolean {
-  if (files.length === 0 || files.length > 2) return false;
+  if (files.length === 0 || files.length > MAX_PRIOR_RESEARCH_FILES)
+    return false;
   const paths = new Set<string>();
+  let total = 0;
   for (const file of files) {
     if (
-      !/^prior\/(?:recon-map|lab-setup)\.md$/.test(file.path) ||
+      !isPriorResearchPath(file.path) ||
       paths.has(file.path) ||
       file.content.byteLength === 0 ||
       file.content.byteLength > MAX_PRIOR_RESEARCH_FILE_BYTES
     )
       return false;
     paths.add(file.path);
+    total += file.content.byteLength;
   }
-  return true;
+  return total <= MAX_PRIOR_RESEARCH_TOTAL_BYTES;
 }
 
 /** Writes restored notes into the fresh, empty notes directory; `wx` refuses any pre-existing file. */

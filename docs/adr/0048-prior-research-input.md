@@ -47,3 +47,17 @@ amends: 0012（探索へ渡す入力の範囲）、0044（自分の過去 Trial 
 ## 消し方
 
 `discovery.priorResearch`、`src/discovery/prior-research.ts`、`src/cli/wordpress-prior-research.ts`、transport の `priorResearch`、sandbox の `prior/` の配置を revert する。台帳の `configuration.priorResearch` は読み続ける。この ADR と SPEC / AGENTS.md の例外の文を消す。
+
+## 2026-11-02 追記: 渡す file を広げ、保存先の表を足し、別の台帳の研究を取り込む（ADR 0049 決定 D、#793 の PR 4）
+
+所有者が 2026-11-02 に承認した Lab 常設探索（ADR 0049）の決定 D を実装した。問いは「同じ plugin の別の版で終わった Trial の研究 file を次の Trial に渡し、別の台帳（bench）の研究も取り込めるようにすると、新版 Trial の Root 時間が短くなり Finding が落ちないか」である。
+
+- **渡す file。** `recon-map.md` と `lab-setup.md` に加えて、封じた研究 directory にあれば `REGISTRY.md`、`assumptions/*.md`（`wbh-falsify` v1 / v2 の仮定の表）、`walks/*.md`（v2 の歩き）を渡す。directory は 1 段だけで、名前は `[A-Za-z0-9][A-Za-z0-9._-]*.md` に限る。`tools/*.tsv`、`traces/*.md`、sink ごとの route file（`MERGED.md` など）は従来どおり渡さない。1 file 64 KiB・完全・UTF-8 の規則は変えない。
+- **総量の上限。** 全部で 2 MiB、64 file まで。超えたら大きい file から順に外す（同じ大きさなら固定順で後ろのもの）。外した file は名前だけを節の末尾の 1 行（`- Withheld for size, not placed: ...`）と台帳の `configuration.priorResearch.withheld` に残す。
+- **保存先の表 `stores.json`。** 元 Trial の探索 Lab が封じた `exploration-lab.json` の `lookupLog` から、Harness が答えの記録を型どおりに写す。答えた `find` ごとに `{ marker, database: [{ table, column }], files }`（主キーの値は落とす）、答えた `trace` ごとに `{ method, path, httpStatus, entryCount, files }`（entry に現れた plugin file の重複なしの列）。`sql` の答え、拒否と失敗、cookie、関数名は入れない。解釈はしない。**封じ直しではなく、渡す時点で導出する**: 研究 archive は runtime が Trial の終わりに封じ、Lab の記録は別に封じるので、archive に足すには封じ直しが要る。渡す時点に `state.store` の記録から作れば、封じ方は変わらず、同じ記録から同じ byte 列（canonical JSON）が出るので再開時の節の照合も成り立つ。表は `prior/stores.json` に置き、節では名前と大きさだけを述べる。
+- **別の台帳からの取り込み。** `research import --from <別の state dir> [--slug <slug>]` は、別の state の台帳と Private Evidence を読み取り専用で開き、研究 archive を封じた終了 Trial（不変条件 1 の範囲にあったもの。ADR 0044 と同じ判定）を見つけて、この台帳に `research-imported` を Trial ごとに 1 件足す。中身は `fromState`（basename だけ）、`fromCampaignId`、`fromRunId`、`targetId`、`targetVersion`、`sourceFinishedAt`、`researchDigest`、任意の `explorationLabDigest`。研究の本文は共有の work directory（`provider-attachments/research-<digest>`）に既にあるので、event を書く前にそこにあることを確かめ、無ければ 1 行記録して飛ばす。元 Trial に Lab の記録があれば、保存先の表をその場で作り、この state の Private Evidence に `research-stores` artifact として置いて event の `artifacts` で参照する（答えの本文は写さない。不変条件 8）。2 回目の取り込みは何も書かない（identity `research-imported:<fromState>:<fromRunId>`）。
+- **候補の順序。** 解決器は、この台帳の Trial と取り込んだ Trial を同じ候補として扱い、同じ Snapshot のものを除いて、終了時刻（`discovery-run-finished.occurredAt` / `sourceFinishedAt`）の新しい順に選ぶ。同時刻ならこの台帳の Trial を取る。渡したときは `configuration.priorResearch.sourceState` に元の state 名が入るので、取り込んだ研究を渡した Trial を台帳で分けられる。
+- **節の文。** 2026-11-01 の段落は変えない。file の行は従来の 2 行の形のまま、新しい file は `- /workspace/research/prior/<名前> (<bytes> bytes).` と path と大きさだけで並べ、外した file の 1 行を足した。説明の句は足していない。節の文は agent に渡るので `owner-approved` を要する（行の形は docs/reviews/2026-11-01-prior-research-section.md の追記にある）。
+- **計測。** bench の研究を本番に取り込み、同じ plugin の新版 Trial で Root の wall と F/Trial を、研究なしの Trial と比べる。数え方は [measurement.md](../agents/measurement.md) 5d にある。
+- **消し方。** 渡す file の集合を 2 つに戻す（`PRIOR_RESEARCH_FILE_NAMES` と `PRIOR_RESEARCH_DIRECTORIES`、`stores.json` の導出、総量の上限）。`research import` と `wordpress-research-import.ts`、profile の `importResearch` を消す。台帳の `research-imported`、`configuration.priorResearch.sourceState` / `withheld`、`research-stores` artifact は読み続ける。
+

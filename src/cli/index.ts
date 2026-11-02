@@ -314,6 +314,23 @@ export interface CliProfile {
       };
     },
   ): Promise<VerifyNextSummary | null>;
+  /**
+   * ADR 0049 D: admit another state's ended Trials with sealed notes as
+   * prior-research candidates of this ledger (`research import`); absent
+   * without a shared attachment store.
+   */
+  importResearch?(
+    state: CliState,
+    input: {
+      readonly fromStateDirectory: string;
+      readonly slug?: string;
+      log(line: string): void;
+    },
+  ): Promise<{
+    readonly imported: number;
+    readonly existing: number;
+    readonly skipped: number;
+  }>;
   /** The target's newest public version, observed once; absent without a host. */
   latestVersion?(
     state: CliState,
@@ -2587,6 +2604,29 @@ const COMMANDS: readonly Command[] = [
           `held  ${event.impact ?? "unclassified"}  ${candidate ?? "(candidate unavailable)"}  ${event.runId}#${event.candidateIndex}  issues: ${issues}  ${candidate === undefined ? "" : state.store.contentPath(candidate)}`.trimEnd(),
         ]);
       }
+      return 0;
+    },
+  }),
+  // ADR 0049 D: another ledger's sealed research as prior-research candidates here.
+  command({
+    name: "research import",
+    required: ["from"],
+    usage: ["research import --from <state dir> [--slug <slug>]"],
+    options: { from: STR, slug: STR },
+    handler: async ({ values, state, environment, io }) => {
+      if (environment.profile.importResearch === undefined)
+        throw new UsageError("This profile cannot import research");
+      const slug = values.slug;
+      if (slug !== undefined && !/^[a-z0-9][a-z0-9-]*$/.test(slug))
+        throw new UsageError("--slug must be a plugin slug");
+      const summary = await environment.profile.importResearch(state, {
+        fromStateDirectory: resolve(required(values.from, "from")),
+        ...(slug === undefined ? {} : { slug }),
+        log: (line) => io.stderr(line),
+      });
+      io.stdout(
+        `imported ${summary.imported}  existing ${summary.existing}  skipped ${summary.skipped}`,
+      );
       return 0;
     },
   }),

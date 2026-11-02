@@ -19,6 +19,10 @@ import {
 import { campaignInputV1Schema, type CampaignInputV1 } from "./campaign.js";
 import { isGvisorIsolation } from "./gvisor-container.js";
 import {
+  MAX_PRIOR_RESEARCH_FILES,
+  isPriorResearchPath,
+} from "./prior-research.js";
+import {
   admitAgentRuntimeProfile,
   admitCooperativeRuntimeProfile,
   agentRuntimeProfileSchema,
@@ -521,9 +525,6 @@ const discoveryResumeInputSchema = z.strictObject({
 });
 export type DiscoveryResumeInput = z.infer<typeof discoveryResumeInputSchema>;
 
-/** ADR 0048: `prior/<name>.md`, the two names `PRIOR_RESEARCH_FILE_NAMES` admits. */
-const PRIOR_RESEARCH_PATH = /^prior\/(?:recon-map|lab-setup)\.md$/;
-
 const discoveryTransportRunSchema = z.strictObject({
   runId: z.string().min(1).max(128),
   targetSnapshotDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
@@ -540,15 +541,16 @@ const discoveryTransportRunSchema = z.strictObject({
   resumePrompt: z.string().min(1).max(2_048).optional(),
   resumeNotice: z.string().min(1).max(4_096).optional(),
   resume: discoveryResumeInputSchema.optional(),
+  /** ADR 0048 / ADR 0049 D: `prior/<name>`, the names `isPriorResearchPath` admits. */
   priorResearch: z
     .array(
       z.strictObject({
-        path: z.string().regex(PRIOR_RESEARCH_PATH),
+        path: z.string().min(1).max(256).refine(isPriorResearchPath),
         contentBase64: z.string().min(1),
       }),
     )
     .min(1)
-    .max(2)
+    .max(MAX_PRIOR_RESEARCH_FILES)
     .optional(),
   coordination: z.literal("cooperative").optional(),
   outputKind: z.literal("verification").optional(),

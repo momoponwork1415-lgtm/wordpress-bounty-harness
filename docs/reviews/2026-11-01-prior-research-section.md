@@ -45,3 +45,24 @@ file の行は、渡した file だけを、この順で置く。
 - 何を試すか、どこから読むか。生成節は事実だけを述べる（ADR 0019、ADR 0044）。
 - 以前の Trial の Finding、Lead、route file、tools の tsv。ADR 0048 の決定で渡さない。
 - 2 つの版の差分。#724 の差分監視が置く。
+
+## 2026-11-02 追記: 広げた file の行（ADR 0049 決定 D、#793 の PR 4）
+
+段落の文は変えていない。file の一覧に次の 2 つの行の形を足した。説明の句は足さず、path と大きさだけを述べる。
+
+> - /workspace/research/prior/{名前} ({bytes} bytes).
+> - Withheld for size, not placed: {名前}, {名前}.
+
+日本語訳:
+
+> - /workspace/research/prior/{名前}（{bytes} byte）。
+> - 大きさのため外し、置いていない: {名前}、{名前}。
+
+{名前} は `REGISTRY.md`、`stores.json`、`assumptions/<名前>.md`、`walks/<名前>.md` のいずれか。従来の `recon-map.md` と `lab-setup.md` の 2 行は変えない。
+
+| 節の要素 | 出典 |
+| --- | --- |
+| REGISTRY.md、assumptions/*.md、walks/*.md | `wbh-recon-v3`・`wbh-falsify-v1`・`wbh-falsify-v2` の SKILL.md が述べる書き先。渡す決定は ADR 0049 決定 D |
+| stores.json | ADR 0048 の 2026-11-02 追記「保存先の表」。元 Trial の `lookupLog` を型どおりに写した file |
+| 外した file の名前 | ADR 0048 の 2026-11-02 追記「総量の上限」。名前だけを述べる |
+

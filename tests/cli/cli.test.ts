@@ -161,6 +161,8 @@ async function harness(
     readonly leadsOnCalls?: Readonly<Record<number, readonly unknown[]>>;
     /** Provider calls (1-based) whose Root seals a notes archive holding a map (ADR 0048). */
     readonly researchOnCalls?: readonly number[];
+    /** Another harness's attachment store, shared as the work directory is across states (ADR 0049 D). */
+    readonly attachmentsDirectory?: string;
     readonly zeroFindings?: boolean;
     /** Candidate slugs; the first is not pinned. */
     readonly candidates?: readonly string[];
@@ -596,7 +598,9 @@ async function harness(
     WordPressCampaignBoundaries["freeze"]
   >[0][] = [];
 
-  const attachments = new ProviderAttachmentStore(join(root, "provider"));
+  const attachments = new ProviderAttachmentStore(
+    options.attachmentsDirectory ?? join(root, "provider"),
+  );
   const prompts: string[] = [];
   const transportRuns: DiscoveryTransportRun[] = [];
   const promptDigests: string[] = [];
@@ -961,6 +965,7 @@ async function harness(
     newId: () => `id-${++ids}`,
     profile: createWordPressCliProfile({
       scopePolicy: await loadWordpressScopePolicy(),
+      attachments,
       ...(options.scopeFacts === undefined
         ? {}
         : { scopeFacts: options.scopeFacts }),
@@ -1714,6 +1719,141 @@ describe("harness CLI vertical slice", () => {
     expect(later.configuration.inputDigest).toBe(
       `sha256:${createHash("sha256").update(prompts[1]!).digest("hex")}`,
     );
+  });
+
+  it("imports another state's sealed research once and passes it to this state's first Trial of a later version (ADR 0049 D)", async () => {
+    const bench = await harness({
+      config: { discovery: { lab: "none" } },
+      researchOnCalls: [1],
+    });
+    expect(
+      await bench.run(
+        "campaign",
+        "run",
+        "synthetic-plugin",
+        "--campaign",
+        "bench",
+        "--config",
+        bench.configPath,
+      ),
+    ).toMatchObject({ code: 0 });
+    const benchStart = bench
+      .ledger()
+      .read({ campaignId: "bench", type: "discovery-run-started" })
+      .at(0)?.event;
+    if (benchStart?.type !== "discovery-run-started")
+      throw new Error("the bench Trial starts");
+    // Production shares the work directory (attachments) but has its own ledger.
+    const production = await harness({
+      config: { discovery: { lab: "none", priorResearch: "same-target" } },
+      attachmentsDirectory: join(bench.root, "provider"),
+    });
+    const policyPath = join(production.root, "selection.json");
+    const policy = JSON.parse(await readFile(policyPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    await writeFile(
+      policyPath,
+      JSON.stringify({
+        ...policy,
+        pinnedVersions: { "synthetic-plugin": "3.4.0" },
+      }),
+    );
+    const benchState = join(bench.root, "state");
+    expect(
+      await production.run("research", "import", "--from", benchState),
+    ).toMatchObject({
+      code: 0,
+      stdout: "imported 1  existing 0  skipped 0",
+    });
+    // Idempotent: the second import writes nothing.
+    expect(
+      await production.run("research", "import", "--from", benchState),
+    ).toMatchObject({
+      code: 0,
+      stdout: "imported 0  existing 1  skipped 0",
+    });
+    expect(
+      await production.run(
+        "research",
+        "import",
+        "--from",
+        benchState,
+        "--slug",
+        "Not A Slug",
+      ),
+    ).toMatchObject({ code: 2 });
+    expect(
+      await production.run(
+        "campaign",
+        "run",
+        "synthetic-plugin",
+        "--campaign",
+        "prod",
+        "--config",
+        production.configPath,
+      ),
+    ).toMatchObject({ code: 0 });
+    const imported = production
+      .ledger()
+      .read({ type: "research-imported" })
+      .map(({ event }) => event);
+    expect(imported).toHaveLength(1);
+    expect(imported[0]).toMatchObject({
+      type: "research-imported",
+      fromState: "state",
+      fromCampaignId: "bench",
+      fromRunId: benchStart.runId,
+      targetId: "wporg:synthetic-plugin",
+      targetVersion: "3.3.1",
+      snapshotDigest: benchStart.snapshotDigest,
+    });
+    expect(JSON.stringify(imported[0])).not.toContain(bench.root);
+    expect(production.prompts[0]).toContain(
+      "## Prior research\n\nAn earlier Trial on version 3.3.1 of this same plugin",
+    );
+    expect(production.prompts[0]).toContain("This Trial reads version 3.4.0.");
+    expect(production.transportRuns[0]?.priorResearch).toEqual([
+      {
+        path: "prior/recon-map.md",
+        contentBase64: Buffer.from("# Map of call 1\n").toString("base64"),
+      },
+    ]);
+    const started = production
+      .ledger()
+      .read({ campaignId: "prod", type: "discovery-run-started" })
+      .at(0)?.event;
+    if (started?.type !== "discovery-run-started")
+      throw new Error("the production Trial starts");
+    expect(started.configuration.priorResearch).toMatchObject({
+      sourceRunId: benchStart.runId,
+      sourceState: "state",
+      sourceSnapshotDigest: benchStart.snapshotDigest,
+      sourceVersion: "3.3.1",
+      files: [{ name: "recon-map.md", bytes: 16 }],
+    });
+  });
+
+  it("refuses research import on a profile without a shared attachment store", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wbh-cli-no-attachments-"));
+    directories.push(root);
+    const stderr: string[] = [];
+    const code = await runCli(
+      ["research", "import", "--from", join(root, "other")],
+      {
+        stateDirectory: join(root, "state"),
+        profile: createWordPressCliProfile({
+          scopePolicy: await loadWordpressScopePolicy(),
+          boundaries: async () => {
+            throw new Error("not opened");
+          },
+        }),
+      },
+      { stdout: () => undefined, stderr: (line) => stderr.push(line) },
+    );
+    expect(code).toBe(2);
+    expect(stderr.join("\n")).toContain("cannot import research");
   });
 
   it("keeps old objective bytes readable but rejects them for new campaigns", async () => {

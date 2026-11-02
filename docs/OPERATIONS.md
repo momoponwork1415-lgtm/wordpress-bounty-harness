@@ -68,12 +68,14 @@ harness campaign run <slug> --campaign <id> --config <campaign.json> --selection
 harness campaign resume --campaign <id> --run <runId> --config <campaign.json>
 harness ledger stops --campaign <id>
 harness ledger resumes --campaign <id>
+harness research import --from <別の state dir> [--slug <slug>]
 ```
 
 - 選定方針は手動の形にする: `candidateSlugs` と `pinnedVersions`、`minimumActiveInstallations: 0`、`maximumTargets: 1`、`revisitPolicy` 無し。campaign 設定は本番の写しで、`resources` を 1 対象にし、`selectionPolicyPath` をその方針に向ける。
 - `--campaign` は 40 文字まで。`--repeat 3` は同じ Snapshot に別々の Trial ID を 3 つ作る。
 - `campaign resume` は `completed` 以外で止まった Root を、同じ Snapshot・同じ runtime profile・残りの制限時間で新しいサンドボックスに再開する。残りが 5 分未満、receipt に `session` が無い、別の run がやり直した後（`superseded`）は `not resumable: <理由>` で終了コード 3。
 - 台帳は `<state>/ledger.sqlite` の `ledger_events`。読み方は [agents/ledger-reading.md](agents/ledger-reading.md)。`node:sqlite` の `DatabaseSync` を `readOnly: true` で開く。
+- `research import` は、別の `--state`（bench など）で終わった Trial の研究 file を、この state の `discovery.priorResearch: same-target` の候補にする（ADR 0049 決定 D）。別の state は読み取り専用で開き、研究の本文は共有の work directory にあるものを digest で参照する。2 回目は何も書かない。
 
 ## 5. 検証
 

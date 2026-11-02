@@ -125,6 +125,7 @@ import {
   parseWordPressOrgSelectionId,
   wordPressOrgPluginIdentity,
 } from "../profiles/wordpress/target-identity.js";
+import { importWordPressResearch } from "./wordpress-research-import.js";
 
 export {
   wordpressCampaignConfigSchema,
@@ -2124,6 +2125,12 @@ export function createWordPressCliProfile(
         input,
         await openWordPressCampaignSession(options, state, input),
       ),
+    ...(options.attachments === undefined
+      ? {}
+      : {
+          importResearch: (state, input) =>
+            importWordPressResearch(state, options.attachments!, input),
+        }),
     async verifyNext(state, input) {
       const session = await openWordPressCampaignSession(options, state, {
         configPath: input.configPath,
