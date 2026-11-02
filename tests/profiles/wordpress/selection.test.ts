@@ -100,6 +100,8 @@ function harness(options: {
   enumerateCandidates?: NonNullable<
     CreateWordPressSelectionOptions["enumerateCandidates"]
   >;
+  /** Drives the real enumerator against fake WordPress.org listings. */
+  fetch?: typeof fetch;
 }) {
   const observations = options.observations ?? {
     popular: observation("popular", [], 100_000),
@@ -150,6 +152,7 @@ function harness(options: {
     ...(options.enumerateCandidates === undefined
       ? {}
       : { enumerateCandidates: options.enumerateCandidates }),
+    ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
     clock: (() => {
       let reads = 0;
       return () =>
@@ -279,7 +282,6 @@ describe("WordPress selection public interface", () => {
     expect(policy.revisitPolicy).toEqual({ kind: "version-increased" });
     for (const [field, value] of Object.entries({
       cascade: [{ minimumActiveInstallations: 50_000 }],
-      maximumActiveInstallations: 1_000_000,
       scoreWeights: { installations: 0.5, recency: 0, historyPayingClass: 1 },
       historyWindowDays: 365,
       historyCountCap: 10,
@@ -297,6 +299,36 @@ describe("WordPress selection public interface", () => {
         revisitPolicy: { kind: "version-increased", minimumDaysSinceTrial: 90 },
       }).success,
     ).toBe(false);
+    // The upper install bound is optional and must exceed the floor (ADR 0037, 2026-11-02).
+    expect(
+      wordPressSelectionPolicySchema.safeParse({
+        ...policy,
+        maximumActiveInstallations: 1_000_000,
+      }).success,
+    ).toBe(true);
+    for (const value of [5_000, 4_999, 0, -1, 1.5, "1000000"]) {
+      const result = wordPressSelectionPolicySchema.safeParse({
+        ...policy,
+        maximumActiveInstallations: value,
+      });
+      expect(result.success).toBe(false);
+      if (typeof value === "number" && Number.isInteger(value) && value > 0)
+        expect(JSON.stringify(result.error?.issues)).toContain(
+          "maximumActiveInstallations must be greater than minimumActiveInstallations",
+        );
+    }
+    expect(
+      wordPressSelectionPolicySchema.safeParse({
+        ...basePolicy,
+        maximumActiveInstallations: basePolicy.minimumActiveInstallations,
+      }).success,
+    ).toBe(false);
+    expect(
+      wordPressSelectionPolicySchema.safeParse({
+        ...basePolicy,
+        maximumActiveInstallations: basePolicy.minimumActiveInstallations + 1,
+      }).success,
+    ).toBe(true);
     // The method-change cutoff is an ISO instant (ADR 0037 addendum 6).
     expect(
       wordPressSelectionPolicySchema.safeParse({
@@ -1007,5 +1039,109 @@ describe("operator candidate list (#520)", () => {
     });
     expect(decision.sourceStatus).toBe("unavailable");
     expect(decision.selected).toEqual([]);
+  });
+});
+
+describe("installation upper bound (ADR 0037, 2026-11-02)", () => {
+  /** Popular pages of one plugin each: 5M, 900k, 50k, then 8k below the floor. */
+  const pages = [
+    ["giant", 5_000_000],
+    ["large", 900_000],
+    ["mid", 50_000],
+    ["small", 8_000],
+  ] as const;
+  const requested: number[] = [];
+  const popularPages: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    const page = Number(url.searchParams.get("request[page]"));
+    requested.push(page);
+    const entry = pages[page - 1];
+    return new Response(
+      JSON.stringify({
+        info: { page, pages: pages.length, results: pages.length },
+        plugins:
+          entry === undefined
+            ? []
+            : [{ slug: entry[0], active_installs: entry[1] }],
+      }),
+    );
+  };
+  const observations = Object.fromEntries(
+    pages.map(([slug, installs]) => [slug, observation(slug, [], installs)]),
+  );
+
+  async function decideWith(maximum: number | undefined) {
+    requested.length = 0;
+    const selection = openWordPressSelection({
+      candidates: harness({ observations, fetch: popularPages }),
+      ledger: ledgerOf([]),
+    });
+    const shipped = await loadWordPressSelectionPolicy();
+    if (!("candidateSource" in shipped))
+      throw new Error("Expected the automatic policy");
+    return selection.decide({
+      ...shipped,
+      candidateSource: { ...shipped.candidateSource, perPage: 1 },
+      minimumActiveInstallations: 10_000,
+      ...(maximum === undefined ? {} : { maximumActiveInstallations: maximum }),
+    });
+  }
+
+  it("skips a plugin at or above the maximum with a recorded reason and still stops at the floor", async () => {
+    const decision = await decideWith(1_000_000);
+    expect(decision.sourceStatus).toBe("available");
+    // Pages are read past the ≥1M plugins and stop where installs fall below the floor.
+    expect(requested).toEqual([1, 2, 3, 4]);
+    expect(decision.sourceListings.at(-1)).toMatchObject({
+      page: 4,
+      status: "available",
+      end: "installation-floor",
+    });
+    expect(decision.selected.map(({ slug }) => slug)).toEqual(["large", "mid"]);
+    expect(
+      decision.inspections.map(({ slug, status, reasons }) => [
+        slug,
+        status,
+        reasons,
+      ]),
+    ).toEqual([
+      ["giant", "ineligible", ["above-maximum-installations"]],
+      ["large", "eligible", []],
+      ["mid", "eligible", []],
+    ]);
+    expect(
+      decision.inspections.find(({ slug }) => slug === "giant"),
+    ).toMatchObject({
+      observedAt: now,
+      enumeration: { sourceKind: "popular", sourcePage: 1 },
+    });
+  });
+
+  it("selects exactly as before when the maximum is absent", async () => {
+    const decision = await decideWith(undefined);
+    expect(requested).toEqual([1, 2, 3, 4]);
+    expect(decision.selected.map(({ slug }) => slug)).toEqual([
+      "giant",
+      "large",
+      "mid",
+    ]);
+    expect(
+      decision.inspections.every(({ reasons }) => reasons.length === 0),
+    ).toBe(true);
+  });
+
+  it("treats the bound as exclusive: a plugin exactly at the maximum is skipped, one below stays", async () => {
+    const decision = await decideWith(900_000);
+    expect(decision.selected.map(({ slug }) => slug)).toEqual(["mid"]);
+    expect(
+      decision.inspections.map(({ slug, reasons }) => [slug, reasons]),
+    ).toEqual([
+      ["giant", ["above-maximum-installations"]],
+      ["large", ["above-maximum-installations"]],
+      ["mid", []],
+    ]);
+    expect(
+      (await decideWith(900_001)).selected.map(({ slug }) => slug),
+    ).toEqual(["large", "mid"]);
   });
 });

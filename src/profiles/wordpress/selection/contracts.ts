@@ -58,11 +58,29 @@ const commonSelectionPolicy = {
    */
   orderingBands: z.array(z.number().int().positive()).min(1).max(8).optional(),
   minimumActiveInstallations: z.number().int().nonnegative(),
+  /**
+   * Exclusive upper bound on active installations (owner decision 2026-11-02,
+   * ADR 0037 2026-11-02 addendum): a candidate at or above it is recorded
+   * with `above-maximum-installations` and never selected. Absent: no bound.
+   */
+  maximumActiveInstallations: z.number().int().positive().optional(),
   maximumObservationAgeDays: z.number().positive(),
   maximumUpdateAgeDays: z.number().positive(),
   maximumTargets: z.number().int().positive(),
   excludedAuthors: z.array(z.string().min(1)),
   excludedSlugs: z.array(slugSchema),
+} as const;
+
+const installationBoundsAreOrdered = {
+  check: (policy: {
+    readonly minimumActiveInstallations: number;
+    readonly maximumActiveInstallations?: number | undefined;
+  }): boolean =>
+    policy.maximumActiveInstallations === undefined ||
+    policy.maximumActiveInstallations > policy.minimumActiveInstallations,
+  message:
+    "maximumActiveInstallations must be greater than minimumActiveInstallations",
+  path: ["maximumActiveInstallations"],
 } as const;
 
 const manualSelectionPolicy = z
@@ -105,39 +123,49 @@ const manualSelectionPolicy = z
       message: "Pinned and dependency slugs must be candidates",
       path: ["candidateSlugs"],
     },
-  );
+  )
+  .refine(installationBoundsAreOrdered.check, {
+    message: installationBoundsAreOrdered.message,
+    path: [...installationBoundsAreOrdered.path],
+  });
 
-const automaticSelectionPolicy = z.strictObject({
-  ...commonSelectionPolicy,
-  /** Operator nominations carry references only; they never override eligibility. */
-  operatorCandidates: z
-    .array(operatorCandidateSchema)
-    .refine(
-      (candidates) =>
-        new Set(candidates.map(({ slug }) => slug)).size === candidates.length,
-      { message: "Operator candidate slugs must be unique" },
-    )
-    .optional(),
-  /** Undeclared runtime dependencies resolved to official stable at freeze. */
-  pluginDependencySlugs: z
-    .record(slugSchema, z.array(slugSchema).max(16))
-    .optional(),
-  promptVariant: z.string().min(1).max(128),
-  revisitPolicy: wordPressRevisitPolicySchema,
-  maximumTargets: z.number().int().min(3).max(10),
-  /**
-   * Set: the core version select freezes (development and historical runs).
-   * Absent (#741): the Lab image's version, which select checks against the
-   * latest stable release.
-   */
-  wordpressVersion: coreVersionSchema.optional(),
-  candidateSource: z.strictObject({
-    kind: z.literal("wordpress-org"),
-    tags: z.array(slugSchema).max(8),
-    perPage: z.number().int().min(1).max(50),
-    maxAgeDays: z.number().positive().max(7),
-  }),
-});
+const automaticSelectionPolicy = z
+  .strictObject({
+    ...commonSelectionPolicy,
+    /** Operator nominations carry references only; they never override eligibility. */
+    operatorCandidates: z
+      .array(operatorCandidateSchema)
+      .refine(
+        (candidates) =>
+          new Set(candidates.map(({ slug }) => slug)).size ===
+          candidates.length,
+        { message: "Operator candidate slugs must be unique" },
+      )
+      .optional(),
+    /** Undeclared runtime dependencies resolved to official stable at freeze. */
+    pluginDependencySlugs: z
+      .record(slugSchema, z.array(slugSchema).max(16))
+      .optional(),
+    promptVariant: z.string().min(1).max(128),
+    revisitPolicy: wordPressRevisitPolicySchema,
+    maximumTargets: z.number().int().min(3).max(10),
+    /**
+     * Set: the core version select freezes (development and historical runs).
+     * Absent (#741): the Lab image's version, which select checks against the
+     * latest stable release.
+     */
+    wordpressVersion: coreVersionSchema.optional(),
+    candidateSource: z.strictObject({
+      kind: z.literal("wordpress-org"),
+      tags: z.array(slugSchema).max(8),
+      perPage: z.number().int().min(1).max(50),
+      maxAgeDays: z.number().positive().max(7),
+    }),
+  })
+  .refine(installationBoundsAreOrdered.check, {
+    message: installationBoundsAreOrdered.message,
+    path: [...installationBoundsAreOrdered.path],
+  });
 
 /** A policy nominates candidates manually or from the directory, never both. */
 export const wordPressSelectionPolicySchema = z.union([
@@ -160,6 +188,7 @@ export type SelectionReason =
   | "excluded-author"
   | "excluded-slug"
   | "below-installation-threshold"
+  | "above-maximum-installations"
   | "core-requirement-unavailable"
   | "core-version-incompatible"
   | "programme-asset-out-of-scope"
