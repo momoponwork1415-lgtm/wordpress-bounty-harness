@@ -210,6 +210,9 @@ async function startWordPress(lab: WordPressLabSession): Promise<string> {
     "WORDPRESS_DB_USER=root",
     "--env",
     `WORDPRESS_DB_PASSWORD=${lab.databasePassword}`,
+    // ADR 0049: the image's Xdebug traces only a request that carries this value.
+    "--env",
+    `WBH_XDEBUG_TRIGGER=${lab.xdebugTrigger}`,
     lab.images.wordpress,
   ]);
   lab.created.add("wordpress");

@@ -60,6 +60,13 @@ export class WordPressLabSession {
   readonly exploration: boolean;
   readonly databasePassword: string;
   readonly readerPassword: string;
+  /**
+   * ADR 0049: the value that starts Xdebug's trace for one request. The
+   * WordPress container receives it as `WBH_XDEBUG_TRIGGER` at start; only
+   * the Harness's `POST /trace` sends it, and it is in no handle or text an
+   * agent reads.
+   */
+  readonly xdebugTrigger: string;
   /** Rotated when handoff setup ends (#430); the Lab browser reads the current one. */
   adminPassword: string;
   readonly attackerAccounts: Readonly<{
@@ -128,6 +135,7 @@ export class WordPressLabSession {
     this.exploration = input.forExploration === true;
     this.databasePassword = randomUUID();
     this.readerPassword = randomBytes(32).toString("hex");
+    this.xdebugTrigger = randomBytes(16).toString("hex");
     this.adminPassword = randomUUID();
     this.attackerAccounts = {
       subscriber,

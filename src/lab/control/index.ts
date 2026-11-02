@@ -19,7 +19,13 @@ import { join } from "node:path";
  */
 export const CONTROL_STATE_DIRECTORY = "/var/lib/wbh-control";
 /** The commands the endpoint relays; anything else is answered 404 here. */
-export const CONTROL_COMMANDS = ["reset", "observe", "find", "sql"] as const;
+export const CONTROL_COMMANDS = [
+  "reset",
+  "observe",
+  "find",
+  "sql",
+  "trace",
+] as const;
 export type ControlCommand = (typeof CONTROL_COMMANDS)[number];
 /** The largest request body relayed; the host validates its shape. */
 export const MAX_CONTROL_BODY_BYTES = 16 * 1024;

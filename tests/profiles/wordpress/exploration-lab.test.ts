@@ -83,15 +83,18 @@ async function fixture(options: {
   readonly observed?: Awaited<
     ReturnType<WordPressLab["observeExplorationPage"]>
   >;
-  /** Find and sql bodies queued after the observes, in order (ADR 0049). */
+  /** Find, sql and trace bodies queued after the observes, in order (ADR 0049). */
   readonly lookups?: readonly {
-    readonly command: "find" | "sql";
+    readonly command: "find" | "sql" | "trace";
     readonly body: unknown;
   }[];
   readonly maxLookups?: number;
   readonly lookupsUsedBefore?: number;
   readonly found?: Awaited<ReturnType<WordPressLab["findInExplorationLab"]>>;
   readonly queried?: Awaited<ReturnType<WordPressLab["queryExplorationLab"]>>;
+  readonly traced?: Awaited<
+    ReturnType<WordPressLab["traceExplorationRequest"]>
+  >;
 }) {
   const directory = await mkdtemp(join(tmpdir(), "wbh-exploration-lab-"));
   directories.push(directory);
@@ -121,7 +124,10 @@ async function fixture(options: {
   ];
   const expectedAnswers = queue.length;
   const observedRequests: unknown[] = [];
-  const lookupRequests: { command: "find" | "sql"; request: string }[] = [];
+  const lookupRequests: {
+    command: "find" | "sql" | "trace";
+    request: unknown;
+  }[] = [];
   let drained!: () => void;
   const allAnswered = new Promise<void>((resolve) => (drained = resolve));
   if (queue.length === 0) drained();
@@ -187,6 +193,25 @@ async function fixture(options: {
         }
       );
     },
+    async traceExplorationRequest(_handle, request) {
+      lookupRequests.push({ command: "trace", request });
+      return (
+        options.traced ?? {
+          status: "traced",
+          httpStatus: 200,
+          entries: [
+            {
+              depth: 3,
+              function: "wbh_plugin_init",
+              file: "wp-content/plugins/synthetic/synthetic.php",
+              line: 12,
+            },
+          ],
+          entryCount: 1,
+          truncated: false,
+        }
+      );
+    },
     async answerControlRequest(_handle, id, answer) {
       if (++answerCalls <= (options.answerFails ?? 0)) return false;
       queue.splice(
@@ -207,6 +232,7 @@ async function fixture(options: {
     | "observeExplorationPage"
     | "findInExplorationLab"
     | "queryExplorationLab"
+    | "traceExplorationRequest"
   >;
   const trialLab = openWordPressExplorationLab({
     lab,
@@ -885,6 +911,237 @@ describe("exploration Lab driver", () => {
       { command: "sql", status: "failed", reason: "harness-error" },
     ]);
     expect(JSON.stringify(thrown.answers)).not.toContain("secret-bearing");
+  });
+
+  it("answers trace within the shared lookup budget, keeps the body and only the cookie's length, and refuses a GET with a body (ADR 0049)", async () => {
+    const { trialLab, allAnswered, answers, read, lookupRequests } =
+      await fixture({
+        requests: 0,
+        maxResets: 2,
+        maxLookups: 3,
+        lookupsUsedBefore: 1,
+        lookups: [
+          {
+            command: "trace",
+            body: {
+              method: "POST",
+              path: "/wp-admin/admin-ajax.php",
+              cookie: "wordpress_logged_in=abc; wp-settings-1=x",
+              contentType: "application/x-www-form-urlencoded",
+              body: "action=wbh_save&value=1234567890",
+            },
+          },
+          { command: "trace", body: { method: "GET", path: "/", body: "x" } },
+          { command: "trace", body: { method: "GET", path: "/?p=1" } },
+          { command: "find", body: { marker: "1234567890" } },
+        ],
+      });
+    await trialLab.open();
+    await allAnswered;
+    const record = await trialLab.seal();
+    // The GET with a body never reached the Lab and cost nothing; the two
+    // budgeted traces did; find was refused on the shared budget.
+    expect(lookupRequests).toEqual([
+      {
+        command: "trace",
+        request: {
+          method: "POST",
+          path: "/wp-admin/admin-ajax.php",
+          cookie: "wordpress_logged_in=abc; wp-settings-1=x",
+          contentType: "application/x-www-form-urlencoded",
+          body: "action=wbh_save&value=1234567890",
+        },
+      },
+      { command: "trace", request: { method: "GET", path: "/?p=1" } },
+    ]);
+    expect(answers.map((entry) => (entry as { body: unknown }).body)).toEqual([
+      {
+        status: "answered",
+        httpStatus: 200,
+        entries: [
+          {
+            depth: 3,
+            function: "wbh_plugin_init",
+            file: "wp-content/plugins/synthetic/synthetic.php",
+            line: 12,
+          },
+        ],
+        entryCount: 1,
+        truncated: false,
+        lookupsUsed: 2,
+        maxLookups: 3,
+      },
+      {
+        status: "refused",
+        reason: "invalid-request",
+        field: "body",
+        lookupsUsed: 2,
+        maxLookups: 3,
+      },
+      {
+        status: "answered",
+        httpStatus: 200,
+        entries: [
+          {
+            depth: 3,
+            function: "wbh_plugin_init",
+            file: "wp-content/plugins/synthetic/synthetic.php",
+            line: 12,
+          },
+        ],
+        entryCount: 1,
+        truncated: false,
+        lookupsUsed: 3,
+        maxLookups: 3,
+      },
+      { status: "refused", reason: "budget", lookupsUsed: 3, maxLookups: 3 },
+    ]);
+    expect(
+      answers.map((entry) => (entry as { statusCode: number }).statusCode),
+    ).toEqual([200, 400, 200, 429]);
+    expect(JSON.stringify(answers)).not.toMatch(/confirm/i);
+    expect(record).toMatchObject({ lookups: 2, refusedLookups: 2 });
+    const sealed = JSON.parse(
+      await read(record.artifactDigest!, "exploration-lab.json"),
+    );
+    expect(
+      sealed.lookupLog.map(
+        (entry: { command: string; status: string; reason?: string }) =>
+          `${entry.command}:${entry.reason ?? entry.status}`,
+      ),
+    ).toEqual([
+      "trace:answered",
+      "trace:invalid-request",
+      "trace:answered",
+      "find:budget",
+    ]);
+    // The body is the agent's input and is kept; the cookie is kept as its length only.
+    expect(sealed.lookupLog[0]).toMatchObject({
+      command: "trace",
+      request: {
+        method: "POST",
+        path: "/wp-admin/admin-ajax.php",
+        contentType: "application/x-www-form-urlencoded",
+        body: "action=wbh_save&value=1234567890",
+        bodyLength: 32,
+        cookieLength: 40,
+      },
+      answer: { httpStatus: 200, entryCount: 1, truncated: false },
+    });
+    expect(sealed.lookupLog[0].request).not.toHaveProperty("cookie");
+    expect(JSON.stringify(sealed)).not.toContain("wordpress_logged_in=abc");
+    expect(sealed.lookupLog[1].request).toEqual({
+      method: "GET",
+      path: "/",
+      body: "x",
+      bodyLength: 1,
+    });
+    expect(sealed.lookupLog[2].request).toEqual({
+      method: "GET",
+      path: "/?p=1",
+      bodyLength: 0,
+    });
+  });
+
+  it("names the field of a trace body that does not fit, and passes an unavailable or failed trace on", async () => {
+    const invalid = await fixture({
+      requests: 0,
+      maxResets: 2,
+      lookups: [
+        { command: "trace", body: { method: "PUT", path: "/" } },
+        { command: "trace", body: { method: "GET", path: "//x" } },
+        {
+          command: "trace",
+          body: { method: "GET", path: "/", headers: { a: "b" } },
+        },
+        {
+          command: "trace",
+          body: { method: "POST", path: "/", contentType: "text/html" },
+        },
+      ],
+    });
+    await invalid.trialLab.open();
+    await invalid.allAnswered;
+    expect(invalid.lookupRequests).toEqual([]);
+    expect(
+      invalid.answers.map((entry) => (entry as { body: unknown }).body),
+    ).toEqual([
+      {
+        status: "refused",
+        reason: "invalid-request",
+        field: "method",
+        lookupsUsed: 0,
+        maxLookups: 60,
+      },
+      {
+        status: "refused",
+        reason: "invalid-request",
+        field: "path",
+        lookupsUsed: 0,
+        maxLookups: 60,
+      },
+      {
+        status: "refused",
+        reason: "invalid-request",
+        field: "headers",
+        lookupsUsed: 0,
+        maxLookups: 60,
+      },
+      {
+        status: "refused",
+        reason: "invalid-request",
+        field: "contentType",
+        lookupsUsed: 0,
+        maxLookups: 60,
+      },
+    ]);
+    expect(await invalid.trialLab.seal()).toMatchObject({
+      lookups: 0,
+      refusedLookups: 4,
+    });
+    const unavailable = await fixture({
+      requests: 0,
+      maxResets: 2,
+      lookups: [{ command: "trace", body: { method: "GET", path: "/" } }],
+      traced: { status: "unavailable" },
+    });
+    await unavailable.trialLab.open();
+    await unavailable.allAnswered;
+    expect(unavailable.answers).toMatchObject([
+      { statusCode: 503, body: { status: "refused", reason: "unavailable" } },
+    ]);
+    expect(await unavailable.trialLab.seal()).toMatchObject({
+      lookups: 0,
+      refusedLookups: 1,
+    });
+    const failed = await fixture({
+      requests: 0,
+      maxResets: 2,
+      lookups: [{ command: "trace", body: { method: "GET", path: "/" } }],
+      traced: { status: "failed" },
+    });
+    await failed.trialLab.open();
+    await failed.allAnswered;
+    expect(failed.answers).toEqual([
+      {
+        id: "0f".repeat(16),
+        statusCode: 502,
+        body: { status: "failed", lookupsUsed: 1, maxLookups: 60 },
+      },
+    ]);
+    const record = await failed.trialLab.seal();
+    expect(record).toMatchObject({ lookups: 1, refusedLookups: 0 });
+    expect(
+      JSON.parse(
+        await failed.read(record.artifactDigest!, "exploration-lab.json"),
+      ).lookupLog,
+    ).toMatchObject([
+      {
+        command: "trace",
+        status: "failed",
+        request: { method: "GET", path: "/" },
+      },
+    ]);
   });
 
   it("records zero requests when the capture cannot be read", async () => {

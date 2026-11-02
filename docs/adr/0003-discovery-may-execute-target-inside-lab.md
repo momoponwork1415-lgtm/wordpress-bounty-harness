@@ -26,3 +26,7 @@ Discovery runは、gVisor内の使い捨てWordPress + MySQL Labに対してHTTP
 ## 2026-11-02 追記: 保存先の観測器 `find` / `sql` と、既定の attached（ADR 0049）
 
 所有者決定（2026-11-02「これでいこう」、[Lab 常設探索の設計](../reviews/2026-11-02-lab-resident-exploration-design.html)、#793）により、制御口 labctl に `POST /find` と `POST /sql` の 2 コマンドを足す。`find` は agent が植えた印（10〜15 桁、先頭 0 でない）が site の DB のどの table / column と `wp-content` のどの file に入ったかを返し、`sql` は読み取り専用ユーザー `wbh_reader` で SELECT 1 文を実行して列名と 200 行までを返す。2 つは 1 つの予算 `discovery.lab.maxLookups`（既定 60、上限 300）を共有し、再供給・観測と同じく Trial 全体で数えて再開区間に残りを渡す。要求と答えは `exploration-lab` に封じ、台帳の `labObserved` に `lookups` / `refusedLookups` を足す（追加のみ）。探索 Lab は常に `databaseAccess: read-only` で供給し、`reset` の後も読み取り専用ユーザーを作り直す。読み取り専用ユーザーの権限は database 全体（`wordpress.*`）への SELECT で、plugin が Trial の途中で作った table も見える（供給時点の table ごとの GRANT では、後から作られた保存先が `find` から見えなかった）。「Lab DB は sandbox に渡さない」は変わらない。agent が触るのは制御口だけで、資格情報は渡さない。`discovery.lab` の既定は `none` から `attached` になる。本文の判断は変えない。Harness は答えを読まず、判定しない。
+
+## 2026-11-02 追記 2: 関数トレースの観測器 `trace`（ADR 0049 の B、#793 の PR 2）
+
+制御口 labctl に `POST /trace` を足す。agent が名指しした 1 リクエスト（method、path、cookie、contentType、body）を Harness が WordPress container の中から Xdebug のトレース起動値付きで site に送り、HTTP status と、plugin ディレクトリ内で走った関数の呼び出し列（深さ、file、行、2000 件まで）を返す。`find` / `sql` と同じ予算 `discovery.lab.maxLookups` を使い、要求と答えは `exploration-lab.json` の `lookupLog` に封じる。Harness は答えを読まず、判定しない。

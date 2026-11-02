@@ -2265,8 +2265,15 @@ describe("harness CLI vertical slice", () => {
       'A value the search does not find is reported as not found; that is an absence in this search, not proof that the value was not stored.\n\nQuery: `POST http://labctl/sql` with a JSON body `{"select": "..."}` runs one SELECT statement on the site\'s database as a read-only account and answers with the column names and up to 200 rows;',
     );
     expect(prompts[0]).toContain(
-      "Find and Query share one budget: this Trial may use them at most 60 times, and each answer states how many are used.\n\nThe Harness records the HTTP traffic",
+      'Find and Query share one budget: this Trial may use them at most 60 times, and each answer states how many are used.\n\nTrace: `POST http://labctl/trace` with a JSON body `{"method": "GET" or "POST", "path": "/...", "cookie": "...", "contentType": "...", "body": "..."}` sends that one request to the site from inside the Lab with a PHP function trace turned on,',
     );
+    // The trace paragraph states its limits and its reach, and closes the Lab commands.
+    for (const line of [
+      "in call order, each with its call depth, file and line, up to 2000 entries; `entryCount` is the full number and `truncated` says when the list was cut.",
+      "contentType is one of `application/x-www-form-urlencoded`, `application/json` or `text/plain`, and body is at most 8192 characters and only with POST.",
+      "A trace shows what ran for that one request as sent; it shows nothing about another request or another account. Trace shares the Find and Query budget.\n\nThe Harness records the HTTP traffic",
+    ])
+      expect(prompts[0]).toContain(line);
     expect(prompts[0]).toContain(
       "Nothing observed in this Lab is a confirmation.",
     );
