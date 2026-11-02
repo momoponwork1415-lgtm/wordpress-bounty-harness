@@ -90,7 +90,12 @@ async function fixture() {
           if ((await stat(file).catch(() => undefined)) !== undefined)
             seen.sessions[path] = await readFile(file, "utf8");
         }
-        for (const path of ["notes/plan.md", "prior/recon-map.md"]) {
+        for (const path of [
+          "notes/plan.md",
+          "prior/recon-map.md",
+          "prior/assumptions/auth.md",
+          "prior/stores.json",
+        ]) {
           const file = join(researchDirectory!, ...path.split("/"));
           if ((await stat(file).catch(() => undefined)) !== undefined)
             seen.research[path] = await readFile(file, "utf8");
@@ -177,10 +182,19 @@ describe("gVisor sandbox prior research seed (ADR 0048)", () => {
         command(undefined, {
           priorResearch: [
             { path: "prior/recon-map.md", content: Buffer.from("# Map\n") },
+            {
+              path: "prior/assumptions/auth.md",
+              content: Buffer.from("| a |\n"),
+            },
+            { path: "prior/stores.json", content: Buffer.from("{}") },
           ],
         }),
       );
-      expect(seen.research).toEqual({ "prior/recon-map.md": "# Map\n" });
+      expect(seen.research).toEqual({
+        "prior/recon-map.md": "# Map\n",
+        "prior/assumptions/auth.md": "| a |\n",
+        "prior/stores.json": "{}",
+      });
       expect(seen.sessions).toEqual({});
       expect(await stat(seen.researchDirectory!).catch(() => "gone")).toBe(
         "gone",
@@ -204,6 +218,26 @@ describe("gVisor sandbox prior research seed (ADR 0048)", () => {
         }),
         command(undefined, {
           priorResearch: [{ path: "prior/sql.md", content: file.content }],
+        }),
+        command(undefined, {
+          priorResearch: [
+            { path: "prior/tools/hooks.tsv", content: file.content },
+          ],
+        }),
+        command(undefined, {
+          priorResearch: [
+            {
+              path: "prior/assumptions/../recon-map.md",
+              content: file.content,
+            },
+          ],
+        }),
+        // Within each file's bound but past the 2 MiB total.
+        command(undefined, {
+          priorResearch: Array.from({ length: 33 }, (_, index) => ({
+            path: `prior/walks/w${index}.md`,
+            content: Buffer.alloc(64 * 1024, 0x61),
+          })),
         }),
         command(undefined, {
           priorResearch: [

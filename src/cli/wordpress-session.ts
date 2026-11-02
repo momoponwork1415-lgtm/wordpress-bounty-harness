@@ -492,6 +492,8 @@ export type WordPressCliProfileOptions = {
     readonly databasePath: string;
     readonly statePath: string;
   };
+  /** The shared attachment store (ADR 0049 D: `research import` reads sealed notes from it). */
+  readonly attachments?: Pick<ProviderAttachmentStore, "readByDigest">;
 };
 
 export type WordPressVerification = Verification<

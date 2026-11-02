@@ -683,6 +683,7 @@ export async function createWordPressHostProfile(options: {
   const profile = createWordPressCliProfile({
     boundaries,
     selectionBoundaries,
+    attachments: new ProviderAttachmentStore(directories.attachments),
     scopePolicy: await loadWordpressScopePolicy(
       ...(host.scopePolicyPath === undefined ? [] : [host.scopePolicyPath]),
     ),

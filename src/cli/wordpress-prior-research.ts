@@ -2,19 +2,31 @@ import { createHash } from "node:crypto";
 
 import {
   MAX_PRIOR_RESEARCH_FILE_BYTES,
+  PRIOR_RESEARCH_DIRECTORIES,
   PRIOR_RESEARCH_FILE_NAMES,
+  PRIOR_RESEARCH_STORES_FILE,
+  capPriorResearch,
+  isPriorResearchName,
   priorResearchPath,
   priorResearchSection,
   researchArchiveSchema,
-  type PriorResearchFileName,
   type ProviderAttachmentStore,
 } from "../discovery/index.js";
+import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import type { LedgerEventV1 } from "../ledger/index.js";
+import { EXPLORATION_LAB_RECORD_FILE } from "../profiles/wordpress/lab/exploration-lab.js";
+import {
+  RESEARCH_STORES_FILE,
+  buildResearchStores,
+  researchStoresBytes,
+  researchStoresSchema,
+} from "../profiles/wordpress/lab/research-stores.js";
 import { wordPressTargetSelectionSchema } from "../profiles/wordpress/selection/index.js";
 import type { CliState } from "./index.js";
 import { priorLeadSourceRefusal } from "./wordpress-prior-leads.js";
 
 type StartedEvent = Extract<LedgerEventV1, { type: "discovery-run-started" }>;
+type FinishedEvent = Extract<LedgerEventV1, { type: "discovery-run-finished" }>;
 type PriorResearchConfiguration = NonNullable<
   StartedEvent["configuration"]["priorResearch"]
 >;
@@ -50,20 +62,50 @@ export interface PriorResearchQuery {
   readonly currentVersion: string;
 }
 
-const utf8 = new TextDecoder("utf-8", { fatal: true });
+/**
+ * Where the store table of a source Trial comes from: this state's sealed
+ * `exploration-lab.json` (a local Trial, built at hand-over) or the
+ * `research-stores` artifact `research import` built (an imported Trial).
+ */
+export type ResearchStoresSource = {
+  readonly file:
+    typeof EXPLORATION_LAB_RECORD_FILE | typeof RESEARCH_STORES_FILE;
+  readonly digest: string;
+};
 
 /**
- * ADR 0048: the latest earlier Trial on another Snapshot of the same target
- * whose notes were sealed and whose inputs were inside invariant 1, and from
- * its archive the whole `recon-map.md` and `lab-setup.md` when each is
- * complete, UTF-8 and within size. Nothing here reads the files' meaning.
+ * One ended Trial whose sealed notes a later Trial of the same target may
+ * receive: a Root run of this ledger with `researchArtifact`, or a Trial of
+ * another ledger `research import` admitted.
  */
-export async function resolveWordPressPriorResearch(
+export interface ResearchTrial {
+  readonly runId: string;
+  readonly campaignId: string;
+  readonly snapshotDigest: string;
+  readonly targetId: string;
+  readonly version: string;
+  readonly researchDigest: string;
+  readonly explorationLabDigest?: string;
+  readonly stores?: ResearchStoresSource;
+  /** The Trial's finish, which orders candidates (latest first). */
+  readonly finishedAt: string;
+  /** The state directory (basename) the Trial was imported from; absent for this ledger's own. */
+  readonly sourceState?: string;
+}
+
+const utf8 = new TextDecoder("utf-8", { fatal: true });
+const MAX_EXPLORATION_LAB_RECORD_BYTES = 48 * 1024 * 1024;
+
+/**
+ * This ledger's own ended Trials with sealed notes whose inputs were inside
+ * invariant 1 (the same check as ADR 0044), with the version their selection
+ * record names. `targetId` narrows the selections read; without it every
+ * target's Trials are listed (`research import` reads another ledger so).
+ */
+export async function localResearchTrials(
   state: Pick<CliState, "ledger" | "store">,
-  attachments: Pick<ProviderAttachmentStore, "readByDigest">,
-  query: PriorResearchQuery,
-): Promise<ResolvedPriorResearch> {
-  const prefix = `${query.targetId}@`;
+  filter: { readonly targetId?: string } = {},
+): Promise<readonly ResearchTrial[]> {
   const selections = new Map<
     string,
     Extract<LedgerEventV1, { type: "target-selected" }>
@@ -71,11 +113,11 @@ export async function resolveWordPressPriorResearch(
   for (const { event } of state.ledger.readAll({ type: "target-selected" }))
     if (
       event.type === "target-selected" &&
-      event.selectionId.startsWith(prefix) &&
-      event.snapshotDigest !== query.snapshotDigest
+      (filter.targetId === undefined ||
+        event.selectionId.startsWith(`${filter.targetId}@`))
     )
       selections.set(`${event.campaignId}\n${event.snapshotDigest}`, event);
-  if (selections.size === 0) return none("no-earlier-trial");
+  if (selections.size === 0) return [];
   const starts = new Map<string, StartedEvent>();
   for (const { event } of state.ledger.readAll({
     type: "discovery-run-started",
@@ -85,12 +127,12 @@ export async function resolveWordPressPriorResearch(
       selections.has(`${event.campaignId}\n${event.snapshotDigest}`)
     )
       starts.set(event.runId, event);
-  if (starts.size === 0) return none("no-earlier-trial");
-  // Latest first: the ledger is append-only, so the last finish is the newest.
-  const candidates: {
-    readonly started: StartedEvent;
-    readonly digest: string;
-  }[] = [];
+  if (starts.size === 0) return [];
+  const trials: ResearchTrial[] = [];
+  const versions = new Map<
+    string,
+    Promise<{ targetId: string; version: string } | undefined>
+  >();
   for (const { event } of state.ledger.readAll({
     type: "discovery-run-finished",
   })) {
@@ -98,41 +140,139 @@ export async function resolveWordPressPriorResearch(
     const started = starts.get(event.runId);
     if (started === undefined || event.researchArtifact === undefined) continue;
     if (priorLeadSourceRefusal(started) !== undefined) continue;
-    candidates.push({ started, digest: event.researchArtifact.digest });
+    const key = `${started.campaignId}\n${started.snapshotDigest}`;
+    const selection = selections.get(key)!;
+    let version = versions.get(key);
+    if (version === undefined) {
+      version = recordedVersion(state, selection, filter.targetId);
+      versions.set(key, version);
+    }
+    const resolved = await version;
+    if (resolved === undefined) continue;
+    const explorationLabDigest = event.artifacts.find(
+      ({ kind }) => kind === "exploration-lab",
+    )?.digest;
+    trials.push({
+      runId: event.runId,
+      campaignId: event.campaignId,
+      snapshotDigest: event.snapshotDigest,
+      targetId: resolved.targetId,
+      version: resolved.version,
+      researchDigest: event.researchArtifact.digest,
+      ...(explorationLabDigest === undefined
+        ? {}
+        : {
+            explorationLabDigest,
+            stores: {
+              file: EXPLORATION_LAB_RECORD_FILE,
+              digest: explorationLabDigest,
+            },
+          }),
+      finishedAt: event.occurredAt,
+    });
   }
-  if (candidates.length === 0) return none("no-earlier-trial");
-  for (const candidate of candidates.reverse()) {
-    const selection = selections.get(
-      `${candidate.started.campaignId}\n${candidate.started.snapshotDigest}`,
-    )!;
-    const version = await recordedVersion(state, selection, query.targetId);
-    if (version === undefined) continue;
-    const files = await archivedFiles(attachments, candidate.digest);
-    if (files.length === 0) return none("no-files");
+  return trials;
+}
+
+/** The Trials of other ledgers `research import` admitted into this one (ADR 0049 D). */
+export function importedResearchTrials(
+  state: Pick<CliState, "ledger">,
+  filter: { readonly targetId?: string } = {},
+): readonly ResearchTrial[] {
+  const trials: ResearchTrial[] = [];
+  for (const { event } of state.ledger.readAll({ type: "research-imported" })) {
+    if (event.type !== "research-imported") continue;
+    if (filter.targetId !== undefined && event.targetId !== filter.targetId)
+      continue;
+    const stores = event.artifacts.find(
+      ({ kind }) => kind === "research-stores",
+    )?.digest;
+    trials.push({
+      runId: event.fromRunId,
+      campaignId: event.fromCampaignId,
+      snapshotDigest: event.snapshotDigest,
+      targetId: event.targetId,
+      version: event.targetVersion,
+      researchDigest: event.researchDigest,
+      ...(event.explorationLabDigest === undefined
+        ? {}
+        : { explorationLabDigest: event.explorationLabDigest }),
+      ...(stores === undefined
+        ? {}
+        : { stores: { file: RESEARCH_STORES_FILE, digest: stores } }),
+      finishedAt: event.sourceFinishedAt,
+      sourceState: event.fromState,
+    });
+  }
+  return trials;
+}
+
+/**
+ * ADR 0048 / ADR 0049 D: the latest earlier Trial on another Snapshot of the
+ * same target (this ledger's own or imported) whose notes were sealed and
+ * whose inputs were inside invariant 1, and from its archive the whole map,
+ * setup record, registry, assumption tables and walks, plus the store table
+ * built from its Lab lookups, each complete, UTF-8 and within size, together
+ * within the total cap. Nothing here reads the files' meaning.
+ */
+export async function resolveWordPressPriorResearch(
+  state: Pick<CliState, "ledger" | "store">,
+  attachments: Pick<ProviderAttachmentStore, "readByDigest">,
+  query: PriorResearchQuery,
+): Promise<ResolvedPriorResearch> {
+  const local = await localResearchTrials(state, { targetId: query.targetId });
+  const imported = importedResearchTrials(state, { targetId: query.targetId });
+  // Latest finish first. At an equal instant this ledger's own Trial wins
+  // over an imported one, and among its own the later-appended wins.
+  const ordered = [
+    ...local.map((trial, index) => ({ trial, order: index })),
+    ...imported.map((trial, index) => ({ trial, order: -1 - index })),
+  ]
+    .filter(({ trial }) => trial.snapshotDigest !== query.snapshotDigest)
+    .sort(
+      (a, b) =>
+        (a.trial.finishedAt < b.trial.finishedAt
+          ? 1
+          : a.trial.finishedAt > b.trial.finishedAt
+            ? -1
+            : 0) || b.order - a.order,
+    )
+    .map(({ trial }) => trial);
+  if (ordered.length === 0) return none("no-earlier-trial");
+  for (const trial of ordered) {
+    const collected = await collectPriorResearch(state, attachments, trial);
+    if (collected === undefined) return none("no-files");
     const section = priorResearchSection({
-      priorVersion: version,
+      priorVersion: trial.version,
       currentVersion: query.currentVersion,
-      files: files.map(({ name, content }) => ({
+      files: collected.kept.map(({ name, content }) => ({
         name,
         bytes: content.byteLength,
       })),
+      withheld: collected.withheld.map(({ name }) => name),
     });
     return {
       status: "passed",
       section,
-      files: files.map(({ name, content }) => ({
+      files: collected.kept.map(({ name, content }) => ({
         path: priorResearchPath(name),
         contentBase64: content.toString("base64"),
       })),
       configuration: {
-        sourceRunId: candidate.started.runId,
-        sourceSnapshotDigest: candidate.started.snapshotDigest,
-        sourceVersion: version,
-        files: files.map(({ name, content }) => ({
+        sourceRunId: trial.runId,
+        ...(trial.sourceState === undefined
+          ? {}
+          : { sourceState: trial.sourceState }),
+        sourceSnapshotDigest: trial.snapshotDigest,
+        sourceVersion: trial.version,
+        files: collected.kept.map(({ name, content }) => ({
           name,
           digest: `sha256:${createHash("sha256").update(content).digest("hex")}`,
           bytes: content.byteLength,
         })),
+        ...(collected.withheld.length === 0
+          ? {}
+          : { withheld: collected.withheld.map(({ name }) => name) }),
         sectionDigest: `sha256:${createHash("sha256").update(section).digest("hex")}`,
       },
     };
@@ -150,32 +290,55 @@ export async function rebuildWordPressPriorResearch(
   recorded: PassedConfiguration,
   currentVersion: string,
 ): Promise<string | undefined> {
+  const source =
+    recorded.sourceState === undefined
+      ? localSource(state, recorded.sourceRunId)
+      : importedResearchTrials(state).find(
+          (trial) =>
+            trial.sourceState === recorded.sourceState &&
+            trial.runId === recorded.sourceRunId,
+        );
+  if (source === undefined) return undefined;
+  const collected = await collectPriorResearch(state, attachments, source);
+  if (collected === undefined) return undefined;
+  return priorResearchSection({
+    priorVersion: recorded.sourceVersion,
+    currentVersion,
+    files: collected.kept.map(({ name, content }) => ({
+      name,
+      bytes: content.byteLength,
+    })),
+    withheld: collected.withheld.map(({ name }) => name),
+  });
+}
+
+/** The archive and Lab record this ledger's own finished run left, by run id. */
+function localSource(
+  state: Pick<CliState, "ledger">,
+  runId: string,
+): Pick<ResearchTrial, "researchDigest" | "stores"> | undefined {
   const finished = state.ledger
     .readAll({ type: "discovery-run-finished" })
     .map(({ event }) => event)
     .find(
-      (event) =>
-        event.type === "discovery-run-finished" &&
-        event.runId === recorded.sourceRunId,
+      (event): event is FinishedEvent =>
+        event.type === "discovery-run-finished" && event.runId === runId,
     );
-  if (
-    finished?.type !== "discovery-run-finished" ||
-    finished.researchArtifact === undefined
-  )
-    return undefined;
-  const files = await archivedFiles(
-    attachments,
-    finished.researchArtifact.digest,
-  );
-  if (files.length === 0) return undefined;
-  return priorResearchSection({
-    priorVersion: recorded.sourceVersion,
-    currentVersion,
-    files: files.map(({ name, content }) => ({
-      name,
-      bytes: content.byteLength,
-    })),
-  });
+  if (finished?.researchArtifact === undefined) return undefined;
+  const explorationLabDigest = finished.artifacts.find(
+    ({ kind }) => kind === "exploration-lab",
+  )?.digest;
+  return {
+    researchDigest: finished.researchArtifact.digest,
+    ...(explorationLabDigest === undefined
+      ? {}
+      : {
+          stores: {
+            file: EXPLORATION_LAB_RECORD_FILE,
+            digest: explorationLabDigest,
+          },
+        }),
+  };
 }
 
 function none(
@@ -184,12 +347,12 @@ function none(
   return { status: "none", configuration: { none: reason } };
 }
 
-/** The version the selection record names, after its target id is confirmed. */
+/** The target and version the selection record names; `targetId`, when given, must match. */
 async function recordedVersion(
   state: Pick<CliState, "store">,
   selected: Extract<LedgerEventV1, { type: "target-selected" }>,
-  targetId: string,
-): Promise<string | undefined> {
+  targetId: string | undefined,
+): Promise<{ targetId: string; version: string } | undefined> {
   const ref = selected.artifacts.find(
     ({ kind }) => kind === "target-selection",
   );
@@ -204,19 +367,82 @@ async function recordedVersion(
     const target = wordPressTargetSelectionSchema.parse(
       JSON.parse(file.bytes.toString("utf8")),
     );
-    return target.targetId === targetId ? target.version : undefined;
+    return targetId === undefined || target.targetId === targetId
+      ? { targetId: target.targetId, version: target.version }
+      : undefined;
   } catch {
     return undefined;
   }
 }
 
-/** The two named files at the archive root, each whole, non-empty, UTF-8 and bounded. */
+type CollectedFile = { readonly name: string; readonly content: Buffer };
+
+/**
+ * The source Trial's files within the per-file bounds, plus its store table,
+ * then the total cap; undefined when nothing is left to pass.
+ */
+async function collectPriorResearch(
+  state: Pick<CliState, "store">,
+  attachments: Pick<ProviderAttachmentStore, "readByDigest">,
+  source: Pick<ResearchTrial, "researchDigest" | "stores">,
+): Promise<
+  | {
+      readonly kept: readonly CollectedFile[];
+      readonly withheld: readonly CollectedFile[];
+    }
+  | undefined
+> {
+  const files = await archivedFiles(attachments, source.researchDigest);
+  if (source.stores !== undefined) {
+    const stores = await researchStoresFile(state.store, source.stores);
+    if (stores !== undefined) files.push(stores);
+  }
+  if (files.length === 0) return undefined;
+  const capped = capPriorResearch(
+    files.map((file) => ({ ...file, bytes: file.content.byteLength })),
+  );
+  return capped.kept.length === 0 ? undefined : capped;
+}
+
+/**
+ * The store table as `stores.json`: built here from this state's sealed Lab
+ * record, or read back from the artifact `research import` built. Absent
+ * when the record is unavailable or answered no `find` / `trace`.
+ */
+export async function researchStoresFile(
+  store: Pick<PrivateArtifactStore, "readFile">,
+  source: ResearchStoresSource,
+): Promise<CollectedFile | undefined> {
+  const file = await store.readFile(
+    source.digest,
+    source.file,
+    MAX_EXPLORATION_LAB_RECORD_BYTES,
+  );
+  if (file.status !== "resolved") return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(file.bytes.toString("utf8")) as unknown;
+  } catch {
+    return undefined;
+  }
+  const stores =
+    source.file === RESEARCH_STORES_FILE
+      ? researchStoresSchema.safeParse(parsed).data
+      : buildResearchStores(parsed);
+  if (stores === undefined) return undefined;
+  const content = researchStoresBytes(stores);
+  if (content.byteLength > MAX_PRIOR_RESEARCH_FILE_BYTES) return undefined;
+  return { name: PRIOR_RESEARCH_STORES_FILE, content };
+}
+
+/**
+ * The admitted files of the archive: the root names and the `.md` files one
+ * level under the listed directories, each whole, non-empty, UTF-8 and bounded.
+ */
 async function archivedFiles(
   attachments: Pick<ProviderAttachmentStore, "readByDigest">,
   digest: string,
-): Promise<
-  { readonly name: PriorResearchFileName; readonly content: Buffer }[]
-> {
+): Promise<CollectedFile[]> {
   const stored = await attachments.readByDigest("research", digest);
   if (stored.status !== "resolved") return [];
   const parsed = researchArchiveSchema.safeParse(
@@ -229,13 +455,17 @@ async function archivedFiles(
     })(),
   );
   if (!parsed.success) return [];
-  const files: { name: PriorResearchFileName; content: Buffer }[] = [];
-  for (const name of PRIOR_RESEARCH_FILE_NAMES) {
-    const entry = parsed.data.entries.find(
-      (candidate) => candidate.path === name && candidate.type === "file",
-    );
-    if (entry === undefined || entry.type !== "file" || entry.truncated)
-      continue;
+  const files: CollectedFile[] = [];
+  const seen = new Set<string>();
+  for (const entry of parsed.data.entries) {
+    if (entry.type !== "file" || entry.truncated) continue;
+    const name = entry.path;
+    const admitted =
+      (PRIOR_RESEARCH_FILE_NAMES as readonly string[]).includes(name) ||
+      PRIOR_RESEARCH_DIRECTORIES.some((directory) =>
+        name.startsWith(`${directory}/`),
+      );
+    if (!admitted || !isPriorResearchName(name) || seen.has(name)) continue;
     const content = Buffer.from(entry.contentBase64, "base64");
     if (
       content.byteLength === 0 ||
@@ -247,6 +477,7 @@ async function archivedFiles(
     } catch {
       continue;
     }
+    seen.add(name);
     files.push({ name, content });
   }
   return files;

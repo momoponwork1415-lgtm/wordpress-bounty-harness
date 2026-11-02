@@ -115,6 +115,31 @@ for (const { event_json } of rows) {
 }' <state>/ledger.sqlite
 ```
 
+## 5d. 前回の研究 file を渡した Trial（ADR 0048、ADR 0049 決定 D、#793 の PR 4）
+
+`discovery.priorResearch: same-target` の campaign で、同じ plugin の別の版の Trial が封じた研究 file（地図、Lab の通常利用の記録、REGISTRY、仮定の表、歩き、保存先の表 `stores.json`）を受けた Trial は、`discovery-run-started.configuration.priorResearch` に `sourceRunId` があるもので見分ける。`{ none: ... }` のものは有効だったが渡せなかった Trial、項目が無いものは無効の campaign である。`sourceState` があれば、元の Trial は `research import` で別の台帳（bench）から取り込んだものである。
+
+- 分母は 2 つ並べる。Trial 数と Codex 時間（ADR 0045）。Root の wall は、その Trial の Root（`runKind: explore`）とその再開区間の `discovery-run-finished.wallTimeMs` の合計。
+- 主な数字: **Root の wall の中央値**と **F/Trial**（`finding-recorded` の数 / Trial 数。`finding-parked` は別に数える）を、研究ありの Trial と研究なしの Trial で並べる。研究なしは、同じ選定帯で `priorResearch` が `{ none: "no-earlier-trial" }` か項目なしの Trial。加えて段 1b（wbh-source-check）を通った数と、人間の観測で `match` になった数を並べる。
+- 同じ Snapshot に研究あり / なしの対は作らない（所有者 2026-10-31「同じ版は 1 回」）。比べるのは別の plugin・別の版の Trial の分布であり、対でないことを書く。
+- 渡した file の種類で分けるときは、`configuration.priorResearch.files[].name` を見る（`stores.json` があるのは元 Trial に Lab の記録があったもの）。`withheld` があれば、総量の上限で外した file の名前が入っている。
+- 合格線は Issue #793 の表の 4 行目: Root 時間が短くなり、F/Trial が落ちないこと。
+
+数え方の例:
+
+```bash
+node --no-warnings -e '
+const { DatabaseSync } = require("node:sqlite");
+const db = new DatabaseSync(process.argv[1], { readOnly: true });
+const rows = db.prepare("SELECT event_json FROM ledger_events WHERE event_type = ? ORDER BY sequence").all("discovery-run-started");
+for (const { event_json } of rows) {
+  const e = JSON.parse(event_json);
+  const p = e.configuration.priorResearch;
+  if (!p) continue;
+  console.log(e.campaignId, e.runId, p.sourceRunId ? `${p.sourceState ?? "local"} ${p.sourceVersion} ${p.files.length} files${p.withheld ? ` (${p.withheld.length} withheld)` : ""}` : `none ${p.none}`);
+}' <state>/ledger.sqlite
+```
+
 ## 6. 記録先
 
 - 再発見 case: `docs/evaluation/<日付>-<用途>.md` に表と注記、Issue #127 に comment。

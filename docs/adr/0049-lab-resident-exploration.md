@@ -85,3 +85,8 @@ B の 3 つ目の観測器 `POST /trace` を、決定どおりに実装した。
 - **台帳。** 後続を組むとき、後続 campaign の id で `follow-up-scheduled`（`ofRunId`、`ofCampaignId`、`leadCount`）を Snapshot ごとに 1 件、解決の前に書く。拒否されても失敗しても同じ Snapshot をもう一度組まないための印である。後続 Trial の `discovery-run-started.configuration` には `priorLeads`（ADR 0044 と同じ）に加えて `followUp: { of: <第 1 Trial の Root の runId>, leadCount }` を書く。再開区間にも写す。ADR 0044 の拒否（`prior-leads-already-run` を含む）は `target-skipped`（stage `discovery`、reason `follow-up-refused`、`reasonDetail` に拒否の code）で記録し、ランナーの log に 1 行書いて、他の Snapshot は走らせる。どれも追加の任意項目で、旧 event はそのまま読める。
 - **計測。** 本番 2 週。分母は Codex 時間。後続 Trial は `configuration.followUp` のある run で数え、Lead → Finding の転換を leads2（名指しの第 2 Trial 14 本で Finding 4）と比べる。数え方は [measurement.md](../agents/measurement.md) 5c にある。
 - **消し方。** `discovery.followUp`、`wordPressFollowUpPolicy`、`pendingFollowUps` と runner の分岐、`resolveWordPressFollowUp`、profile の `followUpPolicy`、`CliProfile.runCampaign` の `followUp` を revert する。記録済みの `follow-up-scheduled`、`configuration.followUp`、`target-skipped` の `follow-up-refused` は読み続ける（任意項目のまま残す）。
+
+## 2026-11-02 追記 3: 研究 file の引き継ぎを広げた（#793 の PR 4、決定 D）
+
+決定 D を実装した。詳細は [ADR 0048 の 2026-11-02 追記](0048-prior-research-input.md)にある。同じ対象の別の版の最新 Trial から渡す file に `REGISTRY.md`、`assumptions/*.md`、`walks/*.md` と、その Trial の `lookupLog` から Harness が写した保存先の表 `stores.json` を足し、全部で 2 MiB・64 file までにした。`research import --from <state dir>` で別の台帳（bench）の終了 Trial を候補に取り込める（`research-imported`）。計測は Issue #793 の表の 4 行目（同じ plugin の新版で Root 時間が短くなり F が落ちないこと）。消し方は決定の「D は渡す file を 2 つに戻す」のとおりで、`research-imported` は読み続ける。
+

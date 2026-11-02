@@ -1216,6 +1216,102 @@ describe("Ledger public interface", () => {
     ).rejects.toThrow();
   });
 
+  it("records the wider prior-research hand-over and an imported research Trial, and rejects names outside the set (ADR 0049 D)", async () => {
+    const { ledger } = await fixture();
+    const sha = (value: string) => `sha256:${value.repeat(64)}`;
+    const otherSnapshot = sha("2");
+    const revision = sha("3");
+    const wider = {
+      sourceRunId: "bench-run-1",
+      sourceState: "wordpress-bounty-harness-h31",
+      sourceSnapshotDigest: otherSnapshot,
+      sourceVersion: "3.3.1",
+      files: [
+        { name: "recon-map.md", digest: revision, bytes: 9000 },
+        { name: "REGISTRY.md", digest: revision, bytes: 400 },
+        { name: "stores.json", digest: revision, bytes: 50 },
+        { name: "assumptions/rest-api.md", digest: revision, bytes: 200 },
+        { name: "walks/upload.md", digest: revision, bytes: 300 },
+      ],
+      withheld: ["walks/settings.md"],
+      sectionDigest: sha("4"),
+    };
+    expect(
+      (
+        await ledger.append({
+          ...common("prior-research-wider"),
+          type: "discovery-run-started",
+          runId: "prior-research-wider",
+          trialId: "prior-research-wider",
+          history: { mode: "none" },
+          configuration: {
+            promptVariant: "wp2shell-bounty-v21-wide",
+            priorResearch: wider,
+          },
+        })
+      ).status,
+    ).toBe("appended");
+    for (const name of ["tools/hooks.tsv", "MERGED.md", "assumptions/a/b.md"])
+      await expect(
+        ledger.append({
+          ...common(`prior-research-bad-${name}`),
+          type: "discovery-run-started",
+          runId: "prior-research-bad",
+          history: { mode: "none" },
+          configuration: {
+            promptVariant: "wp2shell-bounty-v21-wide",
+            priorResearch: {
+              ...wider,
+              files: [{ name, digest: revision, bytes: 1 }],
+            },
+          },
+        } as never),
+      ).rejects.toThrow();
+    const imported = {
+      ...common("research-imported:wordpress-bounty-harness-h31:bench-run-1"),
+      campaignId: "research-import:wordpress-bounty-harness-h31",
+      snapshotDigest: otherSnapshot,
+      type: "research-imported" as const,
+      fromState: "wordpress-bounty-harness-h31",
+      fromCampaignId: "h31-20261102",
+      fromRunId: "bench-run-1",
+      targetId: "wporg:synthetic-plugin",
+      targetVersion: "3.3.1",
+      sourceFinishedAt: "2026-11-02T03:00:00.000Z",
+      researchDigest: sha("5"),
+      explorationLabDigest: sha("6"),
+    };
+    expect((await ledger.append(imported)).status).toBe("appended");
+    // The same source Trial again is the existing event, whatever the clock says.
+    expect(
+      (
+        await ledger.append({
+          ...imported,
+          occurredAt: "2026-11-03T00:00:00.000Z",
+        })
+      ).status,
+    ).toBe("existing");
+    expect(
+      ledger.read({ type: "research-imported" }).map(({ event }) => event),
+    ).toMatchObject([imported]);
+    await expect(
+      ledger.append({
+        ...imported,
+        identity: "research-imported-bad",
+        fromState: "/home/dev/.local/state/other",
+      }),
+    ).rejects.toThrow();
+    expect(
+      ledger
+        .read({ type: "discovery-run-started" })
+        .map(({ event }) =>
+          event.type === "discovery-run-started"
+            ? event.configuration.priorResearch
+            : undefined,
+        ),
+    ).toEqual([wider]);
+  });
+
   it("records a scheduled follow-up Trial, its refusal and its link to the ended Trial, and still reads starts without them (ADR 0049 C)", async () => {
     const { ledger } = await fixture();
     expect(

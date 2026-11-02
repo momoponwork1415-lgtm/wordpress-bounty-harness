@@ -16,6 +16,17 @@ const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const artifactRef = z.strictObject({ kind: id, digest });
 /** A version string such as `3.3.1`; never free text. */
 const versionToken = z.string().regex(/^[0-9A-Za-z.+_-]{1,64}$/);
+/** A state directory's basename, as `research import --from` records it. */
+const stateName = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
+/**
+ * A prior-research file name relative to `prior/` (ADR 0048, widened by ADR
+ * 0049 D); the same set `src/discovery/prior-research.ts` admits.
+ */
+const priorResearchName = z
+  .string()
+  .regex(
+    /^(?:recon-map\.md|lab-setup\.md|REGISTRY\.md|stores\.json|(?:assumptions|walks)\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.md)$/,
+  );
 /** A programme's decision on an external submission (#698). */
 export const EXTERNAL_OUTCOMES = [
   "accepted",
@@ -71,6 +82,30 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     /** The policy the runner selects under now. */
     currentPolicyDigest: digest,
     reason: z.enum(["policy-changed"]),
+  }),
+  event({
+    /**
+     * ADR 0049 D: `research import --from` found, in another state's ledger,
+     * an ended Trial whose sealed notes are in the shared attachment store,
+     * and admitted it as a prior-research candidate for this ledger's later
+     * Trials of the same target. snapshotDigest is the source Trial's;
+     * campaignId is `research-import:<fromState>`. The notes stay where they
+     * are and are referenced by digest; an optional `research-stores`
+     * artifact holds the store table built from the source Trial's Lab
+     * lookups (keys dropped). One event per source Trial; identity
+     * `research-imported:<fromState>:<fromRunId>`.
+     */
+    type: z.literal("research-imported"),
+    fromState: stateName,
+    fromCampaignId: id,
+    fromRunId: id,
+    targetId: id,
+    targetVersion: versionToken,
+    /** The source Trial's `discovery-run-finished.occurredAt`, which orders it among candidates. */
+    sourceFinishedAt: z.iso.datetime({ offset: true }),
+    researchDigest: digest,
+    /** The source Trial's sealed `exploration-lab` record, when it had a Lab. */
+    explorationLabDigest: digest.optional(),
   }),
   event({
     type: z.literal("snapshot-frozen"),
@@ -278,18 +313,26 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         .union([
           z.strictObject({
             sourceRunId: id,
+            /**
+             * ADR 0049 D: the state directory (basename) whose ledger the
+             * source Trial was imported from (`research-imported`); absent
+             * when the source Trial is this ledger's own.
+             */
+            sourceState: stateName.optional(),
             sourceSnapshotDigest: digest,
             sourceVersion: z.string().min(1).max(64),
             files: z
               .array(
                 z.strictObject({
-                  name: z.enum(["recon-map.md", "lab-setup.md"]),
+                  name: priorResearchName,
                   digest,
                   bytes: z.number().int().positive(),
                 }),
               )
               .min(1)
-              .max(2),
+              .max(64),
+            /** ADR 0049 D: files of the same Trial withheld for the total size cap, by name. */
+            withheld: z.array(priorResearchName).min(1).max(256).optional(),
             sectionDigest: digest,
           }),
           z.strictObject({
