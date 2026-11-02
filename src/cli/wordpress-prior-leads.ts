@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import {
   priorLeadsSection,
+  type FollowUpConfiguration,
   type PriorLeadsConfiguration,
 } from "../discovery/index.js";
 import { canonicalDigest } from "../infrastructure/canonical-json.js";
@@ -19,6 +20,7 @@ import {
   type WordPressTargetSelection,
 } from "../profiles/wordpress/selection/index.js";
 import { targetSelectionId } from "../selection/index.js";
+import type { FollowUpTarget } from "./continuous.js";
 import type { CliState } from "./index.js";
 import {
   MAX_PRIOR_LEADS_PER_SNAPSHOT,
@@ -34,6 +36,8 @@ export type ResolvedPriorLeads = {
   readonly section: string;
   /** What `discovery-run-started.configuration.priorLeads` records. */
   readonly configuration: PriorLeadsConfiguration;
+  /** ADR 0049 C: set when the runner scheduled this second Trial; recorded as `configuration.followUp`. */
+  readonly followUp?: FollowUpConfiguration;
 };
 
 /** Why a named second Trial does not start; the campaign stops before any Lab. */
@@ -249,6 +253,90 @@ export async function resolveWordPressPriorLeads(
       "prior-leads-target-repeated",
       `${repeated} is named with more than one Snapshot`,
     );
+  return resolved;
+}
+
+/**
+ * ADR 0049 C: resolve the follow-up Trials the runner scheduled, one per
+ * Snapshot, through the same checks as a named second Trial. Each Snapshot
+ * gets a `follow-up-scheduled` record once per campaign before it is
+ * resolved, so neither a refusal nor a later failure schedules it again. A
+ * refusal (`PriorLeadsRefusal`, including `prior-leads-already-run`) is
+ * recorded as `target-skipped` with reason `follow-up-refused`, logged and
+ * left out; the other Snapshots still run. Nothing here reads a Lead's text
+ * to decide.
+ */
+export async function resolveWordPressFollowUp(
+  state: Pick<CliState, "ledger" | "store" | "clock" | "newId">,
+  campaignId: string,
+  followUp: {
+    readonly targets: readonly FollowUpTarget[];
+    log(line: string): void;
+  },
+): Promise<readonly ResolvedPriorLeads[]> {
+  const scheduled = new Set(
+    state.ledger
+      .readAll({ campaignId, type: "follow-up-scheduled" })
+      .map(({ event }) => event.snapshotDigest),
+  );
+  const refused = new Set(
+    state.ledger
+      .readAll({ campaignId, type: "target-skipped" })
+      .flatMap(({ event }) =>
+        event.type === "target-skipped" && event.reason === "follow-up-refused"
+          ? [event.snapshotDigest]
+          : [],
+      ),
+  );
+  const resolved: ResolvedPriorLeads[] = [];
+  for (const target of followUp.targets) {
+    const { snapshotDigest } = target;
+    if (refused.has(snapshotDigest)) continue;
+    if (!scheduled.has(snapshotDigest)) {
+      const appended = await state.ledger.append({
+        schemaVersion: 1,
+        identity: `follow-up-scheduled-${canonicalDigest({ campaignId, snapshotDigest }).slice(7, 39)}`,
+        campaignId,
+        snapshotDigest,
+        occurredAt: state.clock().toISOString(),
+        type: "follow-up-scheduled",
+        ofRunId: target.ofRunId,
+        ofCampaignId: target.ofCampaignId,
+        leadCount: target.leadCount,
+      });
+      if (appended.status === "conflict")
+        throw new Error(`Follow-up schedule of ${snapshotDigest} conflicted`);
+      scheduled.add(snapshotDigest);
+    }
+    try {
+      const [one] = await resolveWordPressPriorLeads(
+        state,
+        [{ snapshotDigest, leadIds: [...target.leadIds] }],
+        campaignId,
+      );
+      resolved.push({
+        ...one!,
+        followUp: { of: target.ofRunId, leadCount: target.leadCount },
+      });
+    } catch (error) {
+      if (!(error instanceof PriorLeadsRefusal)) throw error;
+      followUp.log(
+        `follow-up refused campaign=${campaignId} snapshot=${snapshotDigest} of=${target.ofRunId} reason=${error.reason}`,
+      );
+      await state.ledger.append({
+        schemaVersion: 1,
+        identity: `target-skipped-${state.newId()}`,
+        campaignId,
+        snapshotDigest,
+        occurredAt: state.clock().toISOString(),
+        type: "target-skipped",
+        selectionId: target.selectionId,
+        stage: "discovery",
+        reason: "follow-up-refused",
+        reasonDetail: error.reason,
+      });
+    }
+  }
   return resolved;
 }
 

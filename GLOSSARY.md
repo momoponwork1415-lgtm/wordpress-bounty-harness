@@ -40,6 +40,7 @@
 | Snapshot digest | Target Snapshot を固定した digest。判定は、Finding と検証結果でこれが一致するときだけ行う（SPEC 第 2 節の不変条件 5）。 |
 | Campaign | 台帳の `campaignId` の単位。本番では選定バッチ 1 つの探索と記録のまとまりで、Target Snapshot は `maximumTargets` 件まで入る。検証は後から Finding 単位に同じ campaign へ記録する。開発で手動実行するときは 1 対象でもよい。 |
 | Trial | Campaign 内の独立した探索試行。Root と子（`discovery.maxChildren` 体まで、既定 4）が 1 つの Trial を構成する。再開した続きも同じ Trial に数える。 |
+| 後続 Trial（follow-up） | 終了した Trial に Lead が残り、同じ Snapshot に第 2 Trial が無いとき、連続ランナーが新しい対象より先に 1 回組む第 2 Trial（ADR 0044 の Lead 入力 Trial と同じ入力）。設定は `discovery.followUp`（`lab: attached` のときの既定 `leads`）。Harness は Lead の件数と台帳順の id だけを読む。台帳では `follow-up-scheduled` と `discovery-run-started.configuration.followUp` で名指しの第 2 Trial と分ける（ADR 0049 追記 2）。 |
 | Root / 子 | 協調 Trial の親エージェントが Root、Root が起動する subagent が子。同時に生きる子の上限は設定値 `discovery.maxChildren`（1〜8）で、何体使うかは Root が決める（ADR 0029、ADR 0039）。 |
 | 探索スキル（discovery skill） | 探索の手順 1 つを書いた `SKILL.md`。campaign 設定 `discovery.skills` で id を名指しすると、Harness が digest を検証してサンドボックスの CLI home に置き、CLI が name と description を Root と子に一覧する。目的文は変えない。registry は `prompts/skills.ts`、本文は `prompts/skills/<id>/SKILL.md`。同じディレクトリの script や参照文も digest で固定して一緒に置く（ADR 0043）。 |
 | Discovery run | モデル実行の記録単位。Trial の中で何回モデルを呼んだかと区別する。 |

@@ -16,6 +16,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { pendingFollowUps } from "../../src/cli/continuous.js";
 import { runCli, type CliIo } from "../../src/cli/index.js";
 import { openState } from "../../src/cli/state.js";
 import {
@@ -3333,6 +3334,115 @@ describe("harness CLI vertical slice", () => {
     expect(again.code).toBe(1);
     expect(again.stderr).toContain("prior-leads-already-run");
     expect(prompts).toHaveLength(2);
+  });
+
+  it("schedules the follow-up Trial itself when a batch's Trial leaves Leads: Prior leads section, Lab, and the link to the first Trial in the ledger (ADR 0049 C)", async () => {
+    const lead = {
+      summary: "No reader of the stored value was shown. Second sentence.",
+      attackerPosition: "subscriber",
+      primitive: "write",
+      storage: null,
+      missingEdge: "consumer",
+      sourceTrace: [
+        { file: "synthetic-plugin.php", function: "synthetic_boot", line: 2 },
+        { file: "includes/synthetic.php", function: "synthetic_save", line: 4 },
+      ],
+      labObservations: "Synthetic partial observation",
+    };
+    const { run, root, profile, configPath, ledger, prompts } = await harness({
+      omitLegacyVerifier: true,
+      entryPoints: true,
+      leadsOnCalls: { 1: [lead] },
+      config: { discovery: { lab: "attached" } },
+    });
+    const { wordpressVersion } = JSON.parse(
+      await readFile(configPath, "utf8"),
+    ) as { wordpressVersion: string };
+    const policy = JSON.parse(
+      await readFile(join(root, "selection.json"), "utf8"),
+    ) as object;
+    await mkdir(join(root, "policies"));
+    await writeFile(
+      join(root, "policies", "selection.json"),
+      JSON.stringify({ ...policy, wordpressVersion }),
+    );
+    (profile as { hostStatus?: unknown }).hostStatus = async () => ({
+      loginExpiresAt: new Date("2027-01-01T00:00:00Z"),
+      programmeObservedAt: new Date(now),
+      freeBytes: 100 * 1024 ** 3,
+      loginMarginMinutes: 60,
+    });
+    // The runner explores its first batch and the follow-up it owes; any later state change stops it.
+    const runner = await run(
+      "continuous",
+      "run",
+      "--config",
+      configPath,
+      "--selection",
+      join(root, "policies", "selection.json"),
+      "--notify",
+      `grep -q ' running campaignId=prod-[0-9]*-[12]$' || touch '${join(root, "state", "continuous.stop")}'`,
+    );
+    expect(runner.code).toBe(0);
+    expect(runner.stdout).toMatch(
+      / follow-up campaign=prod-(\d{8})-2 of=prod-\1-1 targets=1$/m,
+    );
+    expect(runner.stdout).toMatch(/ batch prod-\d{8}-2 stopped=none /);
+    const starts = ledger()
+      .read({ type: "discovery-run-started" })
+      .flatMap(({ event }) =>
+        event.type === "discovery-run-started" && event.runKind === "explore"
+          ? [event]
+          : [],
+      );
+    expect(starts).toHaveLength(2);
+    const [first, second] = starts;
+    expect(first!.campaignId).toMatch(/^prod-\d{8}-1$/);
+    expect(second!.campaignId).toMatch(/^prod-\d{8}-2$/);
+    expect(first!.configuration).not.toHaveProperty("priorLeads");
+    expect(first!.configuration).not.toHaveProperty("followUp");
+    const leadIds = ledger()
+      .read({ campaignId: first!.campaignId, type: "lead-recorded" })
+      .flatMap(({ event }) =>
+        event.type === "lead-recorded" ? [event.leadId] : [],
+      );
+    expect(leadIds).toHaveLength(1);
+    expect(second).toMatchObject({
+      snapshotDigest: first!.snapshotDigest,
+      labAttached: true,
+      configuration: {
+        lab: { mode: "attached" },
+        priorLeads: { representatives: 1, leadIds },
+        followUp: { of: first!.runId, leadCount: 1 },
+      },
+    });
+    expect(
+      ledger()
+        .read({ campaignId: second!.campaignId, type: "follow-up-scheduled" })
+        .map(({ event }) => event),
+    ).toMatchObject([
+      {
+        snapshotDigest: first!.snapshotDigest,
+        ofRunId: first!.runId,
+        ofCampaignId: first!.campaignId,
+        leadCount: 1,
+      },
+    ]);
+    // No selection batch binds the follow-up campaign; the Root received the section unchanged.
+    expect(
+      ledger().read({
+        campaignId: second!.campaignId,
+        type: "selection-batch-bound",
+      }),
+    ).toHaveLength(0);
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).not.toContain("## Prior leads");
+    expect(prompts[1]).toContain("## Prior leads");
+    expect(prompts[1]).toContain(
+      "- Not shown: No reader of the stored value was shown.",
+    );
+    // The follow-up Trial left no Leads of its own: nothing more is owed.
+    expect(pendingFollowUps(ledger(), "prod")).toEqual([]);
   });
 
   it("does not resume a second Trial whose Prior leads section would differ (ADR 0044)", async () => {

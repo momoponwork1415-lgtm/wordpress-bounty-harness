@@ -1216,6 +1216,91 @@ describe("Ledger public interface", () => {
     ).rejects.toThrow();
   });
 
+  it("records a scheduled follow-up Trial, its refusal and its link to the ended Trial, and still reads starts without them (ADR 0049 C)", async () => {
+    const { ledger } = await fixture();
+    expect(
+      await ledger.append({
+        ...common("follow-up-scheduled-1", snapshot, "prod-20261102-2"),
+        type: "follow-up-scheduled",
+        ofRunId: "run-first",
+        ofCampaignId: "prod-20261102-1",
+        leadCount: 11,
+      }),
+    ).toMatchObject({ status: "appended" });
+    expect(
+      await ledger.append({
+        ...common("follow-up-started", snapshot, "prod-20261102-2"),
+        type: "discovery-run-started",
+        runId: "run-second",
+        trialId: "run-second",
+        history: { mode: "none" },
+        configuration: {
+          promptVariant: "wp2shell-bounty-v21-wide",
+          priorLeads: {
+            representatives: 8,
+            representativesDigest: revision,
+            leadIds: Array.from(
+              { length: 8 },
+              (_, index) =>
+                `sha256:${String(index).padStart(2, "0").repeat(32)}`,
+            ),
+            gapWithheld: 0,
+            sectionDigest: labSetup,
+          },
+          followUp: { of: "run-first", leadCount: 11 },
+        },
+      }),
+    ).toMatchObject({ status: "appended" });
+    expect(
+      await ledger.append({
+        ...common("follow-up-refused", otherSnapshot, "prod-20261102-2"),
+        type: "target-skipped",
+        selectionId: "wporg:other@1.0.0",
+        stage: "discovery",
+        reason: "follow-up-refused",
+        reasonDetail: "prior-leads-already-run",
+      }),
+    ).toMatchObject({ status: "appended" });
+    // A first Trial's start carries neither field.
+    expect(
+      await ledger.append({
+        ...common("first-started", snapshot, "prod-20261102-1"),
+        type: "discovery-run-started",
+        runId: "run-first",
+        history: { mode: "none" },
+        configuration: { promptVariant: "wp2shell-bounty-v21-wide" },
+      }),
+    ).toMatchObject({ status: "appended" });
+    const starts = ledger
+      .read({ type: "discovery-run-started" })
+      .map(({ event }) =>
+        event.type === "discovery-run-started"
+          ? [event.runId, event.configuration.followUp]
+          : [],
+      );
+    expect(starts).toEqual([
+      ["run-second", { of: "run-first", leadCount: 11 }],
+      ["run-first", undefined],
+    ]);
+    expect(
+      ledger.read({ type: "follow-up-scheduled" }).map(({ event }) => event),
+    ).toMatchObject([{ ofRunId: "run-first", leadCount: 11 }]);
+    expect(ledger.stops({ campaignId: "prod-20261102-2" })).toContainEqual({
+      type: "target-skipped",
+      fields: { stage: "discovery", reason: "follow-up-refused" },
+      count: 1,
+    });
+    await expect(
+      ledger.append({
+        ...common("follow-up-bad", snapshot, "prod-20261102-3"),
+        type: "follow-up-scheduled",
+        ofRunId: "run-first",
+        ofCampaignId: "prod-20261102-1",
+        leadCount: 0,
+      } as never),
+    ).rejects.toThrow();
+  });
+
   it("records a verification Lab's relay destinations on lab-provisioned (ADR 0046)", async () => {
     const { ledger } = await fixture();
     const appended = await ledger.append({

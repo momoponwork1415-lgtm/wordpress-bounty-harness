@@ -9,9 +9,13 @@ import type { CampaignSummary } from "../../src/cli/pipeline.js";
 import {
   continuousPaths,
   createContinuousRunner,
+  MAX_FOLLOW_UP_LEADS,
+  pendingFollowUps,
   type ContinuousDeps,
   type ContinuousStopReason,
+  type FollowUpTarget,
 } from "../../src/cli/continuous.js";
+import { MAX_PRIOR_LEADS_PER_SNAPSHOT } from "../../src/cli/wordpress-session.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger, type LedgerEventInput } from "../../src/ledger/index.js";
 
@@ -1100,5 +1104,371 @@ describe("runners of two campaign prefixes in one state (#604)", () => {
     expect(waits).toBe(2);
     expect(selects).toBeGreaterThan(0);
     expect(existsSync(continuousPaths(t.root).selectLock)).toBe(false);
+  });
+});
+
+describe("follow-up Trials for ended Trials that left Leads (ADR 0049 C)", () => {
+  const digest = (letter: string) => `sha256:${letter.repeat(64)}`;
+  /** A Lead's Private Evidence; the ledger refuses a Lead without one. */
+  const leadEvidence = new Map<string, Promise<string>>();
+  const leadArtifact = (root: string) => {
+    let digest = leadEvidence.get(root);
+    if (digest === undefined) {
+      digest = new PrivateArtifactStore({
+        rootDirectory: join(root, "evidence"),
+        maxEntries: 4,
+        maxBytes: 1024,
+      }).putFiles({ "lead.json": "{}" });
+      leadEvidence.set(root, digest);
+    }
+    return digest;
+  };
+  /** A batch campaign's explore Trial on `snapshot`, bound to a selection batch, with `leads` Leads. */
+  type Batch = Awaited<ReturnType<typeof setup>>;
+  const explored = async (
+    t: Batch,
+    campaignId: string,
+    snapshot: string,
+    options: {
+      readonly leads?: number;
+      readonly finished?: object | null;
+      readonly priorLeads?: boolean;
+      readonly bound?: boolean;
+    } = {},
+  ) => {
+    const runId = `run-${campaignId}-${snapshot.slice(7, 9)}`;
+    if (options.bound !== false)
+      await t.append(campaignId, {
+        snapshotDigest: snapshot,
+        type: "selection-batch-bound",
+        selectionBatchId: `batch-${campaignId}`,
+        policyDigest: digest("b"),
+        selectionIds: [`wporg:${snapshot.slice(7, 9)}@1.0.0`],
+      });
+    await t.append(campaignId, {
+      snapshotDigest: snapshot,
+      type: "target-selected",
+      selectionId: `wporg:${snapshot.slice(7, 9)}@1.0.0`,
+    });
+    await t.append(campaignId, {
+      snapshotDigest: snapshot,
+      type: "discovery-run-started",
+      runId,
+      trialId: runId,
+      runKind: "explore",
+      history: { mode: "none" },
+      configuration: {
+        promptVariant: "wp2shell-bounty-v21-wide",
+        ...(options.priorLeads === true
+          ? {
+              priorLeads: {
+                representatives: 1,
+                representativesDigest: digest("c"),
+                leadIds: [digest("d")],
+                gapWithheld: 0,
+                sectionDigest: digest("e"),
+              },
+            }
+          : {}),
+      },
+    });
+    for (let index = 0; index < (options.leads ?? 0); index++)
+      await t.append(campaignId, {
+        snapshotDigest: snapshot,
+        type: "lead-recorded",
+        leadId: `sha256:${String(index).padStart(2, "0").repeat(32)}`,
+        runId,
+        trialId: runId,
+        missingEdge: "consumer",
+        primitive: "write",
+        storageKind: "option",
+        artifacts: [{ kind: "lead", digest: await leadArtifact(t.root) }],
+      });
+    if (options.finished !== null)
+      await t.append(campaignId, {
+        snapshotDigest: snapshot,
+        type: "discovery-run-finished",
+        runId,
+        outcome: "completed",
+        costUsd: "unavailable",
+        wallTimeMs: 1,
+        ...options.finished,
+      });
+    return runId;
+  };
+
+  it("names the same representative cap as the prior-leads schema", () => {
+    expect(MAX_FOLLOW_UP_LEADS).toBe(MAX_PRIOR_LEADS_PER_SNAPSHOT);
+  });
+
+  it("finds, from the ledger alone, the ended Trials of the latest batch that left Leads and have no second Trial", async () => {
+    const t = await setup([]);
+    // An older batch of this prefix: not a candidate any more.
+    await explored(t, "prod-20261019-1", digest("1"), { leads: 3 });
+    // Another prefix's batch: not this runner's.
+    await explored(t, "bench-20261020-1", digest("2"), { leads: 3 });
+    const campaignId = "prod-20261020-1";
+    const ended = await explored(t, campaignId, digest("3"), {
+      leads: 10,
+      bound: true,
+    });
+    await explored(t, campaignId, digest("4"), { leads: 0, bound: false });
+    await explored(t, campaignId, digest("5"), {
+      leads: 2,
+      finished: null,
+      bound: false,
+    });
+    await explored(t, campaignId, digest("6"), {
+      leads: 2,
+      finished: { outcome: "provider-limited", reason: "provider" },
+      bound: false,
+    });
+    await explored(t, campaignId, digest("7"), {
+      leads: 2,
+      finished: { outcome: "failed", reason: "interrupted" },
+      bound: false,
+    });
+    await explored(t, campaignId, digest("8"), {
+      leads: 2,
+      priorLeads: true,
+      bound: false,
+    });
+    // A sealed report that ended on the wall still counts as ended.
+    const walled = await explored(t, campaignId, digest("9"), {
+      leads: 1,
+      finished: { outcome: "failed", reason: "wall" },
+      bound: false,
+    });
+    // One already followed up by another campaign, one already scheduled.
+    await explored(t, campaignId, digest("a"), { leads: 2, bound: false });
+    await t.append("prod-20261020-2", {
+      snapshotDigest: digest("a"),
+      type: "discovery-run-started",
+      runId: "second-a",
+      runKind: "explore",
+      history: { mode: "none" },
+      configuration: {
+        promptVariant: "wp2shell-bounty-v21-wide",
+        priorLeads: {
+          representatives: 1,
+          representativesDigest: digest("c"),
+          leadIds: [digest("d")],
+          gapWithheld: 0,
+          sectionDigest: digest("e"),
+        },
+      },
+    });
+    await explored(t, campaignId, digest("b"), { leads: 2, bound: false });
+    await t.append("prod-20261020-3", {
+      snapshotDigest: digest("b"),
+      type: "follow-up-scheduled",
+      ofRunId: "run-x",
+      ofCampaignId: campaignId,
+      leadCount: 2,
+    });
+    const pending = pendingFollowUps(t.deps.ledger, "prod");
+    expect(pending.map((target) => target.snapshotDigest)).toEqual([
+      digest("3"),
+      digest("9"),
+    ]);
+    expect(pending[0]).toMatchObject({
+      selectionId: "wporg:33@1.0.0",
+      ofRunId: ended,
+      ofCampaignId: campaignId,
+      leadCount: 10,
+    });
+    expect(pending[0]!.leadIds).toHaveLength(MAX_FOLLOW_UP_LEADS);
+    expect(pending[0]!.leadIds[0]).toBe(`sha256:${"00".repeat(32)}`);
+    expect(pending[1]).toMatchObject({ ofRunId: walled, leadCount: 1 });
+    // The bench prefix sees only its own batch.
+    expect(
+      pendingFollowUps(t.deps.ledger, "bench").map(
+        (target) => target.snapshotDigest,
+      ),
+    ).toEqual([digest("2")]);
+  });
+
+  /** A runner whose batch step leaves Leads and whose follow-up step records what the profile would. */
+  const followUpRunner = async (
+    policy: "leads" | "none" | undefined,
+    options: { readonly refuse?: boolean } = {},
+  ) => {
+    const received: (readonly FollowUpTarget[] | undefined)[] = [];
+    const steps: Step[] = [];
+    const t = await setup(steps, {
+      ...(policy === undefined ? {} : { followUpPolicy: async () => policy }),
+    });
+    t.deps.runCampaign = async (input) => {
+      t.calls.push(input);
+      received.push(input.followUp?.targets);
+      const step = steps.shift();
+      if (step === undefined) {
+        await writeFile(continuousPaths(t.root).stop, "");
+        return {
+          campaignId: input.campaignId,
+          targets: [],
+          skipped: [],
+          stopped: "operator",
+        };
+      }
+      if (input.followUp === undefined)
+        await explored(t, input.campaignId, digest("3"), { leads: 2 });
+      else
+        for (const target of input.followUp.targets) {
+          await t.append(input.campaignId, {
+            snapshotDigest: target.snapshotDigest,
+            type: "follow-up-scheduled",
+            ofRunId: target.ofRunId,
+            ofCampaignId: target.ofCampaignId,
+            leadCount: target.leadCount,
+          });
+          if (options.refuse === true) {
+            input.followUp.log(
+              `follow-up refused snapshot=${target.snapshotDigest} reason=prior-leads-already-run`,
+            );
+            await t.append(input.campaignId, {
+              snapshotDigest: target.snapshotDigest,
+              type: "target-skipped",
+              selectionId: target.selectionId,
+              stage: "discovery",
+              reason: "follow-up-refused",
+              reasonDetail: "prior-leads-already-run",
+            });
+          } else
+            await explored(t, input.campaignId, target.snapshotDigest, {
+              priorLeads: true,
+              bound: false,
+            });
+        }
+      const result = await step(input);
+      return {
+        campaignId: input.campaignId,
+        targets: [],
+        skipped: [],
+        ...result,
+      } as CampaignSummary;
+    };
+    return { t, steps, received };
+  };
+
+  it("runs one follow-up campaign for the batch's Leads before selecting again, under the next campaign id", async () => {
+    let selects = 0;
+    const { t, steps, received } = await followUpRunner("leads");
+    t.deps.select = async () => (
+      selects++,
+      { batchId: `selection-${selects}`, targets: ["a"] }
+    );
+    steps.push(
+      async () => ({}),
+      async () => ({}),
+      async () => ({}),
+    );
+    expect(await t.runner.run()).toBe("operator");
+    expect(t.calls.map((call) => call.campaignId)).toEqual([
+      "prod-20261020-1",
+      "prod-20261020-2",
+      "prod-20261020-3",
+      "prod-20261020-4",
+    ]);
+    expect(received[0]).toBeUndefined();
+    expect(received[1]).toMatchObject([
+      {
+        snapshotDigest: digest("3"),
+        ofRunId: "run-prod-20261020-1-33",
+        ofCampaignId: "prod-20261020-1",
+        leadCount: 2,
+      },
+    ]);
+    expect(received[1]![0]!.leadIds).toHaveLength(2);
+    // The follow-up campaign itself left no Leads: the next round selects,
+    // and the batch that explores the same Snapshot again is not followed up
+    // twice (its second Trial exists). The stop step selects too.
+    expect(received[2]).toBeUndefined();
+    expect(received[3]).toBeUndefined();
+    expect(selects).toBe(3);
+    expect(t.log.join("\n")).toContain(
+      "follow-up campaign=prod-20261020-2 of=prod-20261020-1 targets=1",
+    );
+    expect(t.runner.memo().consecutiveNoProgressBatches).toBe(0);
+    expect(t.runner.memo().followUp).toBeUndefined();
+  });
+
+  it.each([["none"], [undefined]] as const)(
+    "schedules nothing when the policy is %s",
+    async (policy) => {
+      const { t, steps, received } = await followUpRunner(policy);
+      steps.push(
+        async () => ({}),
+        async () => ({}),
+      );
+      await t.runner.run();
+      expect(received).toEqual([undefined, undefined, undefined]);
+    },
+  );
+
+  it("records a refused follow-up once and moves on without a retry or a no-progress count", async () => {
+    const { t, steps, received } = await followUpRunner("leads", {
+      refuse: true,
+    });
+    steps.push(
+      async () => ({}),
+      async () => ({}),
+      async () => ({}),
+    );
+    await t.runner.run();
+    expect(received.map((targets) => targets?.length)).toEqual([
+      undefined,
+      1,
+      undefined,
+      undefined,
+    ]);
+    expect(t.log.join("\n")).toContain("reason=prior-leads-already-run");
+    // The refused follow-up completed no Trial, but it is not a batch.
+    expect(t.runner.memo().consecutiveNoProgressBatches).toBe(0);
+    expect(t.states()).not.toContain("holding-no-progress");
+    expect(pendingFollowUps(t.deps.ledger, "prod")).toEqual([]);
+  });
+
+  it("rediscovers a pending follow-up from the ledger after a restart without a memo", async () => {
+    const { t, steps, received } = await followUpRunner("leads");
+    // The batch ended and the runner died before scheduling: no memo, ledger only.
+    await explored(t, "prod-20261020-1", digest("3"), { leads: 2 });
+    let selects = 0;
+    t.deps.select = async () => (
+      selects++,
+      { batchId: "selection-9", targets: ["a"] }
+    );
+    steps.push(async () => ({}));
+    await t.runner.run();
+    expect(t.calls[0]?.campaignId).toBe("prod-20261020-2");
+    expect(received[0]).toMatchObject([{ snapshotDigest: digest("3") }]);
+    expect(selects).toBe(1);
+  });
+
+  it("resumes a memoised follow-up campaign with its targets after a restart", async () => {
+    const { t, steps, received } = await followUpRunner("leads");
+    const target: FollowUpTarget = {
+      snapshotDigest: digest("3"),
+      selectionId: "wporg:33@1.0.0",
+      ofRunId: "run-prod-20261019-9-33",
+      ofCampaignId: "prod-20261019-9",
+      leadCount: 2,
+      leadIds: [digest("0"), digest("1")],
+    };
+    await writeFile(
+      continuousPaths(t.root).memo,
+      JSON.stringify({
+        campaignId: "prod-20261020-7",
+        target: null,
+        followUp: [target],
+      }),
+    );
+    let asked = 0;
+    t.deps.discardStaleSelection = async () => (asked++, "selection-1");
+    steps.push(async () => ({}));
+    await t.runner.run();
+    expect(t.calls[0]?.campaignId).toBe("prod-20261020-7");
+    expect(received[0]).toEqual([target]);
+    expect(asked).toBe(0);
   });
 });

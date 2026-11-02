@@ -56,6 +56,30 @@ const STOP_REASONS = [
 
 export type ContinuousStopReason = (typeof STOP_REASONS)[number];
 
+type StartedEvent = Extract<LedgerEventV1, { type: "discovery-run-started" }>;
+
+/**
+ * ADR 0044 names at most 8 representatives per Snapshot; the WordPress
+ * prior-leads schema enforces the same number (`MAX_PRIOR_LEADS_PER_SNAPSHOT`).
+ */
+export const MAX_FOLLOW_UP_LEADS = 8;
+
+/**
+ * ADR 0049 C: one follow-up Trial the runner schedules. Read from the ledger
+ * only: the Snapshot, the ended Trial's Root run, how many Leads that Trial
+ * recorded and the first `MAX_FOLLOW_UP_LEADS` of their ids in ledger order.
+ * The Harness never reads a Lead's text to choose.
+ */
+export const followUpTargetSchema = z.strictObject({
+  snapshotDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  selectionId: z.string().min(1),
+  ofRunId: z.string().min(1),
+  ofCampaignId: z.string().min(1),
+  leadCount: z.number().int().positive(),
+  leadIds: z.array(z.string().min(1)).min(1).max(MAX_FOLLOW_UP_LEADS),
+});
+export type FollowUpTarget = z.infer<typeof followUpTargetSchema>;
+
 /**
  * The runner's working memo. The ledger stays the record; this file may be
  * deleted. Fields a saved memo lacks start over, so a hand-trimmed memo reads.
@@ -67,6 +91,8 @@ const continuousMemoSchema = z.object({
   /** The selection batch this runner holds until its campaign finishes; other prefixes do not select its targets (#604). */
   selectionBatchId: z.string().optional(),
   target: z.string().nullable().optional(),
+  /** ADR 0049 C: the follow-up Trials the memoised campaign runs; absent for a selection campaign. */
+  followUp: z.array(followUpTargetSchema).min(1).optional(),
   backoffStep: z.number().int().nonnegative().default(0),
   /** Per runtime, after a limit that stopped only its targets: its step and when it may start again. */
   runtimeBackoff: z
@@ -187,7 +213,14 @@ export interface ContinuousDeps {
     readonly resumeProviderLimited?: { log(line: string): void };
     /** The operator's live limits (total and per runtime), read before each new target starts. */
     readonly targetLimit: TargetLimit;
+    /** ADR 0049 C: this campaign runs these follow-up Trials instead of a selection. */
+    readonly followUp?: {
+      readonly targets: readonly FollowUpTarget[];
+      log(line: string): void;
+    };
   }): Promise<CampaignSummary>;
+  /** ADR 0049 C: the campaign config's follow-up policy, re-read before each round; absent, none. */
+  followUpPolicy?(): Promise<"leads" | "none">;
   /**
    * Records why the campaign's selection batch can never run under the current
    * policy and returns its id; null when it can run (#302).
@@ -409,7 +442,11 @@ function nextCampaignId(deps: ContinuousDeps): string {
   const day = deps.clock().toISOString().slice(0, 10).replaceAll("-", "");
   const head = `${deps.campaignPrefix}-${day}-`;
   let highest = 0;
-  for (const type of ["selection-batch-bound", "target-selected"] as const)
+  for (const type of [
+    "selection-batch-bound",
+    "target-selected",
+    "follow-up-scheduled",
+  ] as const)
     for (const event of readAll(deps.ledger, { type }))
       if (event.campaignId.startsWith(head))
         highest = Math.max(
@@ -512,6 +549,116 @@ export function pendingProviderLimited(
     const latest = latestSegment(starts, start.runId);
     return finishes.get(latest)?.outcome === "provider-limited";
   });
+}
+
+/** Whether `campaignId` is one this prefix's runner numbered (`<prefix>-<YYYYMMDD>-<n>`). */
+function ownCampaign(prefix: string, campaignId: string): boolean {
+  // CAMPAIGN_PREFIX admits only [a-z0-9-], so the prefix needs no escaping.
+  return new RegExp("^" + prefix + "-[0-9]{8}-[0-9]+$").test(campaignId);
+}
+
+/**
+ * ADR 0049 C: the follow-up Trials this prefix's runner owes, from the ledger
+ * alone. The candidates are the Trials of its latest selection campaign (the
+ * last campaign the prefix numbered that selected targets and scheduled no
+ * follow-up): a Trial whose latest segment finished (not `provider-limited`,
+ * which the runner itself resumes, and not `interrupted`, which a restarted
+ * runner resumes), that is not a second Trial itself, whose campaign recorded
+ * at least one Lead on its Snapshot, and whose Snapshot has neither a second
+ * Trial (`configuration.priorLeads`, any campaign) nor a `follow-up-scheduled`
+ * record. Lead ids come in ledger order; their text is never read.
+ */
+export function pendingFollowUps(
+  ledger: Pick<Ledger, "readAll">,
+  prefix: string,
+): readonly FollowUpTarget[] {
+  const followUpCampaigns = new Set(
+    readAll(ledger, { type: "follow-up-scheduled" }).map(
+      (event) => event.campaignId,
+    ),
+  );
+  const batch = readAll(ledger, { type: "target-selected" })
+    .filter(
+      (event) =>
+        ownCampaign(prefix, event.campaignId) &&
+        !followUpCampaigns.has(event.campaignId),
+    )
+    .at(-1)?.campaignId;
+  if (batch === undefined) return [];
+  const starts = readAll(ledger, {
+    campaignId: batch,
+    type: "discovery-run-started",
+  }).filter(
+    (event): event is StartedEvent =>
+      event.type === "discovery-run-started" &&
+      (event.runKind ?? "explore") === "explore",
+  );
+  const finishes = new Map(
+    readAll(ledger, { campaignId: batch, type: "discovery-run-finished" })
+      .filter(
+        (
+          event,
+        ): event is Extract<
+          LedgerEventV1,
+          { type: "discovery-run-finished" }
+        > => event.type === "discovery-run-finished",
+      )
+      .map((event) => [event.runId, event] as const),
+  );
+  const settled = new Set<string>();
+  for (const event of readAll(ledger, { type: "discovery-run-started" }))
+    if (
+      event.type === "discovery-run-started" &&
+      event.configuration.priorLeads !== undefined
+    )
+      settled.add(event.snapshotDigest);
+  for (const event of readAll(ledger, { type: "follow-up-scheduled" }))
+    settled.add(event.snapshotDigest);
+  const leads = new Map<string, string[]>();
+  for (const event of readAll(ledger, {
+    campaignId: batch,
+    type: "lead-recorded",
+  })) {
+    if (event.type !== "lead-recorded") continue;
+    const ids = leads.get(event.snapshotDigest) ?? [];
+    if (!ids.includes(event.leadId)) ids.push(event.leadId);
+    leads.set(event.snapshotDigest, ids);
+  }
+  const selections = new Map<string, string>();
+  for (const event of readAll(ledger, {
+    campaignId: batch,
+    type: "target-selected",
+  }))
+    if (event.type === "target-selected")
+      selections.set(event.snapshotDigest, event.selectionId);
+  const pending: FollowUpTarget[] = [];
+  for (const head of starts) {
+    const { snapshotDigest } = head;
+    if (head.resumesRun !== undefined) continue;
+    if (supersedingRun(starts, head) !== undefined) continue;
+    if (head.configuration.priorLeads !== undefined) continue;
+    if (settled.has(snapshotDigest)) continue;
+    const finished = finishes.get(latestSegment(starts, head.runId));
+    if (
+      finished === undefined ||
+      finished.outcome === "provider-limited" ||
+      finished.reason === "interrupted"
+    )
+      continue;
+    const leadIds = leads.get(snapshotDigest) ?? [];
+    const selectionId = selections.get(snapshotDigest);
+    if (leadIds.length === 0 || selectionId === undefined) continue;
+    settled.add(snapshotDigest);
+    pending.push({
+      snapshotDigest,
+      selectionId,
+      ofRunId: head.runId,
+      ofCampaignId: batch,
+      leadCount: leadIds.length,
+      leadIds: leadIds.slice(0, MAX_FOLLOW_UP_LEADS),
+    });
+  }
+  return pending;
 }
 
 /**
@@ -839,6 +986,8 @@ export function createContinuousRunner(deps: ContinuousDeps) {
           campaignId: string;
           target: string | null;
           selectionBatchId?: string;
+          /** ADR 0049 C: a follow-up campaign; it binds no selection batch. */
+          followUp?: readonly FollowUpTarget[];
         }
       | undefined =
       (memo.campaignId && {
@@ -847,6 +996,7 @@ export function createContinuousRunner(deps: ContinuousDeps) {
         ...(memo.selectionBatchId === undefined
           ? {}
           : { selectionBatchId: memo.selectionBatchId }),
+        ...(memo.followUp === undefined ? {} : { followUp: memo.followUp }),
       }) ||
       (adopted && {
         campaignId: nextCampaignId(deps),
@@ -856,8 +1006,9 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       undefined;
     // A batch frozen under another policy would only fail: drop it with a
     // reason and select afresh instead of holding on the error (#302). Any
-    // other error surfaces from the campaign run as before.
-    if (current) {
+    // other error surfaces from the campaign run as before. A follow-up
+    // campaign has no selection batch to check.
+    if (current && current.followUp === undefined) {
       const discarded = await deps
         .discardStaleSelection(current.campaignId)
         .catch(() => null);
@@ -871,6 +1022,11 @@ export function createContinuousRunner(deps: ContinuousDeps) {
         current = undefined;
       }
     }
+    /** ADR 0049 C: the follow-up Trials owed before any new selection, or none. */
+    const owedFollowUps = async (): Promise<readonly FollowUpTarget[]> =>
+      ((await deps.followUpPolicy?.()) ?? "none") === "leads"
+        ? pendingFollowUps(deps.ledger, deps.campaignPrefix)
+        : [];
     let providerBackoffFinished = false;
     const backoffProvider = async (campaignId: string) => {
       const limit = providerLimitOf(deps, campaignId);
@@ -915,6 +1071,20 @@ export function createContinuousRunner(deps: ContinuousDeps) {
           expiredAt: auth?.expiresAt.toISOString() ?? "unavailable",
         });
         continue;
+      }
+      // ADR 0049 C: ended Trials that left Leads get their follow-up Trial
+      // before a new target; the pending set is read from the ledger, so a
+      // restart finds it again.
+      const followUps = current ? [] : await owedFollowUps();
+      if (!current && followUps.length > 0) {
+        current = {
+          campaignId: nextCampaignId(deps),
+          target: null,
+          followUp: followUps,
+        };
+        deps.io.log(
+          `${deps.clock().toISOString()} follow-up campaign=${current.campaignId} of=${followUps[0]!.ofCampaignId} targets=${followUps.length}`,
+        );
       }
       if (!current) {
         if (stopRequested()) return stop("operator");
@@ -971,6 +1141,8 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       memo.campaignId = current.campaignId;
       if (current.selectionBatchId !== undefined)
         memo.selectionBatchId = current.selectionBatchId;
+      if (current.followUp === undefined) delete memo.followUp;
+      else memo.followUp = [...current.followUp];
       memo.target = current.target;
       if (stopRequested()) return stop("operator");
       await enter("running", { campaignId: current.campaignId });
@@ -986,6 +1158,15 @@ export function createContinuousRunner(deps: ContinuousDeps) {
           ...(current.selectionBatchId === undefined
             ? {}
             : { selectionBatchId: current.selectionBatchId }),
+          ...(current.followUp === undefined
+            ? {}
+            : {
+                followUp: {
+                  targets: current.followUp,
+                  log: (line: string) =>
+                    deps.io.log(`${deps.clock().toISOString()} ${line}`),
+                },
+              }),
           stop: stopRequested,
           signal: operatorController.signal,
           resumeInterrupted: {
@@ -1028,6 +1209,7 @@ export function createContinuousRunner(deps: ContinuousDeps) {
         memo.consecutiveErrorBatches++;
         delete memo.campaignId;
         delete memo.selectionBatchId;
+        delete memo.followUp;
         current = undefined;
         if (memo.consecutiveErrorBatches >= MAX_CONSECUTIVE_ERROR_BATCHES)
           return stop("errors");
@@ -1082,10 +1264,15 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       memo.backoffStep = 0;
       memo.runtimeBackoff = {};
       const facts = batchFacts(deps, current.campaignId);
+      const wasFollowUp = current.followUp !== undefined;
       delete memo.campaignId;
       delete memo.selectionBatchId;
+      delete memo.followUp;
       delete memo.target;
       current = undefined;
+      // A follow-up campaign is not a selection: it neither probes the pool
+      // nor counts toward the refusal and no-progress stops.
+      if (wasFollowUp) continue;
       if (facts.refusedAll) {
         // Refused runs are not Trials, so the same slugs come back on top.
         if (

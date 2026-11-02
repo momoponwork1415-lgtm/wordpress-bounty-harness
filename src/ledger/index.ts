@@ -256,6 +256,19 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         })
         .optional(),
       /**
+       * ADR 0049 C: present when the continuous runner scheduled this second
+       * Trial itself: the ended Trial's Root run whose Leads it received and
+       * how many Leads that Trial had recorded (the first 8 are the
+       * `priorLeads` representatives). Absent on named second Trials and on
+       * every other Trial.
+       */
+      followUp: z
+        .strictObject({
+          of: id,
+          leadCount: z.number().int().positive(),
+        })
+        .optional(),
+      /**
        * ADR 0048: the earlier Trial of the same target whose notes this Trial
        * received under `## Prior research`, the files by name, digest and
        * size, and the section digest; or why none was passed although the
@@ -469,9 +482,29 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         "provider-refused",
         /** The Trial failed on wall, schema, CLI exit or broker policy. */
         "run-failed",
+        /** ADR 0049 C: the runner's follow-up Trial was refused before any Lab (an ADR 0044 refusal). */
+        "follow-up-refused",
         "other",
       ])
       .optional(),
+    /** The refusal's code, for `follow-up-refused`; absent on every other skip. */
+    reasonDetail: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9:_-]{0,127}$/)
+      .optional(),
+  }),
+  event({
+    /**
+     * ADR 0049 C: the continuous runner scheduled a follow-up Trial on this
+     * Snapshot under this campaign, because the ended Trial `ofRunId` of
+     * campaign `ofCampaignId` left `leadCount` Leads and no second Trial
+     * existed. Written before the Trial resolves, so a refused or failed
+     * follow-up is never scheduled again.
+     */
+    type: z.literal("follow-up-scheduled"),
+    ofRunId: id,
+    ofCampaignId: id,
+    leadCount: z.number().int().positive(),
   }),
   event({
     /** Before a Snapshot exists, snapshotDigest is the immutable selection record's digest. */

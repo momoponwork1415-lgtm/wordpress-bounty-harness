@@ -173,6 +173,7 @@ function configurationOf(
       "effort",
       "skills",
       "priorLeads",
+      "followUp",
     ]),
   };
 }

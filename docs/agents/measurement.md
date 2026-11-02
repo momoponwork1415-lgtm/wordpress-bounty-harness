@@ -91,6 +91,30 @@ PR の「測った数字」に貼る列は固定する。
 - 主な数字: **Finding になった Lead の群の数 / 入力した群の数**。「なった」は、第 2 Trial の Finding を入れて `lead-groups.mjs --snapshot <digest>` を回し、入力した代表と同じ群に入ったこと。既定の `overlap` と `pair` の両方の数を並べる。加えて段 1b（wbh-source-check）を通った Finding の数を、入力した群に入ったものと入らなかったものに分けて書く。
 - 第 2 Trial は v14-wide・v18-wide・v19-wide の Trial と同じ分母に混ぜない。第 1 Trial は Lab なし、第 2 Trial は Lab ありなので、上がっても入力の効果と Lab の効果は分けられないと書く。
 
+### 自動の後続 Trial（ADR 0049 追記 2、#793 の PR 3）
+
+連続ランナーが組んだ第 2 Trial は、`discovery-run-started.configuration.followUp`（`of` = 第 1 Trial の Root の runId、`leadCount`）のある run で見分ける。名指しの第 2 Trial（leads2: `configuration.priorLeads` あり、`followUp` なし）とは分けて数える。
+
+- 分母は Codex 時間。後続 Trial の Root とその再開区間、子の `discovery-run-finished.wallTimeMs` を合計して時間に直す。
+- 分子は後続 Trial の `finding-recorded`（`finding-parked` は別に数える）。加えて段 1b（wbh-source-check）を通った数と、人間の観測で `match` になった数を並べる。
+- 比べる相手は leads2（2026-11-01、名指しの第 2 Trial 14 本で Finding 4）。同じ分母に直し、「Finding / Codex 時間」で上回るかを見る。合格線は Issue #793 の表の 3 行目。
+- 組めなかったものは `follow-up-scheduled` があって `discovery-run-started` の無い Snapshot で、理由は同じ campaign の `target-skipped`（reason `follow-up-refused`、`reasonDetail` に ADR 0044 の拒否 code）にある。`follow-up-scheduled.leadCount` が 8 を超えた Trial は、代表が台帳順の先頭 8 件に切れているので、その件数も書く。
+- 第 1 Trial と後続 Trial はどちらも Lab 付き（`discovery.lab` の既定 `attached`）なので、違いは Lead 入力と前回の研究 file だけである。
+
+数え方の例（台帳を読むだけ。Private Evidence は開かない。[ledger-reading.md](ledger-reading.md) の `node:sqlite` の読み方と同じ）:
+
+```bash
+node --no-warnings -e '
+const { DatabaseSync } = require("node:sqlite");
+const db = new DatabaseSync(process.argv[1], { readOnly: true });
+const rows = db.prepare("SELECT event_json FROM ledger_events WHERE event_type = ? ORDER BY sequence").all("discovery-run-started");
+for (const { event_json } of rows) {
+  const e = JSON.parse(event_json);
+  const f = e.configuration.followUp;
+  if (f) console.log(e.campaignId, e.runId, e.snapshotDigest, f.of, f.leadCount);
+}' <state>/ledger.sqlite
+```
+
 ## 6. 記録先
 
 - 再発見 case: `docs/evaluation/<日付>-<用途>.md` に表と注記、Issue #127 に comment。
