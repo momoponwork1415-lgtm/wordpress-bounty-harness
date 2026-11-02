@@ -353,6 +353,11 @@ export function createWordPressSelection(
       }
       if (observation.activeInstallations < policy.minimumActiveInstallations)
         reasons.push("below-installation-threshold");
+      else if (
+        policy.maximumActiveInstallations !== undefined &&
+        observation.activeInstallations >= policy.maximumActiveInstallations
+      )
+        reasons.push("above-maximum-installations");
       reasons.push(...coreReasons);
       if (
         reasons.length > 0 ||

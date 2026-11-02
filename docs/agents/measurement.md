@@ -7,6 +7,7 @@ DEVELOPMENT §5 の「探索に触る PR は数字を貼る」（分母は本番
 - agent 入力（prompt、skill、Harness 生成の節）を変える PR → 本番の同じ選定帯で旧版と新版を交互に回し、Trial 数をそろえる。採否は DEVELOPMENT §5 の 6 段（本番の読み替え）。
 - 本番で Finding は出るのに人間の `match` が 1 週間 0 件 → 開発セット 6 case を各 3 run（18 Trial）回し、探索と検証を切り分ける。
 - 配線・runtime・選定を変える PR → 異なる slug 3 件の初回 Trial（runner が回すのと同じ経路）。
+- 選定の上限 `maximumActiveInstallations`（ADR 0037 の 2026-11-02 追記 7）→ 上限ありの方針で選んだ 1 万〜100 万帯の Trial の F/Trial（`finding-recorded` / Trial。`finding-parked` は別に数える）、L/Trial（`lead-recorded` / Trial）、Lab 発火 / Codex 時間（ADR 0045）を、2026-11-01→02 の ≥1M 帯の Trial（prod-v21、59 Trial、F 2 / L 122）と並べる。対になっていないので分布として並べ、中央値と範囲を書く。腕は台帳の `selection-batch-bound.policyDigest`（上限の有無で方針 digest が変わる）で分ける。
 - どちらも本番の分母に混ぜない。campaign ID に branch 名か用途を入れる。
 
 ## 1. 統合 branch と build

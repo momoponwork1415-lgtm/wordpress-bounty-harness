@@ -184,3 +184,23 @@ amended-by: 本文末尾の 2026-10-19 追記（公開統計による重みの�
 - 値は操作者が、方法を変えて再開した時刻を入れる。今回は v21-wide + スキル + 帯優先で再開した `2026-11-01T12:40:00Z`。repo の `selection.json` には書かず、本番の Git 外の方針 file にだけ書く。方針 digest が変わるので、台帳の `selection-batch-bound.policyDigest` で区切りが追える。
 - 消し方: 鍵を外せば全 Trial が数えられる旧規則に戻る。
 
+## 2026-11-02 追記 7: 上限 100 万を置き、1 万〜100 万の帯に戻す（所有者決定）
+
+2026-10-28 追記の「ADR 0032 の上限帯も本追記で閉じる」と「新方針は `maximumActiveInstallations` を拒否する」を、所有者の 2026-11-02 夜の言葉「それならやっぱり1〜100万の間に使用」で改める。追記 4 の帯優先の順序は ≥1M 帯を先頭に置くので、2026-11-01 の batch 3 以降、本番の対象はすべて 100 万以上（elementor 10M、litespeed-cache 7M、wordfence 5M、seo-by-rank-math 4M など）になっていた。
+
+測った数字（prod-v21、v21-wide、2026-11-01→02。対になっていない）:
+
+| 帯 | Trial | Finding | Lead | F/Trial |
+| --- | ---: | ---: | ---: | ---: |
+| 100k–300k | 10 | 3 | 19 | 0.30 |
+| ≥1M | 59 | 2 | 122 | 0.03 |
+
+問いは「上限で本番を 1 万〜100 万の帯に留めれば、100k 帯の Finding 率に戻るか」である。
+
+- 選定方針の任意の鍵 `maximumActiveInstallations`（正の整数、`minimumActiveInstallations` より大きいこと）を受け付ける。観測したインストール数がこの値以上の候補は選ばず、`selection-report.json` の `inspections[]` に理由コード `above-maximum-installations` で残す。値は含まない上限で、鍵が無ければ従来と同じ選定になる。
+- 列挙は変えない。人気順の一覧は先頭（100 万以上）から読み、下限を割るページで止まる。上限以上の plugin も観測して記録に残すので、何を飛ばしたかが report で読める。`maximumTargets` は選ばれた対象だけを数える。
+- 版上昇の再訪（`version-increased`）は変えない。上限以上の plugin は候補にならないだけである。台帳のイベント型と既存の report の欄は変えず、理由コードを 1 つ足すだけにする。
+- 本番では Git 外の方針 file に `maximumActiveInstallations: 1000000` を置く。方針 digest が変わるので、台帳の `selection-batch-bound.policyDigest` で ≥1M の腕と 1 万〜100 万の腕が分かれる。repo の `selection.json` は変えない。
+- 比べ方は [docs/agents/measurement.md](../agents/measurement.md) の「いつ使うか」にある。上限ありの Trial の F/Trial、L/Trial、Lab 発火 / Codex 時間（ADR 0045）を、2026-11-01→02 の ≥1M 帯 59 Trial と並べる。
+
+消し方: 方針 file から `maximumActiveInstallations` を外す。schema の鍵と理由コードは、過去の方針 digest と report を読めるように残してよい。
