@@ -95,3 +95,13 @@ amends: 0029（単一協調 Trial の主経路）と 0039（探索の mode）に
 - 測り方と採否の線は #786 と measurement.md 5b。bench の残り 20 件で、最適化系が 0 → 3 記録以上、論理系が 0 → 2 プラグイン以上、Lead 止まり 15 記録のうち Finding に進んだ数、全体の当たりが 9 / 20 を下回れば revert。本番の分母は ADR 0045 のまま。
 - 全文と日本語訳と出典対照表: [docs/reviews/2026-11-02-exploration-skills-wbh-falsify-v1.md](../reviews/2026-11-02-exploration-skills-wbh-falsify-v1.md)。
 - 消し方: `prompts/skills/wbh-falsify-v1/` と registry の行、test の launchable の 1 行、この追記、measurement 5b の項、reviews/README の行を消す。
+
+## 2026-11-02 追記 6: `wbh-falsify-v2`（単位ごとに歩きと反証を別の子で 2 回読む、#791）
+
+- 事実（bench h31 #786、2026-11-02、終わった 16 件・鍵の記録 62 件を h30 → h31 で記録ごとに追った）: Finding 到達 22 → 20、Lead 止まり 15 → 20、未到達 25 → 22。Lead 止まりから Finding に 3、未到達から新しく 10（うち Lead 止まり 7）が増えた一方、Finding だった 5 件（直接 sink 型）が未到達に、3 件が Lead に下がった。Root の時間は 10〜83 分（中央値 39 分）で、自力で 120 分に当たった Trial は無い。仮定の表は sink の名前が無い形に効き、その分だけ「handler の中で値が直接 sink に届く」形の読みが薄くなった。
+- 所有者の言葉（2026-11-02）: 「これが終わったら改善して、6 対象くらいに絞ってベンチマークにしましょう。トークンをベンチマークだけに費やせない」。
+- 決定: `wbh-falsify-v2`。1 単位を別々の 2 agent が 2 回読む。先に「歩き」（新しい手順 2）: `/workspace/research/walks/<subsystem>.md` に、地図の全 entry を要求から「check で止まる」か「要求の値が use に届く」まで読んで entry ごとに 1 行、check なしに届いた行は Routes として hop 付きで書き、Counts を付ける。次に表（手順 3〜6、旧 2〜5）を、歩いた agent とは別の agent が歩きの file から始める（歩きの check は enforced at を埋め、use は行が頼る場所、経路はそのまま not enforced の行）。手順 7 の Counts に歩きの数を写し、歩きの file が無い単位は open と読む。他は v1 と byte 単位で同じ。v1 は `archived`。
+- Harness、目的文（v21-wide）、出力契約、`wbh-recon` v3 は変えない。
+- 測り方（measurement.md 5b）: bench h32 は 6 対象 × 1 Trial に絞る（所有者決定）。v1 で失った直接 sink 型の記録が戻るか、v1 で増えた到達を失わないか、Root の時間、自力で 120 分に当たった件数。採否の線は #791。
+- 全文と日本語訳と出典対照表: [docs/reviews/2026-11-02-exploration-skills-wbh-falsify-v2.md](../reviews/2026-11-02-exploration-skills-wbh-falsify-v2.md)。
+- 消し方: `prompts/skills/wbh-falsify-v2/` と registry の行を消し、v1 を `current` に戻す。test の launchable の 1 行、この追記、measurement 5b の項、reviews/README の行を消す。
