@@ -1641,7 +1641,8 @@ describe("Codex native agent runtime", () => {
         },
       });
       expect(result.receipt.terminal).toBe("completed");
-      expect(maxRequests).toBe(2000);
+      // #783: the cap is insurance against runaway traffic, equal to the Claude runtime's.
+      expect(maxRequests).toBe(10_000);
       expect(result.receipt.subagent).toEqual({
         modelId: "gpt-6-sol",
         effort: "high",

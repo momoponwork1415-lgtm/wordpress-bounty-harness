@@ -1834,8 +1834,16 @@ function sandboxCommand(
   };
 }
 
+/**
+ * The provider grant of one cooperative Trial (Root and every child). The
+ * request cap is insurance against runaway traffic, not a budget: the Trial
+ * wall and `discovery.maxChildren` bound the work. 2,000 fitted recon v1 / v2
+ * (4–16 children); recon v3 Trials with 70–100 children on large plugins
+ * reached it at 66–96 minutes and ended `broker-request-cap` (#783), so the
+ * cap now matches the Claude runtime's.
+ */
 export const CODEX_DISCOVERY_BROKER_LIMITS = {
-  maxRequests: 2000,
+  maxRequests: 10_000,
   maxRequestBytes: 8 * 1024 * 1024,
   maxResponseBytes: 8 * 1024 * 1024,
 } as const;
