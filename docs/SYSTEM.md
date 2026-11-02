@@ -26,7 +26,7 @@ flowchart LR
   end
   subgraph A[AI: 目的文とスキル]
     direction LR
-    A3[Codex Root + 子<br/>目的文 v21-wide<br/>wbh-recon v3 → wbh-tools<br/>Lab があれば wbh-setup<br/>prior/ の地図 2 file を読む]
+    A3[Codex Root + 子<br/>目的文 v22-wide<br/>wbh-recon v3 → wbh-tools<br/>Lab があれば wbh-setup<br/>prior/ の地図 2 file を読む]
     A5[6 段のスキル<br/>1 screen → 1b source-check<br/>→ 2 群 → 4 dedupe（Lab 前）<br/>→ 3 wbh-verify → 4 dedupe<br/>→ 5 先 → 6 報告書]
     A6[提出の支度<br/>英語報告書 + form JSON<br/>転帰をメール本文から記録]
   end
@@ -95,7 +95,7 @@ flowchart LR
 
 対象ごとに 1 回、Codex の Root と子が協調する Trial を gVisor の使い捨て sandbox で行う。Harness が渡すのは、固定したソース（読み取り専用）、人間が書いた trust 境界宣言、Programme Boundary、目的文、Harness が生成する節（`## Run parameters`、Finding / Lead の出力契約 v4、スキルの場所、`## Prior research`）だけである。評価対象の答え、PoC、公開履歴の中身は渡さない。外向き通信は認証ブローカー経由の provider API に限る。
 
-本番の mode は `wide` で、目的文は `wp2shell-bounty-v21-wide`、スキルは `wbh-recon` v2、`wbh-tools` v1、`wbh-setup` v1 を sandbox に置く。子は同時に 8 まで、制限時間は 120 分で、`wide` は最初の最終報告で終える。Claude runtime の share は 0 である。同じ plugin の前の版の Trial が封じた地図 2 file（`recon-map.md`、`lab-setup.md`）は、`discovery.priorResearch: same-target` のとき `/workspace/research/prior/` に置く。どこを読むか、何を仮説にするか、子に何を任せるかは Root が決める。Harness は舵を取らない。
+本番の mode は `wide` で、目的文は `wp2shell-bounty-v22-wide`、スキルは `wbh-recon` v2、`wbh-tools` v1、`wbh-setup` v1 を sandbox に置く。子は同時に 8 まで、制限時間は 120 分で、`wide` は最初の最終報告で終える。Claude runtime の share は 0 である。同じ plugin の前の版の Trial が封じた地図 2 file（`recon-map.md`、`lab-setup.md`）は、`discovery.priorResearch: same-target` のとき `/workspace/research/prior/` に置く。どこを読むか、何を仮説にするか、子に何を任せるかは Root が決める。Harness は舵を取らない。
 
 止まった Root は、同じ Snapshot と残りの制限時間で新しい sandbox に再開できる。Codex の `provider-limited` と死んだ持ち主の `interrupted` は自動で、それ以外は操作者の名指しで再開する。言い換えはしない。
 

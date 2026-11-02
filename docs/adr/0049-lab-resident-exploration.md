@@ -91,6 +91,10 @@ B の 3 つ目の観測器 `POST /trace` を、決定どおりに実装した。
 決定 D を実装した。詳細は [ADR 0048 の 2026-11-02 追記](0048-prior-research-input.md)にある。同じ対象の別の版の最新 Trial から渡す file に `REGISTRY.md`、`assumptions/*.md`、`walks/*.md` と、その Trial の `lookupLog` から Harness が写した保存先の表 `stores.json` を足し、全部で 2 MiB・64 file までにした。`research import --from <state dir>` で別の台帳（bench）の終了 Trial を候補に取り込める（`research-imported`）。計測は Issue #793 の表の 4 行目（同じ plugin の新版で Root 時間が短くなり F が落ちないこと）。消し方は決定の「D は渡す file を 2 つに戻す」のとおりで、`research-imported` は読み続ける。
 
 
+## 2026-11-02 追記 4: 決定 E のうち目的文の削除を行った（#793 の PR 5 の一部）
+
+決定 E の「目的文の手順段落の削除」を、`wp2shell-bounty-v22-wide`（[ADR 0039 追記 21](0039-discovery-launch-modes.md)）で行った。v21-wide から、`hooks.tsv` の行数を登録簿に保って行が残る間は閉じない段落、スキル段落のその一覧を指す節、停止文の行数の半分を消し、停止文は「Stop when the Trial wall is reached.」になった。語は足していない。終わってよいかの判断はスキル（`wbh-recon` v3 の手順 9）と Trial の wall が持つ。決定 E の残り、`wbh-falsify` v3（Store / Transformation の行を Lab の答えで埋める）と第 2 Trial のスキルの producer の後ろ向き探索は、まだ行っていない。計測は本番で v22-wide の Trial を v21-wide の Trial と並べる（[measurement.md](../agents/measurement.md) 5b）。消し方は ADR 0039 追記 21 のとおり。
+
 ## 2026-11-02 追記 5: スキル `wbh-lab-v1`（決定 E のスキル側）
 
 決定 E のスキル側を実装した。詳細は [ADR 0043 の 2026-11-02 追記 7](0043-exploration-skills-in-the-sandbox.md)にある。Find / Query / Trace / Observe をどの open の行に、どの順で使い、答えをどこに書き、最終報告の前に何を通すかを `wbh-lab-v1` が言う。Harness の命令、予算、`lookupLog` は変えていない。目的文の削除（v22-wide）は ADR 0039 の 2026-11-02 追記にある。計測は Issue #793 の表の分母（Lab 発火 / Codex 時間）と measurement.md 5b。消し方は ADR 0043 追記 7 のとおり。
