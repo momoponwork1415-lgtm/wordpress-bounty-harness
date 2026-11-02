@@ -607,6 +607,7 @@ describe("WordPress discovery prompt assets", () => {
       "; the hook listing named below is the one it saves",
       "no sink class has rows remaining, or when ",
       ", whichever comes first",
+      " with those counts",
     ];
     let expected = previous;
     for (const passage of removed) {
@@ -617,7 +618,9 @@ describe("WordPress discovery prompt assets", () => {
     expect(paragraphs(current.text)).toHaveLength(
       paragraphs(previous).length - 1,
     );
-    expect(current.text).not.toMatch(/hooks\.tsv|rows remaining|named below/);
+    expect(current.text).not.toMatch(
+      /hooks\.tsv|rows remaining|named below|those counts/,
+    );
     // Every word of v22-wide is a word of v21-wide: deletions only (ADR 0045).
     const words = (text: string) =>
       new Set(text.split(/[\s.,;:()]+/).filter((word) => word !== ""));
@@ -626,6 +629,9 @@ describe("WordPress discovery prompt assets", () => {
     // The resume directive still opens the last paragraph (ADR 0039).
     const stop = paragraphs(current.text).at(-1)!;
     expect(stop).toMatch(/^Stop when the Trial wall is reached\. /);
+    expect(stop).toContain(
+      "report the registry, every route that reached a sink with its exact remaining gap",
+    );
     expect(stop).toContain(
       "Reporting zero candidates after bounded closure is a normal ending.",
     );

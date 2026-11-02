@@ -1,6 +1,6 @@
 # wp2shell-bounty-v22-wide の差分、日本語訳、出典対照表（2026-11-02）
 
-`wide` の現行の目的文。1 file（`src/profiles/wordpress/prompts/wp2shell-bounty-v22-wide.md`）で、fragment から組まない。digest は `sha256:7d7481e6f6e04ce15e1d47dfad687ef26abc2d68240c94121ee2468b5ce4147f`（7813 byte、11 段落）。契約は v4。本文は v21-wide（[本文と出典対照表](2026-11-01-wp2shell-bounty-v21-wide.md)、8146 byte、12 段落）から 3 か所を消しただけで、語を足していない。AI は出典にある要素だけを書き、要素を足さない（DEVELOPMENT.md 第 5 節）。決定は ADR 0049 の決定 E と ADR 0039 追記 21。ADR 0045 が許す「消す方向」の変更である。
+`wide` の現行の目的文。1 file（`src/profiles/wordpress/prompts/wp2shell-bounty-v22-wide.md`）で、fragment から組まない。digest は `sha256:678595d377ce7b238b82ad5201e57eed35c2a66b75dc10049b15df36615a4d7c`（7795 byte、11 段落）。契約は v4。本文は v21-wide（[本文と出典対照表](2026-11-01-wp2shell-bounty-v21-wide.md)、8146 byte、12 段落）から 4 か所を消しただけで、語を足していない。AI は出典にある要素だけを書き、要素を足さない（DEVELOPMENT.md 第 5 節）。決定は ADR 0049 の決定 E と ADR 0039 追記 21。ADR 0045 が許す「消す方向」の変更である。
 
 ## 問い
 
@@ -18,19 +18,20 @@ v19-wide（ADR 0039 追記 16）で入れた行数の規則は、Root が行を�
 
 -Keep in the registry, for each sink class, how many rows of the hook listing at /workspace/research/tools/hooks.tsv its specialists have read and how many remain. Do not close while any sink class has rows remaining.
 -
--Stop when no sink class has rows remaining, or when the Trial wall is reached, whichever comes first. Do not fabricate elapsed time. …
-+Stop when the Trial wall is reached. Do not fabricate elapsed time. …
+-Stop when no sink class has rows remaining, or when the Trial wall is reached, whichever comes first. Do not fabricate elapsed time. Reaching either bound is a normal ending: report the registry with those counts, every route that reached a sink …
++Stop when the Trial wall is reached. Do not fabricate elapsed time. Reaching either bound is a normal ending: report the registry, every route that reached a sink …
 ```
 
-語単位の差分（`git diff --word-diff`）で「足した」と出るのは `map.` と `reached.` の 2 つだけで、どちらも消した節の前にあった語に句読点が付き直したものである。新しい語は無い。
+語単位の差分（`git diff --word-diff`）で「足した」と出るのは `map.`、`reached.`、`registry,` の 3 つだけで、どれも消した節の前にあった語に句読点が付き直したものである。新しい語は無い。
 
-## 消した 3 か所
+## 消した 4 か所
 
 | # | 位置 | 消した文 | 日本語訳 | 理由 |
 | --- | --- | --- | --- | --- |
 | 1 | v21 の 11 段落目の全体 | Keep in the registry, for each sink class, how many rows of the hook listing at /workspace/research/tools/hooks.tsv its specialists have read and how many remain. Do not close while any sink class has rows remaining. | registry に、sink の種類ごとに、`/workspace/research/tools/hooks.tsv` にある hook の一覧のうち、その専門エージェントが読んだ行の数と残っている行の数を保つこと。いずれかの sink の種類に行が残っている間は閉じないこと。 | 行を分類した時点で満たせる規則で、本番の Root は 11〜47 分で閉じていた。終わってよいかの判断はスキル `wbh-recon` v3 の手順 9 と Trial の wall に移っている（ADR 0049 決定 E） |
 | 2 | v21 の 10 段落目（スキルへの routing）の節 | ; the hook listing named below is the one it saves | 下で名指しする hook の一覧は、これが保存するものである。 | 名指しの先（#1 の段落）を消したので、指す先が無い。文は「… and cross-checks them against the map.」で終わる |
 | 3 | 最終段落の冒頭文の 2 か所 | no sink class has rows remaining, or when ／ , whichever comes first | どの sink の種類にも行が残っていないとき、または ／ どちらか早いほうで | 行数の条件を消す。冒頭文は「Stop when the Trial wall is reached.」（Trial の wall に達したときに止まること）になり、引き続き「Stop when」で始まる（再開段落の規則、ADR 0039） |
+| 4 | 最終段落の 3 文目 | with those counts | それらの数を含む | #1 で消した行数を指していた語。文は「report the registry, every route that reached a sink with its exact remaining gap, and the rows and entry points left unread.」になる。「either bound」は残す |
 
 ## 全文（英語。エージェントに渡る本文）
 
@@ -54,7 +55,7 @@ v19-wide（ADR 0039 追記 16）で入れた行数の規則は、Root が行を�
 
 > Three skills are installed for this Trial, and the description of each says when it applies. Read wbh-recon first, before forming hypotheses or starting other agents: it builds the map of the plugin's subsystems, request entries, authorization gates, shared helpers, data stores and JavaScript boundary, and writes it to /workspace/research/recon-map.md for every agent in the Trial to read. Read wbh-tools once the map exists: it runs the enumeration scripts shipped in its directory, saves the listings of the literal hook registrations and the literal effect calls under /workspace/research/tools, and cross-checks them against the map. Read wbh-setup when the Trial has a Lab (the ## Lab section names a site and an administrator account), after the map exists and before any agent sends a request to the Lab: it sets the plugin up the way an ordinary site uses it, publishes one page per object, and records what was built in /workspace/research/lab-setup.md. An agent handed a part of the plugin it has not read starts from the map and the files these skills wrote, before the source they describe.
 
-> Stop when the Trial wall is reached. Do not fabricate elapsed time. Reaching either bound is a normal ending: report the registry with those counts, every route that reached a sink with its exact remaining gap, and the rows and entry points left unread. Reporting zero candidates after bounded closure is a normal ending.
+> Stop when the Trial wall is reached. Do not fabricate elapsed time. Reaching either bound is a normal ending: report the registry, every route that reached a sink with its exact remaining gap, and the rows and entry points left unread. Reporting zero candidates after bounded closure is a normal ending.
 
 ## 日本語訳（読むための訳。エージェントには渡さない）
 
@@ -62,15 +63,15 @@ v19-wide（ADR 0039 追記 16）で入れた行数の規則は、Root が行を�
 
 この Trial には 3 つのスキルが置かれていて、それぞれの description がいつ使うかを述べている。まず `wbh-recon` を読むこと。仮説を立てたり他のエージェントを起動したりする前に読む。これはプラグインのサブシステム、request の入口、認可の門、共有 helper、データの保存先、JavaScript の境界の地図を作り、Trial のすべてのエージェントが読めるように `/workspace/research/recon-map.md` に書く。地図ができたら `wbh-tools` を読むこと。これは自分のディレクトリに同梱された列挙スクリプトを走らせ、文字どおりの hook 登録と文字どおりの効果の呼び出しの一覧を `/workspace/research/tools` の下に保存し、地図と突き合わせる。Trial に Lab があるとき（`## Lab` 節がサイトと管理者アカウントを名指ししているとき）は、地図ができた後、どのエージェントも Lab に request を送る前に `wbh-setup` を読むこと。これは通常のサイトが使うようにプラグインを設定し、オブジェクトごとに 1 ページを公開し、作ったものを `/workspace/research/lab-setup.md` に記録する。まだ読んでいないプラグインの部分を渡されたエージェントは、それが説明するソースより先に、地図とこれらのスキルが書いた file から始める。
 
-Trial の wall に達したときに止まること。経過時間を捏造しない。どちらの限界に達するのも正常な終わり方である。それらの数を含む registry、sink に届いたすべての経路とその正確な残りの欠落、読まずに残した行と入口を報告する。限界まで読み切ったうえで候補 0 件と報告するのは、正常な終わり方である。
+Trial の wall に達したときに止まること。経過時間を捏造しない。どちらの限界に達するのも正常な終わり方である。registry、sink に届いたすべての経路とその正確な残りの欠落、読まずに残した行と入口を報告する。限界まで読み切ったうえで候補 0 件と報告するのは、正常な終わり方である。
 
 ## 出典対照表
 
-足した文は無い。消した 3 か所の出典は上の表にある。残る文の出典は [v21-wide の出典対照表](2026-11-01-wp2shell-bounty-v21-wide.md)、[v20-wide の出典対照表](2026-11-01-wp2shell-bounty-v20-wide.md)、[v19-wide の出典対照表](2026-10-31-wp2shell-bounty-v19-wide.md) にある。
+足した文は無い。消した 4 か所の出典は上の表にある。残る文の出典は [v21-wide の出典対照表](2026-11-01-wp2shell-bounty-v21-wide.md)、[v20-wide の出典対照表](2026-11-01-wp2shell-bounty-v20-wide.md)、[v19-wide の出典対照表](2026-10-31-wp2shell-bounty-v19-wide.md) にある。
 
 | 要素 | 出典 |
 | --- | --- |
-| 消す 3 か所の選び方（行数の規則、その一覧を指す節、停止文の行数の条件） | ADR 0049 決定 E「目的文の手順段落の削除」、Issue #793 |
+| 消す 4 か所の選び方（行数の規則、その一覧を指す節、停止文の行数の条件、行数を指す語） | ADR 0049 決定 E「目的文の手順段落の削除」、Issue #793 |
 | 停止文の残り「Stop when the Trial wall is reached.」 | v19-wide の停止文（ADR 0039 追記 16）の wall の側。語は v21-wide のまま |
 | 最終段落が「Stop when」で始まること | ADR 0039 の帰結（再開段落）、`src/cli/wordpress.ts` の `WORDPRESS_RESUME_PARAGRAPH_PREFIX` |
 | 消すだけで言い換えない | ADR 0045 凍結 5 の第 5 項 |
@@ -85,7 +86,7 @@ Trial の wall に達したときに止まること。経過時間を捏造し�
 
 ## 書かなかったもの、所有者に見てほしいもの
 
-- 最終段落に残る「Reaching either bound」「the registry with those counts」「the rows and entry points left unread」は、消した規則を指していた語である。語を足さずに直せないので残した。Root は登録簿の数と読み残しを報告する文として読むと見ている。言い換えが要るなら、それは別の版（ADR 0045 の「月 1 回」）の問いになる。
+- 最終段落の「Reaching either bound」は、wall 1 つになった後も残した。「either」を消すと語の削除で直せるが、wall の 1 文に合わせる言い換えは要素を足すことになるので、所有者の判断に委ねる。
 - スキル段落は 3 つのスキルを名指したまま残した。ADR 0049 決定 E の「手順段落」を行数の規則の段落と読み、routing の段落は残した。routing を消すかは [wbh-falsify v1 の review](2026-11-02-exploration-skills-wbh-falsify-v1.md) が触れた別の問いである。
 - 決定 E のスキル側（`wbh-falsify` v3、第 2 Trial のスキルの producer の後ろ向き探索）は行っていない（ADR 0049 追記 4）。
 

@@ -482,16 +482,17 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
   {
     id: "wp2shell-bounty-v22-wide",
     digest:
-      "sha256:7d7481e6f6e04ce15e1d47dfad687ef26abc2d68240c94121ee2468b5ce4147f",
+      "sha256:678595d377ce7b238b82ad5201e57eed35c2a66b75dc10049b15df36615a4d7c",
     outputContract: "v4",
     status: "current",
     mode: "wide",
-    // v21-wide with three deletions and nothing added (ADR 0049 decision E,
+    // v21-wide with four deletions and nothing added (ADR 0049 decision E,
     // ADR 0039 addendum 21; ADR 0045 allows deletions only): the whole
     // registry paragraph that counted the rows of the hook listing per sink
     // class and forbade closing while rows remained, the clause of the skill
-    // paragraph that pointed at that listing, and the row-count half of the
-    // stop paragraph, which now reads "Stop when the Trial wall is reached."
+    // paragraph that pointed at that listing, the row-count half of the
+    // stop paragraph, which now reads "Stop when the Trial wall is reached.",
+    // and the words "with those counts" that referred to the deleted counts.
     // Production v21-wide Roots satisfied the row rule by classifying rows and
     // closed at 11 to 47 minutes; the closing condition lives in the skills
     // (wbh-recon step 9) and the Trial wall.

@@ -358,16 +358,15 @@ v19-wide の追記 16 で入れた停止規則は、登録簿に sink 種ごと�
 
 決定:
 
-- `wp2shell-bounty-v22-wide` を `wide` の `current` にする。本文は 1 file（`prompts/wp2shell-bounty-v22-wide.md`）で、v21-wide から次の 3 か所を消しただけである。語は足していない。digest は `sha256:7d7481e6f6e04ce15e1d47dfad687ef26abc2d68240c94121ee2468b5ce4147f`、契約は v4、11 段落。差分と日本語訳は [review 文書](../reviews/2026-11-02-objective-v22-wide.md) にある。
+- `wp2shell-bounty-v22-wide` を `wide` の `current` にする。本文は 1 file（`prompts/wp2shell-bounty-v22-wide.md`）で、v21-wide から次の 4 か所を消しただけである。語は足していない。digest は `sha256:678595d377ce7b238b82ad5201e57eed35c2a66b75dc10049b15df36615a4d7c`、契約は v4、11 段落。差分と日本語訳は [review 文書](../reviews/2026-11-02-objective-v22-wide.md) にある。
   1. 11 段落目の全体「Keep in the registry, for each sink class, how many rows of the hook listing at /workspace/research/tools/hooks.tsv its specialists have read and how many remain. Do not close while any sink class has rows remaining.」
   2. 10 段落目（スキルへの routing）の節「; the hook listing named below is the one it saves」。文は「/workspace/research/tools, and cross-checks them against the map.」で終わる。
-  3. 最終段落の冒頭文のうち「no sink class has rows remaining, or when 」と「, whichever comes first」。冒頭文は「Stop when the Trial wall is reached.」になる。段落の残りは変えない。最終段落は引き続き「Stop when」で始まり、再開段落の規則（本 ADR の帰結、`src/cli/wordpress.ts` の `WORDPRESS_RESUME_PARAGRAPH_PREFIX`）を満たす。
+  3. 最終段落の冒頭文のうち「no sink class has rows remaining, or when 」と「, whichever comes first」。冒頭文は「Stop when the Trial wall is reached.」になる。最終段落は引き続き「Stop when」で始まり、再開段落の規則（本 ADR の帰結、`src/cli/wordpress.ts` の `WORDPRESS_RESUME_PARAGRAPH_PREFIX`）を満たす。
+  4. 最終段落の 3 文目の語「with those counts」（それらの数を含む）。1 で消した行数を指していた語で、文は「Reaching either bound is a normal ending: report the registry, every route that reached a sink with its exact remaining gap, and the rows and entry points left unread.」になる。「either bound」は残す。
 - v21-wide は `archived` にして `mode` を外す。本番の Trial を走らせた版なので、本文と digest は登録簿に残し、台帳の `promptVariant` / `promptDigest` の照合にだけ使う。campaign 設定で `promptId: wp2shell-bounty-v21-wide` を名指すと、v15-wide などの旧版と同じく、設定の検査（`runnablePrompt` の enum）で拒否される。
 - `src/profiles/wordpress/policy/campaign.json` と `examples/campaign-wide-20.json` の `promptId` を v22-wide にする。`discovery.skills` の名指しは変えない。
 - ADR 0045 の凍結 5 の第 5 項「消す方向にしか触らない」の範囲内の変更である。11 月の設計変更としては ADR 0049 の 1 まとまりに入る。
 - Harness の code は変えない。登録簿の行と設定 file の id だけを変える。
-
-最終段落に残る「Reaching either bound」「the registry with those counts」「the rows and entry points left unread」は、消した規則を指していた語である。語を足さずに直せないので残した。Root は登録簿の数と読み残しを報告する文として読む。
 
 測った数字: 未計測。本番で v22-wide の Trial を v21-wide の Trial と並べる（[measurement.md](../agents/measurement.md) 5b）。削除のみなので bench は組まない。agent に渡る文章なので `owner-approved` が要る。
 
