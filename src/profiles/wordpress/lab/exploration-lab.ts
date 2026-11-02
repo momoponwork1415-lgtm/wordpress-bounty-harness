@@ -9,6 +9,11 @@ import type { LabStateDiffRecord } from "../../../verification/index.js";
 import { createWordPressLabStateObserver } from "../verification/lab-state-diff.js";
 import type { WordPressLab, WordPressLabHandle } from "./index.js";
 import {
+  isSingleSelect,
+  wordpressExplorationFindSchema,
+  wordpressExplorationSqlSchema,
+} from "./lab-lookup.js";
+import {
   wordpressExplorationObserveSchema,
   type WordPressExplorationObserveRequest,
 } from "./lab-observation.js";
@@ -52,6 +57,26 @@ type ObservationRecord = {
   /** The answer did not reach labctl, even after one retry. */
   readonly answerDropped?: true;
 };
+/** One `find` or `sql` lookup (ADR 0049); the two share the Trial's `maxLookups`. */
+type LookupRecord = {
+  readonly requestedAt: string;
+  readonly answeredAt: string;
+  readonly command: "find" | "sql";
+  readonly status: "answered" | "refused" | "failed";
+  readonly reason?:
+    | "budget"
+    | "unavailable"
+    | "invalid-request"
+    | "sql-error"
+    | "harness-error";
+  /** With `invalid-request`: the name of the first field that failed, never its value. */
+  readonly field?: string;
+  /** The marker, or the SELECT text, as the agent sent it. */
+  readonly request?: string;
+  readonly answer: Readonly<Record<string, unknown>>;
+  /** The answer did not reach labctl, even after one retry. */
+  readonly answerDropped?: true;
+};
 
 /**
  * The first failing field of an observe request as a dotted path (`body` for
@@ -79,11 +104,12 @@ function invalidField(
 
 /**
  * One Trial's exploration Lab as the Harness drives it (ADR 0003, 2026-10-25
- * addendum): it answers `POST /reset` within `maxResets` and `POST /observe`
- * within `maxObservations`, takes the site state before and after every Lab
- * generation, and at the end seals the recorder's capture with those states
- * and the observations. It judges nothing; whether anything fired is the
- * agent's report (`labObservations`) and the human's call.
+ * addendum): it answers `POST /reset` within `maxResets`, `POST /observe`
+ * within `maxObservations`, and `POST /find` and `POST /sql` within one shared
+ * `maxLookups` (ADR 0049), takes the site state before and after every Lab
+ * generation, and at the end seals the recorder's capture with those states,
+ * the observations and the lookups. It judges nothing; whether anything fired
+ * is the agent's report (`labObservations`) and the human's call.
  */
 export function openWordPressExplorationLab(options: {
   readonly lab: Pick<
@@ -94,6 +120,8 @@ export function openWordPressExplorationLab(options: {
     | "nextControlRequest"
     | "answerControlRequest"
     | "observeExplorationPage"
+    | "findInExplorationLab"
+    | "queryExplorationLab"
   >;
   readonly handle: WordPressLabHandle;
   readonly maxResets: number;
@@ -102,17 +130,28 @@ export function openWordPressExplorationLab(options: {
   readonly maxObservations: number;
   /** Observations earlier segments of the same Trial used. */
   readonly observationsUsedBefore?: number;
+  /** Find and sql lookups together (ADR 0049). */
+  readonly maxLookups: number;
+  /** Lookups earlier segments of the same Trial used. */
+  readonly lookupsUsedBefore?: number;
   readonly store: PrivateArtifactStore;
   readonly clock: () => Date;
 }): TrialLab {
-  const { lab, handle, maxResets, maxObservations, store, clock } = options;
+  const { lab, handle, maxResets, maxObservations, maxLookups, store, clock } =
+    options;
   const resetsUsedBefore = options.resetsUsedBefore ?? 0;
   const observationsUsedBefore = options.observationsUsedBefore ?? 0;
+  const lookupsUsedBefore = options.lookupsUsedBefore ?? 0;
   const observations: ObservationRecord[] = [];
+  const lookups: LookupRecord[] = [];
   /** Observer visits the Trial has used so far, across its segments. */
   const observedInTrial = () =>
     observationsUsedBefore +
     observations.filter((entry) => entry.status !== "refused").length;
+  /** Find and sql lookups the Trial has used so far, across its segments. */
+  const lookedUpInTrial = () =>
+    lookupsUsedBefore +
+    lookups.filter((entry) => entry.status !== "refused").length;
   /** Resets the Trial has used so far, across its segments. */
   const usedInTrial = () =>
     resetsUsedBefore +
@@ -308,6 +347,165 @@ export function openWordPressExplorationLab(options: {
       },
     );
   };
+  const answerLookup = async (
+    request: ControlRequest,
+    record: Omit<
+      LookupRecord,
+      "requestedAt" | "answeredAt" | "answer" | "answerDropped"
+    >,
+    statusCode: number,
+    result: Readonly<Record<string, unknown>> = {},
+  ): Promise<void> => {
+    const body = {
+      status: record.status,
+      ...(record.reason === undefined ? {} : { reason: record.reason }),
+      ...(record.field === undefined ? {} : { field: record.field }),
+      ...result,
+      lookupsUsed: lookedUpInTrial() + (record.status === "refused" ? 0 : 1),
+      maxLookups,
+    };
+    const delivered = await send(request.id, { statusCode, body });
+    lookups.push({
+      requestedAt: request.receivedAt,
+      answeredAt: clock().toISOString(),
+      ...record,
+      answer: body,
+      ...(delivered ? {} : { answerDropped: true as const }),
+    });
+  };
+  /** The refusals a lookup shares with observe, before the Lab is asked; null when it may run. */
+  const lookupRefusal = (
+    request: ControlRequest,
+    command: "find" | "sql",
+    asked: string,
+  ): Promise<void> | null => {
+    if (broken)
+      return answerLookup(
+        request,
+        { command, status: "refused", reason: "unavailable", request: asked },
+        503,
+      );
+    if (lookedUpInTrial() >= maxLookups)
+      return answerLookup(
+        request,
+        { command, status: "refused", reason: "budget", request: asked },
+        429,
+      );
+    return null;
+  };
+  const handleFind = async (request: ControlRequest): Promise<void> => {
+    const parsed = wordpressExplorationFindSchema.safeParse(request.body);
+    if (!parsed.success)
+      return answerLookup(
+        request,
+        {
+          command: "find",
+          status: "refused",
+          reason: "invalid-request",
+          field: invalidField(parsed.error.issues),
+        },
+        400,
+      );
+    const { marker } = parsed.data;
+    const refused = lookupRefusal(request, "find", marker);
+    if (refused !== null) return refused;
+    const found = await lab
+      .findInExplorationLab(handle, marker)
+      .catch(() => ({ status: "unavailable" }) as const);
+    if (found.status === "unavailable")
+      return answerLookup(
+        request,
+        {
+          command: "find",
+          status: "refused",
+          reason: "unavailable",
+          request: marker,
+        },
+        503,
+      );
+    if (found.status === "failed")
+      return answerLookup(
+        request,
+        { command: "find", status: "failed", request: marker },
+        502,
+      );
+    return answerLookup(
+      request,
+      { command: "find", status: "answered", request: marker },
+      200,
+      {
+        marker,
+        database: found.database,
+        files: found.files,
+        truncated: found.truncated,
+      },
+    );
+  };
+  const handleSql = async (request: ControlRequest): Promise<void> => {
+    const parsed = wordpressExplorationSqlSchema.safeParse(request.body);
+    if (!parsed.success)
+      return answerLookup(
+        request,
+        {
+          command: "sql",
+          status: "refused",
+          reason: "invalid-request",
+          field: invalidField(parsed.error.issues),
+        },
+        400,
+      );
+    const { select } = parsed.data;
+    if (!isSingleSelect(select))
+      return answerLookup(
+        request,
+        {
+          command: "sql",
+          status: "refused",
+          reason: "invalid-request",
+          field: "select",
+          request: select,
+        },
+        400,
+      );
+    const refused = lookupRefusal(request, "sql", select);
+    if (refused !== null) return refused;
+    const queried = await lab
+      .queryExplorationLab(handle, select)
+      .catch(() => ({ status: "unavailable" }) as const);
+    if (queried.status === "unavailable")
+      return answerLookup(
+        request,
+        {
+          command: "sql",
+          status: "refused",
+          reason: "unavailable",
+          request: select,
+        },
+        503,
+      );
+    if (queried.status === "refused")
+      return answerLookup(
+        request,
+        {
+          command: "sql",
+          status: "refused",
+          reason: "sql-error",
+          request: select,
+        },
+        400,
+        { message: queried.message },
+      );
+    return answerLookup(
+      request,
+      { command: "sql", status: "answered", request: select },
+      200,
+      {
+        columns: queried.columns,
+        rows: queried.rows,
+        truncated: queried.truncated,
+      },
+    );
+  };
   /**
    * Runs one command. A throw answers it `failed` with a fixed reason (no
    * message, no stack), counts the attempt and is logged with its command,
@@ -317,6 +515,8 @@ export function openWordPressExplorationLab(options: {
     try {
       if (request.command === "reset") await handleReset(request);
       else if (request.command === "observe") await handleObserve(request);
+      else if (request.command === "find") await handleFind(request);
+      else if (request.command === "sql") await handleSql(request);
     } catch {
       if (request.command === "reset") {
         // The site state the next generation starts from is no longer known.
@@ -326,7 +526,17 @@ export function openWordPressExplorationLab(options: {
           { status: "failed", reason: "harness-error" },
           500,
         ).catch(() => undefined);
-      } else
+      } else if (request.command === "find" || request.command === "sql")
+        await answerLookup(
+          request,
+          {
+            command: request.command,
+            status: "failed",
+            reason: "harness-error",
+          },
+          500,
+        ).catch(() => undefined);
+      else
         await answerObservation(
           request,
           { status: "failed", reason: "harness-error" },
@@ -394,6 +604,9 @@ export function openWordPressExplorationLab(options: {
         refusedObservations: observations.filter(
           (entry) => entry.status === "refused",
         ).length,
+        lookups: lookups.filter((entry) => entry.status !== "refused").length,
+        refusedLookups: lookups.filter((entry) => entry.status === "refused")
+          .length,
       };
       const record = {
         schemaVersion: 1,
@@ -403,6 +616,8 @@ export function openWordPressExplorationLab(options: {
         resetsUsedBefore,
         maxObservations,
         observationsUsedBefore,
+        maxLookups,
+        lookupsUsedBefore,
         capture:
           capture.status === "captured"
             ? {
@@ -415,6 +630,7 @@ export function openWordPressExplorationLab(options: {
         generations,
         resetLog: resets,
         observationLog: observations,
+        lookupLog: lookups,
         ...counts,
       };
       try {

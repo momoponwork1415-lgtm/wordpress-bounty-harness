@@ -2257,6 +2257,16 @@ describe("harness CLI vertical slice", () => {
     expect(prompts[0]).toContain(
       "This Trial may observe at most 20 times, and the answer states how many are used. The answer is an observation, not a confirmation; report what you observed in `labObservations`.",
     );
+    // ADR 0049: the two storage lookups, with their shared budget, before the closing paragraph.
+    expect(prompts[0]).toContain(
+      '\n\nFind: `POST http://labctl/find` with a JSON body `{"marker": "..."}`, where marker is a string of 10 to 15 digits not starting with 0, searches the site\'s database and the files under `wp-content` for that exact string.',
+    );
+    expect(prompts[0]).toContain(
+      'A value the search does not find is reported as not found; that is an absence in this search, not proof that the value was not stored.\n\nQuery: `POST http://labctl/sql` with a JSON body `{"select": "..."}` runs one SELECT statement on the site\'s database as a read-only account and answers with the column names and up to 200 rows;',
+    );
+    expect(prompts[0]).toContain(
+      "Find and Query share one budget: this Trial may use them at most 60 times, and each answer states how many are used.\n\nThe Harness records the HTTP traffic",
+    );
     expect(prompts[0]).toContain(
       "Nothing observed in this Lab is a confirmation.",
     );
@@ -2295,9 +2305,10 @@ describe("harness CLI vertical slice", () => {
     expect(startedEvent).toMatchObject({
       labAttached: true,
       labId,
+      // ADR 0049: an exploration Lab always carries the read-only account for find / sql.
       configuration: {
-        lab: { mode: "attached", maxResets: 2 },
-        labAccess: { database: "none" },
+        lab: { mode: "attached", maxResets: 2, maxLookups: 60 },
+        labAccess: { database: "read-only" },
       },
     });
     const finished = ledger().read({
@@ -2799,9 +2810,14 @@ describe("harness CLI vertical slice", () => {
         coverage: { maxUnvisitedRatio: 0.2 },
       }).success,
     ).toBe(false);
-    // Owner decision 2026-10-18: the normal mode explores without a Lab.
+    // ADR 0049 (owner decision 2026-11-02): every Trial has a Lab unless the config says none.
     expect(wordpressCampaignConfigSchema.parse(base).discovery).toEqual({
-      lab: { mode: "none", maxResets: 2, maxObservations: 20 },
+      lab: {
+        mode: "attached",
+        maxResets: 2,
+        maxObservations: 20,
+        maxLookups: 60,
+      },
       mode: "deep",
       maxChildren: 4,
       minimumActiveMinutes: 0,
@@ -2928,13 +2944,23 @@ describe("harness CLI vertical slice", () => {
         ...base,
         discovery: { lab: "attached" },
       }).discovery.lab,
-    ).toEqual({ mode: "attached", maxResets: 2, maxObservations: 20 });
+    ).toEqual({
+      mode: "attached",
+      maxResets: 2,
+      maxObservations: 20,
+      maxLookups: 60,
+    });
     expect(
       wordpressCampaignConfigSchema.parse({
         ...base,
         discovery: { lab: { mode: "attached", maxResets: 5 } },
       }).discovery.lab,
-    ).toEqual({ mode: "attached", maxResets: 5, maxObservations: 20 });
+    ).toEqual({
+      mode: "attached",
+      maxResets: 5,
+      maxObservations: 20,
+      maxLookups: 60,
+    });
     for (const rejected of [
       { discovery: deep, promptId: "wp2shell-bounty-v13-wide" },
       { discovery: deep, promptId: "wp2shell-bounty-v15-wide" },

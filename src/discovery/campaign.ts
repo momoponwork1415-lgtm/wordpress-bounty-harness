@@ -91,6 +91,8 @@ export type PlannedDiscoveryRun = {
       readonly mode: "none" | "attached";
       readonly maxResets: number;
       readonly maxObservations?: number | undefined;
+      /** ADR 0049: the shared find / sql budget of an attached Lab. */
+      readonly maxLookups?: number | undefined;
     };
     readonly model?: string;
     readonly effort?: string;

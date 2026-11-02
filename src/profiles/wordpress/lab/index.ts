@@ -48,6 +48,11 @@ import {
   nativeDockerRunner,
   type DockerRunner,
 } from "./lab-docker.js";
+import * as lookup from "./lab-lookup.js";
+import type {
+  WordPressExplorationFindResult,
+  WordPressExplorationQueryResult,
+} from "./lab-lookup.js";
 import * as observe from "./lab-observation.js";
 import type {
   WordPressExplorationObservation,
@@ -109,6 +114,15 @@ export {
   type WordPressAttackerOrigin,
   type WordPressDeniedPath,
 } from "./baseline.js";
+export {
+  isSingleSelect,
+  wordpressExplorationFindSchema,
+  wordpressExplorationSqlSchema,
+  type WordPressExplorationFindRequest,
+  type WordPressExplorationFindResult,
+  type WordPressExplorationQueryResult,
+  type WordPressExplorationSqlRequest,
+} from "./lab-lookup.js";
 export {
   wordpressExplorationObserveSchema,
   wordpressVisitPathSchema,
@@ -229,6 +243,25 @@ export interface WordPressLab extends LabProvisioner<
   ): Promise<
     WordPressExplorationObservation | { readonly status: "unavailable" }
   >;
+  /**
+   * Exploration Labs only (ADR 0049): where the site stored a marker the
+   * agent planted, read through the Lab's read-only database account and a
+   * file search under `wp-content`. `unavailable` when the handle is not an
+   * exploration Lab with a read-only account.
+   */
+  findInExplorationLab(
+    handle: WordPressLabHandle,
+    marker: string,
+  ): Promise<WordPressExplorationFindResult>;
+  /**
+   * Exploration Labs only (ADR 0049): one SELECT as the Lab's read-only
+   * database account, at most 200 rows. The database's refusal is passed on
+   * as `sql-error`; nothing is judged.
+   */
+  queryExplorationLab(
+    handle: WordPressLabHandle,
+    select: string,
+  ): Promise<WordPressExplorationQueryResult>;
   /** Removes the `exposeToHost` gateway before teardown; true when it is gone. */
   withdrawFromHost(handle: WordPressLabHandle): Promise<boolean>;
   /**
@@ -368,6 +401,17 @@ export function openWordPressLab(options: {
   ): WordPressLabSession | undefined => {
     const lab = active.get(handle.id);
     return lab?.owns(handle) ? lab : undefined;
+  };
+  /** ADR 0049: an exploration Lab whose setup granted the read-only account. */
+  const lookupSessionFor = (
+    handle: WordPressLabHandle,
+  ): WordPressLabSession | undefined => {
+    const lab = sessionFor(handle);
+    return lab !== undefined &&
+      lab.exploration &&
+      preparedLabs.get(lab.id)?.setup.databaseAccess === "read-only"
+      ? lab
+      : undefined;
   };
   const preflight = async (): Promise<void> => {
     const runtimes = await docker.run(
@@ -702,6 +746,16 @@ export function openWordPressLab(options: {
       if (lab === undefined || !lab.exploration)
         return { status: "unavailable" };
       return observe.observeExplorationPage(lab, request);
+    },
+    async findInExplorationLab(handle, marker) {
+      const lab = lookupSessionFor(handle);
+      if (lab === undefined) return { status: "unavailable" };
+      return lookup.findInExplorationLab(lab, marker);
+    },
+    async queryExplorationLab(handle, select) {
+      const lab = lookupSessionFor(handle);
+      if (lab === undefined) return { status: "unavailable" };
+      return lookup.queryExplorationLab(lab, select);
     },
     async captureState(handle) {
       const lab = sessionFor(handle);

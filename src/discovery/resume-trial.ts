@@ -78,6 +78,8 @@ export type ResumePlan = {
     readonly resetsUsed: number;
     /** Observer visits (`POST /observe`) the earlier segments used. */
     readonly observationsUsed: number;
+    /** Find and sql lookups (ADR 0049) the earlier segments used. */
+    readonly lookupsUsed: number;
   };
 };
 
@@ -476,6 +478,12 @@ export async function assessTrialResume(options: {
                 (sum, segment) =>
                   sum +
                   (finishes.get(segment.runId)?.labObserved?.observations ?? 0),
+                0,
+              ),
+              lookupsUsed: chain.reduce(
+                (sum, segment) =>
+                  sum +
+                  (finishes.get(segment.runId)?.labObserved?.lookups ?? 0),
                 0,
               ),
             },
