@@ -13,6 +13,8 @@ export interface RunParameters {
     readonly maxResets: number;
     /** Attached Labs only (Phase D2); not stated in the section. */
     readonly maxObservations?: number;
+    /** Attached Labs only (ADR 0049); not stated in the section. */
+    readonly maxLookups?: number;
   };
   readonly runtime: {
     readonly transportKind: string;

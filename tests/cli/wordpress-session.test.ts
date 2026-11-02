@@ -239,6 +239,7 @@ describe("WordPress campaign session", () => {
       mode: "attached",
       maxResets: 3,
       maxObservations: 20,
+      maxLookups: 60,
     });
   });
 

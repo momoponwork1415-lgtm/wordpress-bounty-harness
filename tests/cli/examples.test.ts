@@ -51,6 +51,7 @@ it("starts the checked-in wide v21 campaign with one concurrent target on the La
     mode: "none",
     maxResets: 2,
     maxObservations: 20,
+    maxLookups: 60,
   });
   expect(config.discovery).toMatchObject({
     maxChildren: 4,
@@ -73,7 +74,12 @@ it("starts the checked-in wide v21 campaign with one concurrent target on the La
       ...(source as object),
       discovery: { lab: "attached", mode: "wide" },
     }).discovery.lab,
-  ).toEqual({ mode: "attached", maxResets: 2, maxObservations: 20 });
+  ).toEqual({
+    mode: "attached",
+    maxResets: 2,
+    maxObservations: 20,
+    maxLookups: 60,
+  });
   for (const [maxConcurrentTargets, accepted] of [
     [10, true],
     [11, false],
@@ -161,10 +167,11 @@ it.each(["3.3.1", "3.2.6"])(
       version,
     )) as Record<string, unknown>;
     expect(source).not.toHaveProperty("promptId");
+    // ADR 0049: an example that names no Lab mode now gets the default, attached.
     expect(wordpressCampaignConfigSchema.parse(source)).toMatchObject({
       promptId: "wp2shell-bounty-v11",
       runWallTimeMinutes: 120,
-      discovery: { lab: { mode: "none" } },
+      discovery: { lab: { mode: "attached" } },
     });
   },
 );

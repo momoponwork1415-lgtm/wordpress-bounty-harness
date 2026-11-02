@@ -203,27 +203,14 @@ export async function initializeWordPress(
   await seedInitialPosts(input);
 }
 
-/** Grant SELECT on the tables present at provision time. */
+/**
+ * Grant SELECT on the whole site database (ADR 0049): a database-level grant
+ * covers tables a plugin creates later in the Trial, which a per-table grant
+ * at provision time would hide from `find` and `sql`. Still read-only.
+ */
 export async function grantReadOnlyDatabaseAccess(
   lab: WordPressLabSession,
 ): Promise<void> {
-  const tables = (
-    await lab.requireDocker([
-      "exec",
-      lab.database,
-      "mariadb",
-      "--user=root",
-      `--password=${lab.databasePassword}`,
-      "--skip-column-names",
-      "--batch",
-      "--execute",
-      `SHOW TABLES FROM ${DATABASE_NAME}`,
-    ])
-  ).stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => /^[A-Za-z0-9_]{1,64}$/.test(line));
-  if (tables.length === 0) throw new Error("No tables to expose");
   await lab.requireDocker([
     "exec",
     lab.database,
@@ -233,10 +220,7 @@ export async function grantReadOnlyDatabaseAccess(
     "--execute",
     [
       `CREATE USER '${READ_ONLY_DATABASE_USER}'@'%' IDENTIFIED BY '${lab.readerPassword}'`,
-      ...tables.map(
-        (table) =>
-          `GRANT SELECT ON ${DATABASE_NAME}.${table} TO '${READ_ONLY_DATABASE_USER}'@'%'`,
-      ),
+      `GRANT SELECT ON ${DATABASE_NAME}.* TO '${READ_ONLY_DATABASE_USER}'@'%'`,
       "FLUSH PRIVILEGES",
     ].join("; "),
   ]);

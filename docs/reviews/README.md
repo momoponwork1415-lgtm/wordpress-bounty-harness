@@ -13,6 +13,7 @@ AI に「調べて報告」を頼んだときの成果物を、日付付きで�
 - [2026-11-01-system-overview.html](2026-11-01-system-overview.html): 選定から提出までの全体と 6 段の責務分担を 1 枚にした図解（2026-11-01、所有者の「システム全体を解説して」への答え）。
 - [2026-11-01-system-flow-diagram.html](2026-11-01-system-flow-diagram.html): 全体の流れ図（選定 → Snapshot → 探索 → 出口 → 検証 → 提出）。docs/SYSTEM.md の Mermaid 図の原本。
 - [2026-11-01-system-design.html](2026-11-01-system-design.html): 段ごとの契約・処理・観測・決める数字を書いた設計書（2026-11-01）。所有者が検証する前提で Claude が書いた。
+- [2026-11-02-lab-resident-exploration-design.html](2026-11-02-lab-resident-exploration-design.html): Lab 常設探索の設計（全 Trial に Lab、観測器 `find` / `sql` / `trace`、Lead の自動第 2 Trial）。所有者が 2026-11-02 に「これでいこう」で承認した。ADR 0049 と Issue #793 の出典。
 - [2026-11-01-development-plan.md](2026-11-01-development-plan.md): 2026-11-01 夜の開発計画の整理。§2 の 5 項目（egress relay、目的文 1 枚、recon v2、重複表示、prior research）の出典。
 - [2026-11-01-owner-check.md](2026-11-01-owner-check.md): 計画 §2 を入れ終えた後の所有者チェック票と、再開で変える設定 3 つ。
 - [2026-11-01-exploration-design-assessment.md](2026-11-01-exploration-design-assessment.md): 探索設計の現状評価と、A/B/C の型と 3 つの問いで変更を判断する指針。

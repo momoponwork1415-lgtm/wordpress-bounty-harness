@@ -75,7 +75,7 @@ describe("exploration Lab control endpoint", () => {
         status: 404,
         body: {
           status: "unknown-command",
-          commands: ["POST /reset", "POST /observe"],
+          commands: ["POST /reset", "POST /observe", "POST /find", "POST /sql"],
         },
       });
     expect(await nextControlRequest(directory, 50, 10)).toBeNull();
@@ -109,6 +109,28 @@ describe("exploration Lab control endpoint", () => {
       status: 413,
       body: { status: "body-too-large", maxBytes: 16_384 },
     });
+    expect(await nextControlRequest(directory, 50, 10)).toBeNull();
+  });
+
+  it("relays find and sql bodies as they came, reading neither (ADR 0049)", async () => {
+    const { directory, call } = await fixture();
+    for (const [path, body] of [
+      ["/find", { marker: "1234567890" }],
+      ["/sql", { select: "SELECT 1; DROP TABLE wp_options" }],
+    ] as const) {
+      const pending = call("POST", path, JSON.stringify(body));
+      const request = await nextControlRequest(directory, 2_000, 10);
+      // The endpoint passes the body on whole; the host checks its shape.
+      expect(request).toMatchObject({ command: path.slice(1), body });
+      answerControlRequest(directory, request!.id, {
+        statusCode: 200,
+        body: { status: "answered", lookupsUsed: 1, maxLookups: 60 },
+      });
+      expect(await pending).toEqual({
+        status: 200,
+        body: { status: "answered", lookupsUsed: 1, maxLookups: 60 },
+      });
+    }
     expect(await nextControlRequest(directory, 50, 10)).toBeNull();
   });
 

@@ -691,28 +691,43 @@ function wordPressDiscoveryPromptText(options: {
 type WordPressLabUsed = {
   readonly resetsUsed: number;
   readonly observationsUsed: number;
+  /** Find and sql lookups (ADR 0049). */
+  readonly lookupsUsed: number;
 };
 type WordPressLabBudget = {
   readonly maxResets: number;
   readonly maxObservations: number;
+  readonly maxLookups: number;
 };
+
+/**
+ * ADR 0049: an exploration Lab always carries the read-only database account
+ * (`find` and `sql` answer through it), whatever the campaign's `lab.databaseAccess`
+ * says for verification Labs.
+ */
+const explorationSetupFor =
+  (setupFor: WordPressCampaignSession["setupFor"]) =>
+  (snapshot: Snapshot): WordPressLabSetup => ({
+    ...setupFor(snapshot),
+    databaseAccess: "read-only",
+  });
 
 /**
  * The Harness-generated `## Lab` section of a Trial with an exploration Lab
  * (ADR 0003, 2026-10-25 addendum). It states the endpoint, the accounts,
- * the reset and observe commands with their budgets, and that the Lab
- * confirms nothing; it says nothing about what to try. Passwords are written
- * here: the sandbox has no other channel for Lab credentials. A resumed
- * segment's section states that its Lab is new and how much of the Trial's
- * budgets is used; it is that segment's first-turn notice. Agent-facing
- * text: changes need `owner-approved`.
+ * the reset, observe, find and query commands with their budgets (ADR 0049),
+ * and that the Lab confirms nothing; it says nothing about what to try.
+ * Passwords are written here: the sandbox has no other channel for Lab
+ * credentials. A resumed segment's section states that its Lab is new and how
+ * much of the Trial's budgets is used; it is that segment's first-turn notice.
+ * Agent-facing text: changes need `owner-approved`.
  */
 export function wordPressLabSection(
   lab: WordPressLabHandle,
   budget: WordPressLabBudget,
   resumed?: WordPressLabUsed,
 ): string {
-  const { maxResets, maxObservations } = budget;
+  const { maxResets, maxObservations, maxLookups } = budget;
   const exploration = lab.exploration;
   if (exploration === undefined)
     throw new Error("The discovery Lab is not an exploration Lab");
@@ -743,6 +758,8 @@ export function wordPressLabSection(
       `- Reset: \`POST http://${control.host}/reset\` removes the site and provisions it again from the same setup; the accounts above stay the same. ${resumed === undefined ? `This Trial may reset at most ${maxResets} times` : `This Trial may reset at most ${maxResets} times in all and has used ${resumed.resetsUsed}`}, and the answer states how many are used. Other requests through \`${lab.endpoint}\` are counted, not limited.`,
     ].join("\n"),
     `Observe: \`POST http://${control.host}/observe\` with a JSON body opens one page of the site in the Harness's headless browser inside the Lab and answers with what the browser saw. The body is \`{"role": ..., "path": "/..."}\`, where role is ${roleList}, and the browser logs in with that account above. The path starts with a single \`/\`, has no whitespace or backslash, and is at most 2048 characters. It may add \`"actions"\`, 1 to 5 steps run in order after the page loads, each \`{"kind": "click", "selector": "..."}\`, \`{"kind": "click-text", "text": "...", "exact": true}\` or \`{"kind": "fill", "selector": "...", "value": "..."}\`. A selector is 1 to 200 characters of letters, digits, spaces and \`# . _ [ ] = " ' ( ) : > + ~ * , -\`; \`text\` and a fill \`value\` are 1 to 120 characters; \`exact\` is a boolean, true or false. It may also add \`"dialogMarker"\`, a string of 10 to 15 digits not starting with 0. No other field is accepted; a body that does not fit is refused as \`invalid-request\`, and the answer's \`field\` names the first field that failed. The control endpoint takes one command at a time: a request sent while another is waiting is answered 409 \`busy\`. The answer gives the HTTP status of the path, whether a dialog opened and, with a marker, whether an alert with exactly that text opened, the console error count, and the digest of a screenshot the Harness keeps. ${resumed === undefined ? `This Trial may observe at most ${maxObservations} times` : `This Trial may observe at most ${maxObservations} times in all and has used ${resumed.observationsUsed}`}, and the answer states how many are used. The answer is an observation, not a confirmation; report what you observed in \`labObservations\`.`,
+    `Find: \`POST http://${control.host}/find\` with a JSON body \`{"marker": "..."}\`, where marker is a string of 10 to 15 digits not starting with 0, searches the site's database and the files under \`wp-content\` for that exact string. The answer lists every database table and column whose rows contain it, with up to 20 key values per table, and every file path that contains it, up to 50; \`truncated\` says when a limit cut the list. A value the search does not find is reported as not found; that is an absence in this search, not proof that the value was not stored.`,
+    `Query: \`POST http://${control.host}/sql\` with a JSON body \`{"select": "..."}\` runs one SELECT statement on the site's database as a read-only account and answers with the column names and up to 200 rows; \`truncated\` says when more rows matched. A statement that is not a single SELECT, or that the database rejects, is refused with \`sql-error\` and the database's message. Find and Query share one budget: ${resumed === undefined ? `this Trial may use them at most ${maxLookups} times` : `this Trial may use them at most ${maxLookups} times in all and has used ${resumed.lookupsUsed}`}, and each answer states how many are used.`,
     "The Harness records the HTTP traffic through the site address and the site state before and after each reset. Nothing observed in this Lab is a confirmation. A setting you make as administrator is a configuration precondition; state it in `configurationPrecondition`. In a Finding or Lead, `labObservations` states what you tried in the Lab and what you saw.",
   ].join("\n\n");
 }
@@ -918,7 +935,8 @@ async function planWordPressDiscovery(
                 : ("mounted" as const),
           },
           labAccess: {
-            database: "none",
+            database:
+              runParameters.lab.mode === "attached" ? "read-only" : "none",
           },
           ...(share === undefined
             ? {}
@@ -1203,7 +1221,7 @@ async function resumeWordPressRun(
   if (attached) {
     const current = config.discovery.lab;
     const budgetDiffers = (
-      name: "maxResets" | "maxObservations",
+      name: "maxResets" | "maxObservations" | "maxLookups",
       recorded: number | undefined,
     ) => ({
       status: "refused" as const,
@@ -1221,7 +1239,14 @@ async function resumeWordPressRun(
       maxObservations !== current.maxObservations
     )
       return budgetDiffers("maxObservations", maxObservations);
-    labBudget = { maxResets: recordedLab.maxResets, maxObservations };
+    const { maxLookups } = recordedLab;
+    if (maxLookups === undefined || maxLookups !== current.maxLookups)
+      return budgetDiffers("maxLookups", maxLookups);
+    labBudget = {
+      maxResets: recordedLab.maxResets,
+      maxObservations,
+      maxLookups,
+    };
   }
   // ADR 0044: a segment of a second Trial receives the same `## Prior leads`
   // section, rebuilt from the campaign configuration and checked by digest.
@@ -1402,7 +1427,7 @@ async function resumeWordPressRun(
     state,
     config,
     boundaries,
-    setup: setupFor(snapshot),
+    setup: explorationSetupFor(setupFor)(snapshot),
     snapshot,
     campaignId: input.campaignId,
     previousLabId: started.labId,
@@ -1548,6 +1573,8 @@ async function resumeWithExplorationLab(options: {
           resetsUsedBefore: options.used.resetsUsed,
           maxObservations: options.budget.maxObservations,
           observationsUsedBefore: options.used.observationsUsed,
+          maxLookups: options.budget.maxLookups,
+          lookupsUsedBefore: options.used.lookupsUsed,
           store: state.store,
           clock: state.clock,
         }),
@@ -1726,10 +1753,11 @@ async function runWordPressCampaign(
           handle,
           maxResets: config.discovery.lab.maxResets,
           maxObservations: config.discovery.lab.maxObservations,
+          maxLookups: config.discovery.lab.maxLookups,
           store: state.store,
           clock: state.clock,
         }),
-      setupFor: session.setupFor,
+      setupFor: explorationSetupFor(session.setupFor),
       discovery: (discoveryInput) =>
         planWordPressDiscovery(discoveryInput, {
           campaignId: input.campaignId,

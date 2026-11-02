@@ -232,6 +232,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
           maxResets: z.number().int().nonnegative(),
           /** Attached Labs from Phase D2 on; absent on earlier events. */
           maxObservations: z.number().int().nonnegative().optional(),
+          /** ADR 0049: the shared find / sql budget; absent on earlier events. */
+          maxLookups: z.number().int().nonnegative().optional(),
         })
         .optional(),
       model: id.optional(),
@@ -367,6 +369,9 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         /** Phase D2; absent on earlier events. */
         observations: z.number().int().nonnegative().optional(),
         refusedObservations: z.number().int().nonnegative().optional(),
+        /** ADR 0049: find and sql lookups; absent on earlier events. */
+        lookups: z.number().int().nonnegative().optional(),
+        refusedLookups: z.number().int().nonnegative().optional(),
       })
       .optional(),
     /** Unique direct children seen and admitted by a cooperative Root run. */

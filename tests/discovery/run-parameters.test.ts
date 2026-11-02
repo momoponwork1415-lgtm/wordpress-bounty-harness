@@ -49,15 +49,30 @@ describe("Run parameters section (redesign 2026-10-25 §5.1)", () => {
       lab: { siteTitle: "Synthetic", initialPosts: [], customerRole: false },
     };
     for (const [lab, expected] of [
-      ["none", { mode: "none", maxResets: 2, maxObservations: 20 }],
-      [{ mode: "none" }, { mode: "none", maxResets: 2, maxObservations: 20 }],
+      [
+        "none",
+        { mode: "none", maxResets: 2, maxObservations: 20, maxLookups: 60 },
+      ],
+      [
+        { mode: "none" },
+        { mode: "none", maxResets: 2, maxObservations: 20, maxLookups: 60 },
+      ],
       [
         { mode: "none", maxResets: 5 },
-        { mode: "none", maxResets: 5, maxObservations: 20 },
+        { mode: "none", maxResets: 5, maxObservations: 20, maxLookups: 60 },
       ],
       [
         { mode: "attached", maxObservations: 0 },
-        { mode: "attached", maxResets: 2, maxObservations: 0 },
+        { mode: "attached", maxResets: 2, maxObservations: 0, maxLookups: 60 },
+      ],
+      // ADR 0049: the find / sql budget, and attached as the default when the key is absent.
+      [
+        { mode: "attached", maxLookups: 0 },
+        { mode: "attached", maxResets: 2, maxObservations: 20, maxLookups: 0 },
+      ],
+      [
+        undefined,
+        { mode: "attached", maxResets: 2, maxObservations: 20, maxLookups: 60 },
       ],
     ] as const)
       expect(

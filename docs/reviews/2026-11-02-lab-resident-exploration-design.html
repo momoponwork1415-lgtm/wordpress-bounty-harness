@@ -1,0 +1,753 @@
+<title>Lab 常設探索の設計</title>
+<meta name="claude:viewport-fit-sides" content="cover" />
+<link
+  rel="stylesheet"
+  href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&family=IBM+Plex+Mono:wght@400;600&display=swap"
+/>
+<style>
+  :root {
+    --bg: #faf8f3;
+    --fg: #1e1d1a;
+    --muted: #6b665c;
+    --line: #d9d4c8;
+    --card: #ffffff;
+    --accent: #9a4a1e;
+    --accent-soft: #f3e4d8;
+    --ok: #2f6b3a;
+    --warn: #8a6d1b;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sans: "Noto Sans JP", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #17161a;
+      --fg: #ebe7df;
+      --muted: #a39d91;
+      --line: #3a3740;
+      --card: #201f24;
+      --accent: #e19a66;
+      --accent-soft: #3a2a20;
+      --ok: #7fc48b;
+      --warn: #d9b85a;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #17161a;
+    --fg: #ebe7df;
+    --muted: #a39d91;
+    --line: #3a3740;
+    --card: #201f24;
+    --accent: #e19a66;
+    --accent-soft: #3a2a20;
+    --ok: #7fc48b;
+    --warn: #d9b85a;
+    color-scheme: dark;
+  }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--sans);
+    line-height: 1.75;
+    font-size: 15px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 32px 64px;
+  }
+  main {
+    max-width: 860px;
+    margin: 0 auto;
+    display: grid;
+    gap: 28px;
+  }
+  h1 {
+    font-size: 1.6rem;
+    line-height: 1.3;
+    margin: 0;
+    text-wrap: balance;
+  }
+  h2 {
+    font-size: 1.15rem;
+    margin: 0 0 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
+    text-wrap: balance;
+  }
+  h3 {
+    font-size: 1rem;
+    margin: 16px 0 4px;
+  }
+  p {
+    margin: 6px 0;
+  }
+  .lede {
+    color: var(--muted);
+  }
+  .meta {
+    font-size: 0.85rem;
+    color: var(--muted);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+  }
+  ul,
+  ol {
+    margin: 6px 0;
+    padding-left: 1.4em;
+  }
+  li {
+    margin: 3px 0;
+  }
+  code {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    background: var(--accent-soft);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 18px;
+  }
+  .grid2 {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 12px;
+  }
+  .grid2 > div {
+    min-width: 0;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 0.9rem;
+  }
+  th,
+  td {
+    border-bottom: 1px solid var(--line);
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th {
+    font-weight: 700;
+    color: var(--muted);
+    font-size: 0.8rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .tbl {
+    overflow-x: auto;
+  }
+  .tag {
+    display: inline-block;
+    font-size: 0.75rem;
+    font-family: var(--mono);
+    padding: 0 6px;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+    color: var(--muted);
+  }
+  .tag.h {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .tag.s {
+    border-color: var(--ok);
+    color: var(--ok);
+  }
+  figure {
+    margin: 12px 0;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px;
+  }
+  figure svg {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    color: var(--fg);
+  }
+  figcaption {
+    font-size: 0.85rem;
+    color: var(--muted);
+    margin-top: 6px;
+  }
+  .num {
+    font-family: var(--mono);
+  }
+  .q {
+    border-left: 3px solid var(--accent);
+    padding-left: 12px;
+    color: var(--muted);
+  }
+</style>
+
+<main>
+  <header>
+    <h1>Lab 常設探索の設計 — Lead を実行環境で前に進める</h1>
+    <p class="lede">
+      所有者の問い（2026-11-02）: 「Codex から Lead
+      が出て、それを検証しなければならないのだから実行できる環境は必須。改善案を出して」。この文書は
+      Claude が設計し、所有者がレビューする。
+    </p>
+    <div class="meta">
+      <span>2026-11-02</span
+      ><span>関連: #791 #715 #724 ADR 0043 / 0044 / 0045 / 0048</span
+      ><span>正本ではない（docs/reviews）</span>
+    </div>
+  </header>
+
+  <section>
+    <h2>1. いまの事実</h2>
+    <div class="grid2">
+      <div class="card">
+        <h3>Lab はいつ付くか</h3>
+        <ul>
+          <li>
+            第 1 Trial（本番・bench とも）:
+            <strong>Lab なし</strong>。固定ソースだけを読む。
+          </li>
+          <li>
+            第 2 Trial（Lead 入力、ADR 0044）: Lab 付き。名指しで回している。
+          </li>
+          <li>
+            検証（<code>verify next --handoff</code>）と人間の review Lab: Lab
+            付き。
+          </li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Lab で今できること</h3>
+        <ul>
+          <li>
+            HTTP で site に届く。visitor / 低権限 / administrator のアカウント。
+          </li>
+          <li>
+            <code>POST /reset</code>（回数制限）、<code>POST /observe</code
+            >（headless browser で 1 ページ、alert マーカー、回数制限）。
+          </li>
+          <li>
+            <strong>無いもの</strong>: DB 読み取り（<code
+              >labAccess.database</code
+            >
+            は <code>"none"</code> 固定）、入力値の保存先検索、PHP
+            の実行トレース。
+          </li>
+          <li>
+            Harness は reset ごとの site 状態（options、users、table の行数と
+            checksum）を記録しているが、エージェントには見せていない。
+          </li>
+        </ul>
+      </div>
+    </div>
+    <div class="card" style="margin-top: 12px">
+      <h3>取り逃しの形（bench h31、20 plugin、62 record）</h3>
+      <div class="tbl">
+        <table>
+          <tr>
+            <th>到達</th>
+            <th>件数</th>
+            <th>止まり方</th>
+          </tr>
+          <tr>
+            <td>Finding</td>
+            <td class="num">20</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td>Lead 止まり</td>
+            <td class="num">20</td>
+            <td>
+              「攻撃者の入力がここに来る経路（producer）が見つからない」か「sink
+              が出力に届くか読み切れない」。コードだけでは決まらない問いが大半。
+            </td>
+          </tr>
+          <tr>
+            <td>未到達</td>
+            <td class="num">22</td>
+            <td>読んだ単位の外か、読んだが行として残らなかった。</td>
+          </tr>
+        </table>
+      </div>
+      <p>
+        Lead 止まりの 20 件と、本番 leads2 の Lead 160
+        件の大半が、同じ「入れた値がどこへ保存され、どこで読まれるか」で止まっている。これは実行して観測すれば
+        1 回で決まる問いである。Root は 120 分のうち 30〜40
+        分で閉じていて、時間は余っている。
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. 方針（変えないこと）</h2>
+    <ul>
+      <li>
+        Harness は判定器を持たない。Lab
+        の観測は事実であって確定ではない（不変条件 3）。確定は人間の review Lab
+        のまま。
+      </li>
+      <li>
+        探索は広いまま。対象外の impact は出口で park
+        し、落とすのはレビュー側（前回答のとおり）。
+      </li>
+      <li>1 Trial 1 Lab。Lab の使い回しはしない（不変条件 5、隔離）。</li>
+      <li>
+        Harness
+        のコードに「エージェントにこう探させる」は入れない。足すのは<strong>観測器</strong>と<strong>選定の規則</strong>だけ。読み方はスキルが持つ。
+      </li>
+      <li>
+        凍結 5 項目（ADR 0045）は触らない。本設計は所有者が 11
+        月の設計変更として名指ししたものと解釈する。
+      </li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>3. 設計</h2>
+    <figure>
+      <svg
+        viewBox="0 0 860 300"
+        role="img"
+        aria-label="現状は第1 Trialがコードだけを読みLeadが人の一覧に溜まる。提案は全TrialにLabと3つの観測器を付け、Leadが残れば選定が第2 Trialを自動で組み、Findingだけが検証列へ進む。"
+      >
+        <defs>
+          <marker
+            id="a"
+            viewBox="0 0 10 10"
+            refX="9"
+            refY="5"
+            markerWidth="7"
+            markerHeight="7"
+            orient="auto"
+          >
+            <path d="M0,0 L10,5 L0,10 z" fill="currentColor" />
+          </marker>
+        </defs>
+        <g
+          font-size="12"
+          fill="currentColor"
+          stroke="currentColor"
+          stroke-width="1.2"
+        >
+          <text x="10" y="22" font-weight="700" stroke="none">現状</text>
+          <rect x="10" y="36" width="150" height="46" rx="6" fill="none" />
+          <text x="85" y="56" text-anchor="middle" stroke="none">
+            第 1 Trial
+          </text>
+          <text x="85" y="72" text-anchor="middle" stroke="none" font-size="11">
+            コードのみ
+          </text>
+          <line x1="160" y1="59" x2="230" y2="59" marker-end="url(#a)" />
+          <rect x="232" y="36" width="110" height="46" rx="6" fill="none" />
+          <text x="287" y="64" text-anchor="middle" stroke="none">Finding</text>
+          <rect
+            x="232"
+            y="96"
+            width="110"
+            height="46"
+            rx="6"
+            fill="none"
+            stroke-dasharray="4 3"
+          />
+          <text x="287" y="124" text-anchor="middle" stroke="none">Lead</text>
+          <line x1="160" y1="70" x2="230" y2="115" marker-end="url(#a)" />
+          <line x1="342" y1="59" x2="420" y2="59" marker-end="url(#a)" />
+          <rect x="422" y="36" width="130" height="46" rx="6" fill="none" />
+          <text x="487" y="64" text-anchor="middle" stroke="none">
+            検証 Lab → 人間
+          </text>
+          <line x1="342" y1="119" x2="420" y2="119" marker-end="url(#a)" />
+          <rect
+            x="422"
+            y="96"
+            width="130"
+            height="46"
+            rx="6"
+            fill="none"
+            stroke-dasharray="4 3"
+          />
+          <text
+            x="487"
+            y="118"
+            text-anchor="middle"
+            stroke="none"
+            font-size="11"
+          >
+            review leads
+          </text>
+          <text
+            x="487"
+            y="133"
+            text-anchor="middle"
+            stroke="none"
+            font-size="11"
+          >
+            人が一覧を読む／名指しで第 2 Trial
+          </text>
+
+          <text x="10" y="186" font-weight="700" stroke="none">提案</text>
+          <rect
+            x="10"
+            y="200"
+            width="150"
+            height="62"
+            rx="6"
+            fill="none"
+            stroke="var(--accent)"
+            stroke-width="1.8"
+          />
+          <text x="85" y="221" text-anchor="middle" stroke="none">
+            全 Trial に Lab
+          </text>
+          <text
+            x="85"
+            y="238"
+            text-anchor="middle"
+            stroke="none"
+            font-size="11"
+          >
+            find / sql / trace
+          </text>
+          <text
+            x="85"
+            y="253"
+            text-anchor="middle"
+            stroke="none"
+            font-size="11"
+          >
+            + reset / observe
+          </text>
+          <line x1="160" y1="222" x2="230" y2="222" marker-end="url(#a)" />
+          <rect x="232" y="200" width="110" height="46" rx="6" fill="none" />
+          <text x="287" y="228" text-anchor="middle" stroke="none">
+            Finding
+          </text>
+          <line x1="342" y1="222" x2="420" y2="222" marker-end="url(#a)" />
+          <rect x="422" y="200" width="130" height="46" rx="6" fill="none" />
+          <text x="487" y="228" text-anchor="middle" stroke="none">
+            段 1b → 検証 Lab → 人間
+          </text>
+          <rect
+            x="232"
+            y="256"
+            width="110"
+            height="36"
+            rx="6"
+            fill="none"
+            stroke-dasharray="4 3"
+          />
+          <text x="287" y="279" text-anchor="middle" stroke="none">
+            Lead ≥ 1
+          </text>
+          <line x1="160" y1="245" x2="230" y2="272" marker-end="url(#a)" />
+          <path
+            d="M342,274 L600,274 L600,160 L85,160 L85,198"
+            fill="none"
+            stroke="var(--accent)"
+            stroke-width="1.8"
+            marker-end="url(#a)"
+          />
+          <text
+            x="610"
+            y="268"
+            stroke="none"
+            fill="var(--accent)"
+            font-size="11"
+          >
+            選定が第 2 Trial を自動で組む
+          </text>
+          <text
+            x="610"
+            y="284"
+            stroke="none"
+            fill="var(--accent)"
+            font-size="11"
+          >
+            （Lead 入力 + 前回の研究 + Lab、1 回）
+          </text>
+          <text
+            x="300"
+            y="154"
+            stroke="none"
+            fill="var(--accent)"
+            font-size="11"
+          >
+            同じ plugin の新版にも研究 file を引き継ぐ
+          </text>
+        </g>
+      </svg>
+      <figcaption>
+        上が現状、下が提案。変わるのは「第 1 Trial から Lab がある」「Lab
+        に保存先・DB・トレースの観測器がある」「Lead が残れば第 2 Trial
+        が自動で組まれる」の 3 点。検証と人間の判断点は変えない。
+      </figcaption>
+    </figure>
+
+    <h3>
+      A. Lab を全 Trial の既定にする
+      <span class="tag h">Harness: 設定と同時数</span>
+    </h3>
+    <ul>
+      <li>
+        <code>discovery.lab</code> の既定を <code>attached</code> にし、bench
+        と本番の設定で有効にする。Lab の記述は既存の
+        <code>## Lab</code> 節のまま。
+      </li>
+      <li>
+        同時数は Lab 1 基の実メモリを測って決める（leads2 では Lab 付き 2
+        並列で回った。Codex sandbox は 250〜350 MiB、Lab は WordPress + MySQL の
+        2 コンテナ）。host 54 GB の予算の中で、Lab 付き 4〜6 並列を目標にする。
+      </li>
+    </ul>
+
+    <h3>
+      B. Lab の観測器を 3 つ足す
+      <span class="tag h">Harness: 観測、判断なし</span>
+    </h3>
+    <div class="tbl">
+      <table>
+        <tr>
+          <th>観測器</th>
+          <th>問い</th>
+          <th>形</th>
+          <th>実装の足場</th>
+        </tr>
+        <tr>
+          <td><code>POST /find</code></td>
+          <td>入れた印はどこに保存されたか</td>
+          <td>
+            body は印の文字列（10〜15 桁の数字、observe の
+            <code>dialogMarker</code> と同じ形）。答えは DB の {table, column,
+            行の主キー} と、<code>wp-content</code> 配下の {file path}
+            の一覧。回数制限つき。
+          </td>
+          <td>
+            既存の state-capture の MySQL 経路（table 一覧と query）と、Lab
+            コンテナ内の文字列検索。
+          </td>
+        </tr>
+        <tr>
+          <td><code>POST /sql</code></td>
+          <td>その行には何が入っているか、どの option が変わったか</td>
+          <td>
+            SELECT 1 文だけ、読み取り専用ユーザー、行数上限。<code
+              >labAccess.database: "read-only"</code
+            >（型は既にある）を実装で埋める。
+          </td>
+          <td>
+            state-capture と同じ接続。読み取り専用ユーザーを Lab 供給時に作る。
+          </td>
+        </tr>
+        <tr>
+          <td><code>POST /trace</code></td>
+          <td>このリクエストで plugin のどの関数がどの順に走ったか</td>
+          <td>
+            body は role と path と任意の POST body。Harness が Xdebug の
+            function trace を有効にして 1 リクエストを送り、plugin 配下の
+            file:line
+            の呼び出し列（行数上限）を返す。所有者の言う「ブレークポイント」のバッチ版。
+          </td>
+          <td>
+            Lab image に Xdebug を入れ、trigger 方式で Harness
+            だけが有効化する。通常のリクエストには影響しない。
+          </td>
+        </tr>
+      </table>
+    </div>
+    <p>
+      3 つとも、答えは observe と同じく Private Evidence に記録し、Finding /
+      Lead の <code>labObservations</code> に書かせる。Harness
+      は結果を読まない。文言は <code>## Lab</code> 節に 3 段落足す（agent
+      向け本文なので owner-approved）。
+    </p>
+
+    <h3>
+      C. Lead が残った Trial は第 2 Trial を自動で組む
+      <span class="tag h">Harness: 選定の規則</span>
+    </h3>
+    <ul>
+      <li>
+        規則: 「終了した Trial に Lead が 1 件以上あり、同じ Snapshot に第 2
+        Trial がまだ無ければ、次の選定で第 2 Trial を 1 回組む」。Lead
+        の中身は読まない（件数だけ）。ADR 0044 の重複拒否がそのまま上限になる。
+      </li>
+      <li>
+        第 2 Trial の入力は現在と同じ: Lead 入力 + 前回の研究 file + Lab。設定
+        <code>discovery.followUp: "leads"</code> のような 1 項目で on/off。
+      </li>
+      <li>
+        Lead は引き続き
+        <code>review leads</code> で人が全件見られる。検証列に入るのは Finding
+        だけ、という線は変えない。
+      </li>
+    </ul>
+
+    <h3>
+      D. 研究 file の引き継ぎを広げる
+      <span class="tag h">Harness: ADR 0048 の拡張</span>
+    </h3>
+    <ul>
+      <li>
+        今渡しているのは recon-map.md と lab-setup.md。これに
+        <code>research/assumptions</code
+        >（v1）、<code>research/walks</code>（v2）、<code>/find</code> の答えを
+        Harness が集めた<strong>保存先の表</strong>（marker →
+        table/column/file）を足す。
+      </li>
+      <li>
+        同じ plugin の新版 Trial
+        は、旧版の表から「ここに保存される」を前提にせず再確認する（ADR 0048
+        の「別版の記録」注記のまま）。これが所有者の「旧版の探索結果を最新版で再利用」に当たる。
+      </li>
+    </ul>
+
+    <h3>E. スキル側 <span class="tag s">プロンプト・スキル</span></h3>
+    <ul>
+      <li>
+        wbh-falsify の Store 行と Transformation 行: Lab があるときは
+        <code>/find</code> と <code>/trace</code> の答えで「enforced
+        at」を埋める。コードの推定だけで埋めない。v2 の計測（h32）の後に v3
+        として 1 回で入れる。
+      </li>
+      <li>
+        第 2 Trial のスキル（Lead 入力）: Lead の producer
+        を後ろ向きに探す手順を 1 段足す（leads2 の Lead 160 件の大半が producer
+        欠けで止まった事実に基づく）。
+      </li>
+      <li>
+        目的文の手順段落（sink 種別で子を分ける段落、hooks.tsv
+        の行数で閉じる段落）は削除のみ。sink 軸と subsystem 軸の二重を解く。
+      </li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>4. 順序と計測</h2>
+    <div class="tbl">
+      <table>
+        <tr>
+          <th>#</th>
+          <th>PR（問い 1 つ）</th>
+          <th>計測</th>
+          <th>合格線</th>
+        </tr>
+        <tr>
+          <td>0</td>
+          <td>h32: wbh-falsify v2、Lab なし（実行中）</td>
+          <td>6 対象 37 record</td>
+          <td>F ≥ 15（h30 12 / h31 10）</td>
+        </tr>
+        <tr>
+          <td>1</td>
+          <td>
+            A + B の <code>/find</code> と <code>/sql</code> +
+            <code>## Lab</code> 節の追記
+          </td>
+          <td>h33: 同じ 6 対象を Lab 付きで</td>
+          <td>
+            F が h32 を上回り、Lead 止まりが減る。分母は Lab 発火 / Codex 時間
+          </td>
+        </tr>
+        <tr>
+          <td>2</td>
+          <td>B の <code>/trace</code>（Lab image + エンドポイント）</td>
+          <td>h34: 同じ 6 対象</td>
+          <td>Transformation 系（HTML 書き換え 6 件の形）の到達が増える</td>
+        </tr>
+        <tr>
+          <td>3</td>
+          <td>C 自動の第 2 Trial</td>
+          <td>本番 2 週</td>
+          <td>
+            Lead → Finding の転換が Codex 時間あたりで leads2（4 F / 14
+            Trial）を上回る
+          </td>
+        </tr>
+        <tr>
+          <td>4</td>
+          <td>D 研究 file の拡張</td>
+          <td>同じ plugin の新版が出たとき</td>
+          <td>新版 Trial の Root 時間が短くなり F が落ちない</td>
+        </tr>
+        <tr>
+          <td>5</td>
+          <td>E スキル v3 と目的文の削除</td>
+          <td>各 1 回の bench</td>
+          <td>6 段の採否規則のまま</td>
+        </tr>
+        <tr>
+          <td>—</td>
+          <td>制限時間 120 分の上限を上げる</td>
+          <td>Closing が「wall で終わった」と言う Trial が出てから</td>
+          <td>それまで上げても効かない</td>
+        </tr>
+      </table>
+    </div>
+    <p>
+      費用: Lab 付きで Codex 時間は plugin あたり 1.5〜3
+      倍。所有者の「探索時間が延びてもいい」を前提に、分母は Lab 発火 / Codex
+      時間のまま見る。
+    </p>
+  </section>
+
+  <section>
+    <h2>5. 限界と見送るもの</h2>
+    <ul>
+      <li>
+        Lab は「典型的な site」1 つなので、設定依存の経路は administrator
+        の操作で前提を作る形のまま。前提は
+        <code>configurationPrecondition</code> に残り、段 1 で選別する。
+      </li>
+      <li>
+        観測器が増えるとコードを読む量が減る可能性がある。unique-file 比率を
+        Trial ごとに見続ける。
+      </li>
+      <li>
+        Argus 級（長時間・多手法）の形は本設計の外。所有者決定どおり見送る。
+      </li>
+      <li>
+        提案しないもの: Harness が Lead
+        を判定すること、探索の目的文を狭めること、plugin 別のシナリオ、Harness
+        側の最低時間。
+      </li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>6. 消し方</h2>
+    <ul>
+      <li>A: 設定の既定を <code>none</code> に戻す。</li>
+      <li>
+        B: 3 エンドポイントと <code>## Lab</code> 節の 3 段落を消す。Xdebug は
+        image から外す。記録済みの観測は読み続ける。
+      </li>
+      <li>
+        C: <code>followUp</code> を外す。組まれた第 2 Trial の台帳は残る。
+      </li>
+      <li>D: 渡す file の一覧を 2 つに戻す。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>7. レビューしてほしい点</h2>
+    <ol>
+      <li>
+        観測器 3 つの範囲。<code>/sql</code>
+        を読み取り専用で渡すことに不安はないか（Lab
+        は使い捨て、外向き通信なし）。
+      </li>
+      <li>
+        C の規則「Lead ≥ 1 なら第 2 Trial 1 回」でよいか。費用を抑えるなら「Lead
+        ≥ 2」か「Finding 0 かつ Lead ≥ 1」。
+      </li>
+      <li>
+        順序。1（find/sql）を 2（trace）より先にする理由は、実装が軽く、Lead
+        止まりの大半が保存先の問いだから。
+      </li>
+    </ol>
+  </section>
+</main>

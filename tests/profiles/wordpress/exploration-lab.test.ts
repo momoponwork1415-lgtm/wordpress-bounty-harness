@@ -83,6 +83,15 @@ async function fixture(options: {
   readonly observed?: Awaited<
     ReturnType<WordPressLab["observeExplorationPage"]>
   >;
+  /** Find and sql bodies queued after the observes, in order (ADR 0049). */
+  readonly lookups?: readonly {
+    readonly command: "find" | "sql";
+    readonly body: unknown;
+  }[];
+  readonly maxLookups?: number;
+  readonly lookupsUsedBefore?: number;
+  readonly found?: Awaited<ReturnType<WordPressLab["findInExplorationLab"]>>;
+  readonly queried?: Awaited<ReturnType<WordPressLab["queryExplorationLab"]>>;
 }) {
   const directory = await mkdtemp(join(tmpdir(), "wbh-exploration-lab-"));
   directories.push(directory);
@@ -103,9 +112,16 @@ async function fixture(options: {
       receivedAt: "2026-10-25T00:00:00.000Z",
       body,
     })),
+    ...(options.lookups ?? []).map(({ command, body }, index) => ({
+      id: `${index}f`.padStart(2, "0").repeat(16),
+      command,
+      receivedAt: "2026-10-25T00:00:00.000Z",
+      body,
+    })),
   ];
   const expectedAnswers = queue.length;
   const observedRequests: unknown[] = [];
+  const lookupRequests: { command: "find" | "sql"; request: string }[] = [];
   let drained!: () => void;
   const allAnswered = new Promise<void>((resolve) => (drained = resolve));
   if (queue.length === 0) drained();
@@ -147,6 +163,30 @@ async function fixture(options: {
         }
       );
     },
+    async findInExplorationLab(_handle, marker) {
+      lookupRequests.push({ command: "find", request: marker });
+      return (
+        options.found ?? {
+          status: "found",
+          database: [
+            { table: "wp_postmeta", column: "meta_value", keys: ["7", "9"] },
+          ],
+          files: ["wp-content/uploads/cache/a.json"],
+          truncated: false,
+        }
+      );
+    },
+    async queryExplorationLab(_handle, select) {
+      lookupRequests.push({ command: "sql", request: select });
+      return (
+        options.queried ?? {
+          status: "rows",
+          columns: ["option_name", "option_value"],
+          rows: [["blogname", "Synthetic"]],
+          truncated: false,
+        }
+      );
+    },
     async answerControlRequest(_handle, id, answer) {
       if (++answerCalls <= (options.answerFails ?? 0)) return false;
       queue.splice(
@@ -165,6 +205,8 @@ async function fixture(options: {
     | "nextControlRequest"
     | "answerControlRequest"
     | "observeExplorationPage"
+    | "findInExplorationLab"
+    | "queryExplorationLab"
   >;
   const trialLab = openWordPressExplorationLab({
     lab,
@@ -177,6 +219,10 @@ async function fixture(options: {
     ...(options.observationsUsedBefore === undefined
       ? {}
       : { observationsUsedBefore: options.observationsUsedBefore }),
+    maxLookups: options.maxLookups ?? 60,
+    ...(options.lookupsUsedBefore === undefined
+      ? {}
+      : { lookupsUsedBefore: options.lookupsUsedBefore }),
     store,
     clock: () => new Date("2026-10-25T00:00:00.000Z"),
   });
@@ -194,6 +240,7 @@ async function fixture(options: {
     read,
     readBytes,
     observedRequests,
+    lookupRequests,
     resets: () => resets,
   };
 }
@@ -608,6 +655,236 @@ describe("exploration Lab driver", () => {
       JSON.parse(await read(record.artifactDigest!, "exploration-lab.json"))
         .resetLog,
     ).toMatchObject([{ status: "reset", answerDropped: true }]);
+  });
+
+  it("answers find and sql within one shared lookup budget and seals the log (ADR 0049)", async () => {
+    const { trialLab, allAnswered, answers, read, lookupRequests } =
+      await fixture({
+        requests: 0,
+        maxResets: 2,
+        maxLookups: 3,
+        lookupsUsedBefore: 1,
+        lookups: [
+          { command: "find", body: { marker: "1234567890" } },
+          {
+            command: "sql",
+            body: { select: "SELECT option_name FROM wp_options" },
+          },
+          { command: "find", body: { marker: "9876543210" } },
+          { command: "sql", body: { select: "SELECT 1 FROM wp_users" } },
+        ],
+      });
+    await trialLab.open();
+    await allAnswered;
+    const record = await trialLab.seal();
+    // The two budgeted lookups reached the Lab; the third of each kind was refused.
+    expect(lookupRequests).toEqual([
+      { command: "find", request: "1234567890" },
+      { command: "sql", request: "SELECT option_name FROM wp_options" },
+    ]);
+    expect(answers.map((entry) => (entry as { body: unknown }).body)).toEqual([
+      {
+        status: "answered",
+        marker: "1234567890",
+        database: [
+          { table: "wp_postmeta", column: "meta_value", keys: ["7", "9"] },
+        ],
+        files: ["wp-content/uploads/cache/a.json"],
+        truncated: false,
+        lookupsUsed: 2,
+        maxLookups: 3,
+      },
+      {
+        status: "answered",
+        columns: ["option_name", "option_value"],
+        rows: [["blogname", "Synthetic"]],
+        truncated: false,
+        lookupsUsed: 3,
+        maxLookups: 3,
+      },
+      { status: "refused", reason: "budget", lookupsUsed: 3, maxLookups: 3 },
+      { status: "refused", reason: "budget", lookupsUsed: 3, maxLookups: 3 },
+    ]);
+    expect(
+      answers.map((entry) => (entry as { statusCode: number }).statusCode),
+    ).toEqual([200, 200, 429, 429]);
+    // Nothing in the answer says the hypothesis holds.
+    expect(JSON.stringify(answers)).not.toMatch(/confirm/i);
+    expect(record).toMatchObject({
+      observations: 0,
+      lookups: 2,
+      refusedLookups: 2,
+    });
+    const sealed = JSON.parse(
+      await read(record.artifactDigest!, "exploration-lab.json"),
+    );
+    expect(sealed).toMatchObject({
+      maxLookups: 3,
+      lookupsUsedBefore: 1,
+      lookups: 2,
+      refusedLookups: 2,
+    });
+    expect(
+      sealed.lookupLog.map(
+        (entry: { command: string; status: string; reason?: string }) =>
+          `${entry.command}:${entry.reason ?? entry.status}`,
+      ),
+    ).toEqual(["find:answered", "sql:answered", "find:budget", "sql:budget"]);
+    expect(sealed.lookupLog[0]).toMatchObject({
+      command: "find",
+      request: "1234567890",
+      requestedAt: "2026-10-25T00:00:00.000Z",
+      answeredAt: "2026-10-25T00:00:00.000Z",
+    });
+    expect(sealed.lookupLog[1].request).toBe(
+      "SELECT option_name FROM wp_options",
+    );
+  });
+
+  it("refuses a lookup that is not a single SELECT or does not fit, naming the field, and passes the database's refusal on", async () => {
+    const { trialLab, allAnswered, answers, lookupRequests } = await fixture({
+      requests: 0,
+      maxResets: 2,
+      lookups: [
+        { command: "find", body: { marker: "0123456789" } },
+        { command: "find", body: "not an object" },
+        { command: "sql", body: { select: "DELETE FROM wp_users" } },
+        { command: "sql", body: { select: "SELECT 1; DROP TABLE wp_users" } },
+        { command: "sql", body: { select: "SELECT 1", extra: true } },
+        { command: "sql", body: { select: "SELECT * FROM nowhere" } },
+      ],
+      queried: {
+        status: "refused",
+        reason: "sql-error",
+        message: "Table 'wordpress.nowhere' doesn't exist",
+      },
+    });
+    await trialLab.open();
+    await allAnswered;
+    const record = await trialLab.seal();
+    // Only the well-formed SELECT reaches the Lab; the shape check runs before it.
+    expect(lookupRequests).toEqual([
+      { command: "sql", request: "SELECT * FROM nowhere" },
+    ]);
+    expect(answers.map((entry) => (entry as { body: unknown }).body)).toEqual([
+      {
+        status: "refused",
+        reason: "invalid-request",
+        field: "marker",
+        lookupsUsed: 0,
+        maxLookups: 60,
+      },
+      {
+        status: "refused",
+        reason: "invalid-request",
+        field: "body",
+        lookupsUsed: 0,
+        maxLookups: 60,
+      },
+      {
+        status: "refused",
+        reason: "invalid-request",
+        field: "select",
+        lookupsUsed: 0,
+        maxLookups: 60,
+      },
+      {
+        status: "refused",
+        reason: "invalid-request",
+        field: "select",
+        lookupsUsed: 0,
+        maxLookups: 60,
+      },
+      {
+        status: "refused",
+        reason: "invalid-request",
+        field: "extra",
+        lookupsUsed: 0,
+        maxLookups: 60,
+      },
+      {
+        status: "refused",
+        reason: "sql-error",
+        message: "Table 'wordpress.nowhere' doesn't exist",
+        lookupsUsed: 0,
+        maxLookups: 60,
+      },
+    ]);
+    // A refused lookup names the field, never the value it carried.
+    expect(JSON.stringify(answers)).not.toContain("0123456789");
+    expect(JSON.stringify(answers)).not.toContain("DELETE");
+    expect(record).toMatchObject({ lookups: 0, refusedLookups: 6 });
+  });
+
+  it("answers a failed find, an unavailable Lab and a Harness throw on a lookup, counting each", async () => {
+    const failed = await fixture({
+      requests: 0,
+      maxResets: 2,
+      lookups: [{ command: "find", body: { marker: "1234567890" } }],
+      found: { status: "failed" },
+    });
+    await failed.trialLab.open();
+    await failed.allAnswered;
+    expect(await failed.trialLab.seal()).toMatchObject({
+      lookups: 1,
+      refusedLookups: 0,
+    });
+    expect(failed.answers).toEqual([
+      {
+        id: "0f".repeat(16),
+        statusCode: 502,
+        body: { status: "failed", lookupsUsed: 1, maxLookups: 60 },
+      },
+    ]);
+    const unavailable = await fixture({
+      requests: 0,
+      maxResets: 2,
+      lookups: [{ command: "sql", body: { select: "SELECT 1" } }],
+      queried: { status: "unavailable" },
+    });
+    await unavailable.trialLab.open();
+    await unavailable.allAnswered;
+    expect(await unavailable.trialLab.seal()).toMatchObject({
+      lookups: 0,
+      refusedLookups: 1,
+    });
+    expect(unavailable.answers).toMatchObject([
+      { statusCode: 503, body: { status: "refused", reason: "unavailable" } },
+    ]);
+    const thrown = await fixture({
+      requests: 0,
+      maxResets: 2,
+      lookups: [{ command: "sql", body: { select: "SELECT 1" } }],
+      queried: Object.defineProperty({}, "status", {
+        get() {
+          throw new Error("secret-bearing failure");
+        },
+      }) as never,
+    });
+    await thrown.trialLab.open();
+    await thrown.allAnswered;
+    const record = await thrown.trialLab.seal();
+    expect(thrown.answers).toEqual([
+      {
+        id: "0f".repeat(16),
+        statusCode: 500,
+        body: {
+          status: "failed",
+          reason: "harness-error",
+          lookupsUsed: 1,
+          maxLookups: 60,
+        },
+      },
+    ]);
+    expect(record).toMatchObject({ lookups: 1, refusedLookups: 0 });
+    expect(
+      JSON.parse(
+        await thrown.read(record.artifactDigest!, "exploration-lab.json"),
+      ).lookupLog,
+    ).toMatchObject([
+      { command: "sql", status: "failed", reason: "harness-error" },
+    ]);
+    expect(JSON.stringify(thrown.answers)).not.toContain("secret-bearing");
   });
 
   it("records zero requests when the capture cannot be read", async () => {

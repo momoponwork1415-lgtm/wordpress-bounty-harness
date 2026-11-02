@@ -1291,10 +1291,10 @@ describe("WordPress gVisor Lab", () => {
     const grant = grants[0];
     if (grant === undefined) return;
     const sql = grant.args.at(-1) ?? "";
-    expect(sql.includes("GRANT SELECT ON wordpress.wp_options")).toBe(true);
-    expect(sql.includes("GRANT SELECT ON wordpress.wp_posts")).toBe(true);
-    expect(sql.includes("wordpress.*")).toBe(false);
-    expect(sql.includes("invalid;table")).toBe(false);
+    // ADR 0049: one database-level grant, so tables a plugin creates later are readable too.
+    expect(sql).toContain("GRANT SELECT ON wordpress.* TO 'wbh_reader'@'%'");
+    expect(sql).not.toMatch(/GRANT SELECT ON wordpress\.wp_/);
+    expect(sql).not.toMatch(/GRANT (?!SELECT)/);
     await lab.teardown(provisioned.handle);
   });
 

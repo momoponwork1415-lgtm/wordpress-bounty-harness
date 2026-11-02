@@ -135,6 +135,12 @@ export function finishedEventFrom(
             droppedAnswers: outcome.lab.droppedAnswers,
             observations: outcome.lab.observations,
             refusedObservations: outcome.lab.refusedObservations,
+            ...(outcome.lab.lookups === undefined
+              ? {}
+              : {
+                  lookups: outcome.lab.lookups,
+                  refusedLookups: outcome.lab.refusedLookups ?? 0,
+                }),
           },
         }),
     artifacts: [

@@ -157,4 +157,8 @@ export interface TrialLabRecord {
   readonly observations: number;
   /** Observe requests refused (invalid, budget spent, role or Lab unavailable). */
   readonly refusedObservations: number;
+  /** Find and sql lookups the Lab answered (`POST /find`, `POST /sql`, ADR 0049); absent before it. */
+  readonly lookups?: number;
+  /** Lookups refused (invalid, not a single SELECT, budget spent, Lab unavailable). */
+  readonly refusedLookups?: number;
 }

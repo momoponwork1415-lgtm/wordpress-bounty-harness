@@ -98,8 +98,10 @@ const WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES = {
  * Whether a discovery Lab is attached and how often the Root may reset it
  * (redesign 2026-10-25 §7). The string form is normalised to the object.
  * `attached` gives each Trial one exploration Lab for its whole wall (ADR
- * 0003, 2026-10-25 addendum); resets are budgeted by `maxResets` and observer
- * visits (`POST /observe`, Phase D2) by `maxObservations`.
+ * 0003, 2026-10-25 addendum); resets are budgeted by `maxResets`, observer
+ * visits (`POST /observe`, Phase D2) by `maxObservations`, and the storage
+ * lookups `POST /find` / `POST /sql` (ADR 0049) share `maxLookups`. The
+ * default is `attached` (ADR 0049, owner decision 2026-11-02).
  */
 const discoveryLabSchema = z
   .union([
@@ -107,17 +109,20 @@ const discoveryLabSchema = z
       mode,
       maxResets: undefined,
       maxObservations: undefined,
+      maxLookups: undefined,
     })),
     z.strictObject({
       mode: z.enum(["none", "attached"]),
       maxResets: z.number().int().min(0).max(5).optional(),
       maxObservations: z.number().int().min(0).max(100).optional(),
+      maxLookups: z.number().int().min(0).max(300).optional(),
     }),
   ])
-  .transform(({ mode, maxResets, maxObservations }) => ({
+  .transform(({ mode, maxResets, maxObservations, maxLookups }) => ({
     mode,
     maxResets: maxResets ?? 2,
     maxObservations: maxObservations ?? 20,
+    maxLookups: maxLookups ?? 60,
   }));
 
 const sha256Digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
@@ -157,7 +162,7 @@ const commonCampaignFields = {
   schemaVersion: z.literal(1),
   discovery: z
     .strictObject({
-      lab: discoveryLabSchema.prefault("none"),
+      lab: discoveryLabSchema.prefault("attached"),
       /** Opt-in split of targets between Codex and Claude; absent, all run on Codex. */
       runtimeShare: runtimeShareSchema.optional(),
       /** The launch mode of every Trial this campaign starts (ADR 0039). */
