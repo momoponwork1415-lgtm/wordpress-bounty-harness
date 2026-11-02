@@ -61,6 +61,7 @@ AI に「調べて報告」を頼んだときの成果物を、日付付きで�
 - [2026-11-02-exploration-skills-wbh-falsify-v1.md](2026-11-02-exploration-skills-wbh-falsify-v1.md): 探索スキル `wbh-falsify-v1`（単位ごとの仮定の表と、強制されていない行の両方向の読み、#786）の全文、日本語訳、出典対照表。
 - [2026-11-02-exploration-skills-wbh-falsify-v2.md](2026-11-02-exploration-skills-wbh-falsify-v2.md): 探索スキル `wbh-falsify-v2`（単位ごとに歩きと反証を別の子で 2 回読む、#791）の全文、日本語訳、出典対照表。
 - [2026-11-02-exploration-skills-wbh-lab-v1.md](2026-11-02-exploration-skills-wbh-lab-v1.md): 探索スキル `wbh-lab-v1`（open の行ごとに marker を植え、Find / Query / Trace / Observe で保存先・保存形・走った関数・読み戻しを埋め、最終報告の前に Lab が答えられる行を全部通す、#793 決定 E）の全文、日本語訳、出典対照表。
+- [2026-11-02-lab-section-names-wbh-lab.md](2026-11-02-lab-section-names-wbh-lab.md): Harness 生成の `## Lab` 節に足した 1 文（staging 済みの `wbh-lab` を名指す、ADR 0049 追記 6）の本文、日本語訳、出典対照表（#793）。
 - [2026-11-01-exploration-skills-wbh-setup-v1.md](2026-11-01-exploration-skills-wbh-setup-v1.md): 探索スキル `wbh-setup-v1`（Lab で plugin の通常利用を作る）の全文、日本語訳、出典対照表（#749）。提案は [2026-11-01-lab-normal-use-setup-proposal.md](2026-11-01-lab-normal-use-setup-proposal.md)。
 - [2026-10-30-exploration-skills-wbh-tools-v1.md](2026-10-30-exploration-skills-wbh-tools-v1.md): 探索スキル `wbh-tools-v1`（列挙 script 2 本と本体機能の固定参照を支援 file として運ぶ）の全文、日本語訳、出典対照表（#687）。
 - [2026-10-28-adopted-design-for-approval.md](2026-10-28-adopted-design-for-approval.md): 区画分配型の探索の承認用の要約。部分ごとの採否と出典、所有者の決定、問答で決めた 15 点（§6）。図は [architecture](2026-10-28-architecture.svg)。ADR 0042 追記 1 の出典。

@@ -122,3 +122,8 @@ amends: 0029（単一協調 Trial の主経路）と 0039（探索の mode）に
 - 決定: `wbh-falsify-v2` を `archived` にする。v1 もすでに `archived`。本番の campaign 設定は v2 を名指していないので、本番は変わらない。走った Trial の台帳（`configuration.skills` の digest）はそのまま読める。
 - 「仮定の表」の読み方そのものは捨てない。Store 行と Transformation 行の語は `wbh-lab-v1`（追記 7）が open の行の種類として使い、Lab の事実で埋める。次に反証の手順を戻すなら、Lab の事実を入力にする形で v3 として出す。
 - 消し方: registry の status を `current` に戻し、test の 1 行を launchable 一覧に戻す。
+
+## 2026-11-02 追記 9: 目的文のどこにも名指されないスキルは読まれない（#793）
+
+- 事実（本番 `prod-v21-20261102-4`、5 Root、2026-11-02）: 目的文が名前で指す `wbh-recon` / `wbh-tools` / `wbh-setup` の SKILL.md は各 4 回以上読まれ、どの文も名指さない `wbh-lab` の SKILL.md は 0 回だった。staging は CLI の一覧に載せるだけで、読ませはしない。
+- 道具を導入する Harness 生成の節は、その使い方を書いたスキルを名前で指してよい。何が installed かという事実であって、舵取りではない。`## Lab` 節に足した 1 文は [ADR 0049 の 2026-11-02 追記 6](0049-lab-resident-exploration.md)にある。

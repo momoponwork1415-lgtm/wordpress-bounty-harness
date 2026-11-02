@@ -2418,6 +2418,8 @@ describe("harness CLI vertical slice", () => {
     expect(prompts[0]).toContain(
       "Nothing observed in this Lab is a confirmation.",
     );
+    // ADR 0049 addendum 6: no staged skill is named wbh-lab, so the section does not name one.
+    expect(prompts[0]).not.toContain("wbh-lab");
     expect(prompts[0]).toContain("- Lab: attached, at most 2 resets.");
     expect(prompts[0]).not.toContain("This Trial has no Lab.");
     // The WordPress address is fixed on the Lab's own subnet; no canary receiver runs.
@@ -2504,6 +2506,51 @@ describe("harness CLI vertical slice", () => {
     expect(live.volumes.size).toBe(0);
   });
 
+  it("names the staged wbh-lab skill once in the `## Lab` section, after the Trace paragraph (ADR 0049 addendum 6)", async () => {
+    const { run, configPath, prompts, transportRuns } = await harness({
+      omitLegacyVerifier: true,
+      config: {
+        promptId: undefined,
+        discovery: {
+          lab: "attached",
+          skills: [
+            "wbh-recon-v3",
+            "wbh-tools-v1",
+            "wbh-setup-v1",
+            "wbh-lab-v1",
+          ],
+        },
+      },
+    });
+    const result = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-lab-skill",
+      "--config",
+      configPath,
+    );
+    if (result.stderr) throw new Error(result.stderr);
+    expect(result.code).toBe(0);
+    expect(transportRuns[0]?.skills?.map(({ name }) => name)).toEqual([
+      "wbh-recon",
+      "wbh-tools",
+      "wbh-setup",
+      "wbh-lab",
+    ]);
+    const sentence =
+      "The installed skill wbh-lab describes when to use Find, Query, Trace and Observe from the research files and how to record each answer; read it before the first of these commands.";
+    expect(prompts[0]).toContain(
+      `A trace shows what ran for that one request as sent; it shows nothing about another request or another account. Trace shares the Find and Query budget.\n\n${sentence}\n\nThe Harness records the HTTP traffic`,
+    );
+    expect(prompts[0]!.split(sentence)).toHaveLength(2);
+    // The objective itself still names no skill; only the generated section does.
+    const objective = await loadWordPressDiscoveryAsset("wp2shell-bounty-v11");
+    expect(objective.text).not.toContain("wbh-lab");
+    expect(prompts[0]!.split("wbh-lab")).toHaveLength(2);
+  });
+
   it("resumes an exploration-Lab Trial on a fresh Lab of the same setup, with the resets left and a notice (Phase D1)", async () => {
     // Each segment answers its control requests before the transport returns.
     let answers: unknown[] = [];
@@ -2524,7 +2571,10 @@ describe("harness CLI vertical slice", () => {
       refuseOnCalls: [1],
       refusalSession: true,
       zeroFindings: true,
-      config: { promptId: undefined, discovery: { lab: "attached" } },
+      config: {
+        promptId: undefined,
+        discovery: { lab: "attached", skills: ["wbh-recon-v3", "wbh-lab-v1"] },
+      },
       executionStarted: async () => {
         const expected = answersBefore + (expectedPerSegment[segment++] ?? 0);
         for (let poll = 0; poll < 200 && answers.length < expected; poll++)
@@ -2600,6 +2650,10 @@ describe("harness CLI vertical slice", () => {
       "## Lab\n\nThis segment resumes the Trial in a new sandbox with a new Lab. The site was provisioned again from the same setup: nothing changed in the earlier Lab remains, and the accounts below replace the earlier ones.",
     );
     expect(notice).toContain("at most 2 times in all and has used 1");
+    // ADR 0049 addendum 6: the segment stages the recorded wbh-lab skill, so its notice names it too.
+    expect(notice).toContain(
+      "Trace shares the Find and Query budget.\n\nThe installed skill wbh-lab describes when to use Find, Query, Trace and Observe from the research files and how to record each answer; read it before the first of these commands.\n\nThe Harness records the HTTP traffic",
+    );
     expect(notice).not.toContain(transportRuns[0]!.prompt.slice(0, 200));
     expect(segmentRun.prompt).toContain(notice);
     expect(segmentRun.prompt).toContain(segmentRun.resumePrompt!);
