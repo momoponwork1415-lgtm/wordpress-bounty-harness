@@ -371,3 +371,12 @@ v19-wide の追記 16 で入れた停止規則は、登録簿に sink 種ごと�
 測った数字: 未計測。本番で v22-wide の Trial を v21-wide の Trial と並べる（[measurement.md](../agents/measurement.md) 5b）。削除のみなので bench は組まない。agent に渡る文章なので `owner-approved` が要る。
 
 消し方: v22-wide の行と file を消し、v21-wide の行を `current`（`mode: "wide"`）に戻し、2 つの campaign 設定の `promptId` を戻す。走った後なら v22-wide の行を `archived` にして本文を照合用に残す。
+
+## 2026-11-02 追記 22: 本番の wide に最低時間を置く案を検討し、置かなかった
+
+- 事実（本番 2026-11-02、Lab 付き・スキル 3 本・v21-wide の 26 Trial）: Root の時間は中央値 18 分（0〜47 分、wall は 120 分）。子は 1 Trial に 13〜19 体で 1 体 3 分。Lab への要求は Trial あたり 6〜7 回、Find / Query / Trace は中央値 0 回（最多 3）、Observe は 1〜2 回。Finding 0、Lead 167。v21 の行数で閉じる規則は全 Trial が残 0 と書いて満たしていた。
+- 検討した案（AI、2026-11-02 夜）: 終了条件を文で与えると Root はそれを満たしたと書いて閉じるので、Harness が握る「制限時間」で wide に `discovery.minimumActiveMinutes: 90` の床を置く。所有者はいったん「あなたの案で行きます」と答えた後、「SQLi と XSS は見つけられていたのだから、最低時間は問題ではないのでは」と問い直した。
+- 確認した数字: 同じ v21-wide で構成だけが違う Trial を並べると、Lab 無し・recon-v2 の 20 Trial は Root 15 分で F 8 / L 68、Lab 無し・recon-v3 の 8 Trial は Root 31 分で F 2 / L 60、Lab 付き・recon-v3 の 19 Trial は Root 28〜31 分で F 0 / L 190。Root の時間が 2 倍になっても F は増えず Lead が増えた。直接 sink 型の Finding は短い Trial で出ている（v14 wide 中央値 9 分で 0.51 / run、bench h30 で既知 114 記録中 69）。Lab は使われておらず（要求 7、lookups 0、setup の記録 4 行）、Root の時間を食ってはいない。対象の大きさ（hooks.tsv の行数 154 → 245〜275）が混ざっている。
+- 決定: 床は置かない。床は 1 対象あたりの時間を 18 分 → 90 分にして広さを 4〜5 分の 1 にする取引であり、深さが報酬になる証拠が無い（ADR 0045 の広さの方針、所有者の記録 32 件の 58% が SQLi と格納型 XSS）。深さは第 2 Trial（ADR 0049 決定 C）で Lead の残った対象にだけ足す。床を置くなら第 2 Trial だけに置く案を、転換率（leads2 の 4 / 14）を見てから判断する。
+- 次に確かめること: recon-v3 の手順 9（閉じる手順）が Finding を Lead に変えていないかを、同じ対象で recon-v2 と v3 を交互に回して見る（変えるのは recon の版だけ）。今日の Lead の欠けた辺は 86% が producer で、`wbh-lab-v1`（ADR 0043 追記 7）の Find がちょうどそこに当たる。
+- 既定（wide 0、deep 0）、wall 120 分、コード、目的文は変えていない。
