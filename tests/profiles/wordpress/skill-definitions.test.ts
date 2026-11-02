@@ -61,8 +61,11 @@ describe("WordPress discovery skills", () => {
       "wbh-tools-v1",
       "wbh-setup-v1",
       "wbh-recon-v3",
-      "wbh-falsify-v1",
+      "wbh-falsify-v2",
     ]);
+    expect(wordPressDiscoverySkillRecord("wbh-falsify-v1")?.status).toBe(
+      "archived",
+    );
     expect(wordPressDiscoverySkillRecord("wbh-recon-v1")?.status).toBe(
       "archived",
     );
@@ -109,15 +112,27 @@ describe("WordPress discovery skills", () => {
           "read a second time by an agent other than the one that wrote it",
         );
       }
-      if (row.id === "wbh-falsify-v1") {
+      if (row.id === "wbh-falsify-v1" || row.id === "wbh-falsify-v2") {
         // #786: one assumptions table per unit, every "not found" row read
         // both ways, and prior leads taken first when the Trial states them.
         expect(body).toContain("/workspace/research/assumptions");
         expect(body).toContain("/workspace/research/traces");
-        expect(body).toContain("## Step 3: read the rows not found");
         expect(body).toContain("Backward to every producer");
         expect(body).toContain("`## Prior leads` section");
         expect(frontMatter.description).toMatch(/^Use after the map exists/);
+      }
+      if (row.id === "wbh-falsify-v1") {
+        expect(body).toContain("## Step 3: read the rows not found");
+      }
+      if (row.id === "wbh-falsify-v2") {
+        // #791: every unit is walked entry by entry first, by another agent,
+        // and the table starts from the walk file.
+        expect(body).toContain("## Step 2: the walk");
+        expect(body).toContain("/workspace/research/walks");
+        expect(body).toContain("## Step 4: read the rows not found");
+        expect(body).toContain(
+          "The agent that writes the table is not the agent that walked the unit",
+        );
       }
       if (row.id === "wbh-setup-v1") {
         // #749: the setup record is the hand-over surface, and the skill
