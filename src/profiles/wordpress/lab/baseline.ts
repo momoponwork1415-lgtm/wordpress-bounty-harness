@@ -400,12 +400,31 @@ export async function readBackWordPressLabBaseline(
           if (structure !== item.value) differs.push(settingName(item));
           break;
         }
-        const installed = (
-          await lab.wp(["plugin", "list", "--field=name"])
-        ).stdout
-          .split("\n")
-          .map((line) => line.trim())
-          .filter((line) => line !== "")
+        // #782: the check is "the image's bundled plugins are gone and only the
+        // Snapshot's plugins are installed". Must-use plugins and drop-ins are
+        // files a Snapshot plugin places on activation (wp-staging puts an
+        // mu-plugin, w3-total-cache puts cache drop-ins), so they are not
+        // counted; they are not installable plugins and never the bundled two.
+        const installed = z
+          .array(z.object({ name: z.string(), status: z.string() }))
+          .parse(
+            JSON.parse(
+              (
+                await lab.wp([
+                  "plugin",
+                  "list",
+                  "--fields=name,status",
+                  "--format=json",
+                ])
+              ).stdout.trim() || "[]",
+            ) as unknown,
+          )
+          .filter(
+            (plugin) =>
+              plugin.status !== "must-use" && plugin.status !== "dropin",
+          )
+          .map((plugin) => plugin.name.trim())
+          .filter((name) => name !== "")
           .sort();
         if (
           JSON.stringify(installed) !==
