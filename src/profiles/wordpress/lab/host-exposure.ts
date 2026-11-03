@@ -4,11 +4,13 @@ import {
   type WordPressDeniedPath,
 } from "./baseline.js";
 import type { WordPressLabSession } from "./lab-session.js";
+import { LAB_MAIL_UI_PORT } from "./mail-capture.js";
 
 /**
  * A Harness-owned TCP forwarder that publishes the Lab's WordPress and, when
  * the Lab exposes it, the read-only database on the host loopback (#186,
- * `lab up`). The container is created on the bridge (an internal network
+ * `lab up`); for a person's review, also the mail sink's web UI (#805).
+ * The container is created on the bridge (an internal network
  * publishes nothing), connected to the Lab network, and only then started:
  * gVisor configures its interfaces at boot and ignores networks connected to
  * a running sandbox.
@@ -24,7 +26,8 @@ const forward = (listenPort, host, port) =>
     upstream.pipe(client);
   }).listen(listenPort, "0.0.0.0");
 forward(80, process.env.WBH_WP_IP, 80);
-if (process.env.WBH_DB_IP) forward(3306, process.env.WBH_DB_IP, 3306);`;
+if (process.env.WBH_DB_IP) forward(3306, process.env.WBH_DB_IP, 3306);
+if (process.env.WBH_MAIL_IP) forward(${LAB_MAIL_UI_PORT}, process.env.WBH_MAIL_IP, ${LAB_MAIL_UI_PORT});`;
 
 /**
  * #699: the same gateway as the attacker position's host entrance. HTTP is
@@ -72,6 +75,8 @@ export type HostExposure =
       readonly container: string;
       readonly httpPort: number;
       readonly databasePort: number | null;
+      /** #805: the mail sink's web UI, only when asked for and the Lab has one. */
+      readonly mailPort?: number;
     }
   | { readonly status: "unavailable"; readonly diagnostic: string };
 
@@ -107,7 +112,10 @@ async function boundPort(
 }
 
 export async function exposeWordPressLabToHost(
-  lab: Pick<WordPressLabSession, "id" | "network" | "handle" | "requireDocker">,
+  lab: Pick<
+    WordPressLabSession,
+    "id" | "network" | "handle" | "requireDocker" | "mailIp"
+  >,
   input: {
     readonly image: string;
     /** A fixed loopback port, or 0 for a free one Docker picks. */
@@ -117,18 +125,31 @@ export async function exposeWordPressLabToHost(
     readonly via?: "wordpress" | "recorder";
     /** #699: paths the gateway answers with 403 (a foreign attacker origin). */
     readonly deniedPaths?: readonly WordPressDeniedPath[];
+    /** #805: the mail sink's web UI for a person in a review Lab. */
+    readonly mailPort?: number;
   },
 ): Promise<HostExposure> {
   if (
     !port(input.httpPort) ||
-    (input.databasePort !== undefined && !port(input.databasePort))
+    (input.databasePort !== undefined && !port(input.databasePort)) ||
+    (input.mailPort !== undefined && !port(input.mailPort))
   )
     return { status: "unavailable", diagnostic: "Host port is out of range" };
+  // The attacker's entrance never carries every recipient's mail.
+  if (input.mailPort !== undefined && input.deniedPaths !== undefined)
+    return {
+      status: "unavailable",
+      diagnostic: "The attacker entrance does not publish the Lab's mail",
+    };
   const { handle } = lab;
   const database =
     handle.database === undefined || input.databasePort === undefined
       ? null
       : { ip: handle.database.ipv4, port: input.databasePort };
+  const mail =
+    input.mailPort === undefined || lab.mailIp === undefined
+      ? null
+      : { ip: lab.mailIp, port: input.mailPort };
   const container = hostGatewayName(lab.id);
   // A half-started gateway would keep the Lab network in use at teardown.
   const removeGateway = () =>
@@ -147,12 +168,16 @@ export async function exposeWordPressLabToHost(
       "--publish",
       publish(input.httpPort, 80),
       ...(database === null ? [] : ["--publish", publish(database.port, 3306)]),
+      ...(mail === null
+        ? []
+        : ["--publish", publish(mail.port, LAB_MAIL_UI_PORT)]),
       "--read-only",
       "--cap-drop=ALL",
       "--security-opt=no-new-privileges",
       "--env",
       `WBH_WP_IP=${input.via === "recorder" ? handle.recorderIp : handle.internalIp}`,
       ...(database === null ? [] : ["--env", `WBH_DB_IP=${database.ip}`]),
+      ...(mail === null ? [] : ["--env", `WBH_MAIL_IP=${mail.ip}`]),
       ...(input.deniedPaths === undefined
         ? []
         : ["--env", `WBH_DENIED_PATHS=${JSON.stringify(input.deniedPaths)}`]),
@@ -169,8 +194,20 @@ export async function exposeWordPressLabToHost(
     const httpPort = await boundPort(lab, container, 80);
     const databasePort =
       database === null ? null : await boundPort(lab, container, 3306);
-    if (httpPort !== null && (database === null || databasePort !== null))
-      return { status: "exposed", container, httpPort, databasePort };
+    const mailPort =
+      mail === null ? null : await boundPort(lab, container, LAB_MAIL_UI_PORT);
+    if (
+      httpPort !== null &&
+      (database === null || databasePort !== null) &&
+      (mail === null || mailPort !== null)
+    )
+      return {
+        status: "exposed",
+        container,
+        httpPort,
+        databasePort,
+        ...(mailPort === null ? {} : { mailPort }),
+      };
     await removeGateway();
     return {
       status: "unavailable",

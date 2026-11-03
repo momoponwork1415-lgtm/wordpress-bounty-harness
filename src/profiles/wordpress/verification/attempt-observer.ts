@@ -19,6 +19,12 @@ import { AUTHORED_HTTP_FILE, PROXY_CAPTURE_FILE } from "./http-evidence.js";
 /** The Lab browser's record of the declared victim pages; read by `review export`. */
 export const LAB_BROWSER_OBSERVATION_FILE = "lab-browser-observation.json";
 export const VICTIM_SCREEN_FILE = "victim-screen.png";
+/**
+ * #805: every message the Lab's mail sink caught, every recipient's, read
+ * after the route and the Lab browser. Private Evidence only; the ledger
+ * keeps the evidence digest.
+ */
+export const LAB_MAIL_FILE = "lab-mail.json";
 /** Opted-in WebM of a visit's first page (#549), `victim-visit-<n>.webm`. */
 const victimVideoFile = (visitIndex: number) =>
   `victim-visit-${visitIndex + 1}.webm`;
@@ -61,7 +67,8 @@ const missingCapture = (nextStep: string): AttemptObservation => ({
  */
 export function createWordPressAttemptObserver(options: {
   readonly store: PrivateArtifactStore;
-  readonly lab: Pick<WordPressLab, "readCapture" | "observeVictimPages">;
+  readonly lab: Pick<WordPressLab, "readCapture" | "observeVictimPages"> &
+    Partial<Pick<WordPressLab, "readMail">>;
   readonly recordVideo?: boolean;
 }): AttemptObserver<WordPressFinding, WordPressLabHandle> {
   const { store } = options;
@@ -175,6 +182,8 @@ export function createWordPressAttemptObserver(options: {
                   ]),
                 ),
               };
+      // Last, so mail the victim's visit made is in it too.
+      const mail = await options.lab.readMail?.(lab);
       return {
         status: "recorded",
         evidenceDigest: await store.putFiles({
@@ -183,6 +192,15 @@ export function createWordPressAttemptObserver(options: {
             ? { [AUTHORED_HTTP_FILE]: authored.bytes }
             : {}),
           ...browserFiles,
+          ...(mail === undefined || mail.status === "absent"
+            ? {}
+            : {
+                [LAB_MAIL_FILE]: canonicalJson({
+                  schemaVersion: 1,
+                  status: mail.status,
+                  messages: mail.status === "captured" ? mail.messages : [],
+                }),
+              }),
         }),
       };
     },

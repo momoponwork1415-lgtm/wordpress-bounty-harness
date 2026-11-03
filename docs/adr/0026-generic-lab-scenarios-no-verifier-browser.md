@@ -43,3 +43,22 @@ WordPress profile の版・digest付き通常機能 scenario catalogue に、plu
 - 読み続けるもの: 台帳の `lab-provisioned.scenario` と `verification-finished.result.nextScenarioId`、review export の scenario、対象範囲の評価が過去の Lab の scenario を照合するための digest pin（`retired-scenarios.ts`）。
 - 第 2 段落（被害者側の操作は Harness 所有の Lab 観測器が行い、Verifier にブラウザを渡さない）は変えない。
 - 削除前の状態は tag `archive/pre-353-deletion` に残る。戻すときは PR #577 を revert する。
+
+## 2026-11-03 追記: Lab のメールを内部で捕捉し、攻撃者には自分宛てだけを渡す（#805、所有者依頼 2026-11-03）
+
+これまで Lab にはメールの受け口がなかった。購読の確認、パスワード再設定、通知のリンクのように、攻撃者が自分宛てのメールで受け取る値が経路に入る Finding では、操作役が読み取り専用の DB から値を読んでリンクを組み立てるしかなかった。これは実サイトの手順と違い、証拠にも数えられない。
+
+- **捕捉先。** 検証 Lab（`lab up --for-review` の review Lab と、`verify next --handoff` が残す Lab を含む）に、メールの捕捉用コンテナ（Mailpit）を 1 つ置く。イメージは host 設定の `images.mail` で digest を固定する（最初の版は v1.31.6、`axllent/mailpit@sha256:23fe39e81bde596a918000b3135c0f85dc8bb4c9ea6be274b051143f3e300387`）。`images.mail` の無い host では、Lab は従来どおりメールの受け口を持たない。探索 Lab には置かない。
+- **隔離。** 捕捉先は他の Lab コンテナと同じく `runsc` で動かし、Lab の internal network だけにつなぐ。`--read-only`、`--cap-drop=ALL`、`no-new-privileges`、uid 65534 で動かし、メールは tmpfs に置く。bridge にはつながず、host へ port を出さない。外向きの経路は増えない（不変条件 2、ADR 0046）。
+- **WordPress 側。** Harness が置く must-use plugin（`wp-content/mu-plugins/wbh-lab-mail.php`）が、`phpmailer_init` で `wp_mail()` の送り先を捕捉先の SMTP に向ける。WordPress と WP-CLI のコンテナは、捕捉先の Lab 内アドレスを `mailpit` という名前で引く。既定の送信元 `wordpress@wordpress` は WordPress 自身のアドレス検査を通らないので、その値のときだけ `wordpress@wordpress.invalid` に替える。plugin が決めた送信元はそのまま使う。
+- **攻撃者に渡すもの。** `observation-ready` の後、`attack.json` の `mail.mailbox` が `<dir>/mailbox.json` を指す。Harness は route の間に約 5 秒ごとに捕捉先を読み直し、このファイルを書き換える。渡すのは、To・Cc・Bcc のどれかが攻撃者のアドレスであるメールだけである。攻撃者のアドレスは次の 2 つとする。
+  - ログインする位置では、その攻撃者 account のアドレス（`attack.json` の `mail.addresses`）。
+  - どの位置でも、`@attacker.invalid` の任意のアドレス（`mail.domain`）。未認証の攻撃者は、購読や guest 注文のフォームにこのドメインのアドレスを入れれば、そこへ届いたメールを読める。Lab の account はすべて `example.invalid` を使うので、管理者や被害者のアドレスと重ならない。
+
+  Bcc は攻撃者自身のアドレスだけを残す。メールの生のソースは渡さない（捕捉先は Received や Bcc の行に他の宛先を書く）。絞り込みは Harness が行い、操作役には捕捉先の API も画面も渡さない。
+- **人間に見せるもの。** review Lab と残した検証 Lab では、捕捉先の画面を host loopback の空き port に出し、Lab の案内に `captured mail (every recipient, review only):` の行で示す。全宛先のメールが見える。攻撃者位置の入口（`deniedPaths` 付きの公開）には出さず、handoff の途中にも出さない。
+- **証拠。** attempt の観測の最後に、捕捉した全メールを `lab-mail.json` として HTTP 捕捉と同じ Private Evidence の束に置く。台帳には evidence digest だけが残る。メールの本文は Git にも台帳にも入れない（不変条件 8）。
+- **setupDigest。** 捕捉先のイメージは Lab の setupDigest に含めない。捕捉先を足す前に封じた review package からも、同じ digest の Lab を立て直せるようにするためである。
+- **採らなかった選択肢。** 未認証の攻撃者が使ったアドレスを宣言するファイルを置く案は採らなかった。決まったドメインなら新しい入力が要らず、管理者のアドレスを宣言して他人のメールを読む余地も生まれない。捕捉先の API や画面を攻撃者側へ出す案も採らなかった。全宛先のメールが見えてしまうからである。
+- **まだ変えていないもの。** `wbh-verify` の本文には `mail` をまだ書いていない。エージェントに渡る文章なので、`owner-approved` を経た別の PR で足す。
+- **消し方。** host 設定から `images.mail` を外せば、Lab は捕捉先を置かず、`attack.json` は `mail` を持たず、`lab-mail.json` も作らない。コードを戻すときは #805 の PR を revert する。

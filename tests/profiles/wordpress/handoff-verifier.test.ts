@@ -14,6 +14,9 @@ import {
 } from "../../../src/profiles/wordpress/lab/baseline.js";
 import type {
   EgressClosure,
+  LabMailMessage,
+  LabMailRead,
+  LabMailSummary,
   WordPressLabHandle,
 } from "../../../src/profiles/wordpress/lab/index.js";
 import {
@@ -67,6 +70,11 @@ async function fixture(options: {
   readonly baseline?: WordPressLabBaseline;
   /** ADR 0046: what `closeEgress` answers; absent, the Lab has no relay. */
   readonly egress?: EgressClosure;
+  /**
+   * #805: what `readMail` answers, every recipient's mail as the Lab caught
+   * it (the fake ignores `wanted`); absent, the Lab has no `readMail`.
+   */
+  readonly mail?: () => LabMailRead;
 }) {
   const root = await mkdtemp(join(tmpdir(), "wbh-handoff-verifier-"));
   roots.push(root);
@@ -105,6 +113,7 @@ async function fixture(options: {
   };
   const calls: unknown[] = [];
   const order: string[] = [];
+  const mailFilters: ((summary: LabMailSummary) => boolean)[] = [];
   let restarts = 0;
   const transport = new HandoffVerifier({
     directory,
@@ -135,12 +144,24 @@ async function fixture(options: {
         options.baseline === undefined
           ? null
           : attackerEntranceFor(options.baseline, position),
+      ...(options.mail === undefined
+        ? {}
+        : {
+            readMail: async (
+              _handle: WordPressLabHandle,
+              wanted?: (summary: LabMailSummary) => boolean,
+            ) => {
+              if (wanted !== undefined) mailFilters.push(wanted);
+              return options.mail!();
+            },
+          }),
     },
     ports: { http: 8080, database: 3307 },
     reviewExport: async () => '{"schema":"review-export/v1"}',
     clock: options.clock ?? (() => new Date("2026-10-18T00:00:00Z")),
     wallTimeMs: options.wallTimeMs ?? 60_000,
     pollIntervalMs: 5,
+    mailRefreshMs: 0,
   });
   const run: WordPressVerifierRun = {
     runId: "verify-1",
@@ -174,11 +195,30 @@ async function fixture(options: {
     run,
     calls,
     order,
+    mailFilters,
     restarts: () => restarts,
     place,
     exists,
   };
 }
+
+const mailAddress = (value: string) => ({ name: "", address: value });
+const mailMessage = (
+  id: string,
+  to: string,
+  extra: { readonly bcc?: readonly string[] } = {},
+): LabMailMessage => ({
+  id,
+  receivedAt: `2026-10-18T00:00:0${id.length % 10}.000Z`,
+  from: mailAddress("wordpress@wordpress.invalid"),
+  to: [mailAddress(to)],
+  cc: [],
+  bcc: (extra.bcc ?? []).map(mailAddress),
+  replyTo: [],
+  subject: `subject ${id}`,
+  text: `body ${id}`,
+  html: "",
+});
 
 describe("HandoffVerifier (#352)", () => {
   it.each([
@@ -190,6 +230,8 @@ describe("HandoffVerifier (#352)", () => {
     "attack.json",
     ".attack.json.tmp",
     "review-export.json",
+    "mailbox.json",
+    ".mailbox.json.tmp",
     ...WORDPRESS_VERIFIER_FILE_NAMES,
   ])(
     "refuses a stale %s without exposing the Lab or overwriting it",
@@ -635,5 +677,150 @@ describe("wbh-verify without a Harness canary (#525)", () => {
     ])
       expect(text).not.toContain(field);
     expect(text).toContain("`stored-xss`");
+  });
+
+  it("hands the attacker only its own mail from the Lab's sink and keeps it current (#805)", async () => {
+    const own = "sub@example.invalid";
+    const caught: LabMailMessage[] = [
+      mailMessage("setup-admin", "harness-admin@example.invalid"),
+      mailMessage("own-account", own),
+      mailMessage("victim", "wbh-victim-subscriber-1@example.invalid"),
+      mailMessage("blind", "harness-admin@example.invalid", {
+        bcc: ["guest@attacker.invalid", "auditor@example.invalid"],
+      }),
+    ];
+    const f = await fixture({
+      attackerPosition: "subscriber",
+      mail: () => ({ status: "captured", messages: [...caught] }),
+    });
+    const pending = f.transport.run(f.run);
+    await until(() => f.exists("lab.json"));
+    // Nothing of the mailbox exists while the administrator prepares the Lab.
+    expect(await f.exists("mailbox.json")).toBe(false);
+    expect(await readFile(join(f.directory, "lab.json"), "utf8")).not.toContain(
+      "mail",
+    );
+    await f.place("setup-done");
+    await until(() => f.exists("attack.json"));
+    const attack = JSON.parse(
+      await readFile(join(f.directory, "attack.json"), "utf8"),
+    ) as Record<string, unknown>;
+    expect(attack.mail).toEqual({
+      mailbox: join(f.directory, "mailbox.json"),
+      addresses: [own],
+      domain: "attacker.invalid",
+    });
+    const readMailbox = async () =>
+      JSON.parse(await readFile(join(f.directory, "mailbox.json"), "utf8")) as {
+        schema: string;
+        status: string;
+        messages: { id: string; bcc: unknown[] }[];
+      };
+    const first = await readMailbox();
+    expect(first).toMatchObject({
+      schema: "wbh-handoff-mailbox/v1",
+      status: "captured",
+    });
+    expect(first.messages.map((message) => message.id).sort()).toEqual([
+      "blind",
+      "own-account",
+    ]);
+    const text = await readFile(join(f.directory, "mailbox.json"), "utf8");
+    for (const hidden of [
+      "body setup-admin",
+      "body victim",
+      "auditor@example.invalid",
+    ])
+      expect(text).not.toContain(hidden);
+    // The Lab is asked to read in full only what is addressed to the attacker.
+    const wanted = f.mailFilters[0]!;
+    const summary = (to: string) => ({
+      To: [mailAddress(to)],
+      Cc: [],
+      Bcc: [],
+    });
+    expect(wanted(summary(own) as unknown as LabMailSummary)).toBe(true);
+    expect(
+      wanted(
+        summary("harness-admin@example.invalid") as unknown as LabMailSummary,
+      ),
+    ).toBe(false);
+
+    // Mail the route makes reaches the mailbox while the route runs.
+    caught.push(mailMessage("reset-link", "guest@attacker.invalid"));
+    caught.push(mailMessage("admin-notice", "harness-admin@example.invalid"));
+    await until(async () =>
+      (await readMailbox()).messages.some(
+        (message) => message.id === "reset-link",
+      ),
+    );
+    expect(
+      (await readMailbox()).messages.map((message) => message.id),
+    ).not.toContain("admin-notice");
+
+    for (const name of WORDPRESS_VERIFIER_FILE_NAMES)
+      await f.place(name, name === "precondition" ? "" : `${name} body`);
+    expect((await pending).outcome.status).toBe("files");
+  });
+
+  it("gives an unauthenticated attacker the attacker domain alone (#805)", async () => {
+    const f = await fixture({
+      mail: () => ({
+        status: "captured",
+        messages: [
+          mailMessage("subscriber", "sub@example.invalid"),
+          mailMessage("declared", "me@attacker.invalid"),
+        ],
+      }),
+    });
+    const pending = f.transport.run(f.run);
+    await until(() => f.exists("lab.json"));
+    await f.place("setup-done");
+    await until(() => f.exists("attack.json"));
+    const attack = JSON.parse(
+      await readFile(join(f.directory, "attack.json"), "utf8"),
+    ) as Record<string, unknown>;
+    expect(attack.mail).toMatchObject({
+      addresses: [],
+      domain: "attacker.invalid",
+    });
+    const mailbox = JSON.parse(
+      await readFile(join(f.directory, "mailbox.json"), "utf8"),
+    ) as { messages: { id: string }[] };
+    expect(mailbox.messages.map((message) => message.id)).toEqual(["declared"]);
+    await f.place("abort", "route-unavailable");
+    expect((await pending).outcome.status).toBe("incomplete");
+  });
+
+  it("names no mailbox when the Lab has no mail sink (#805)", async () => {
+    const f = await fixture({ mail: () => ({ status: "absent" }) });
+    const pending = f.transport.run(f.run);
+    await until(() => f.exists("lab.json"));
+    await f.place("setup-done");
+    await until(() => f.exists("attack.json"));
+    const attack = JSON.parse(
+      await readFile(join(f.directory, "attack.json"), "utf8"),
+    ) as Record<string, unknown>;
+    expect(attack).not.toHaveProperty("mail");
+    expect(await f.exists("mailbox.json")).toBe(false);
+    await f.place("abort", "route-unavailable");
+    await pending;
+    expect(await f.exists("mailbox.json")).toBe(false);
+  });
+
+  it("says the mailbox is unavailable when the sink cannot be read, and never exposes the mail UI (#805)", async () => {
+    const f = await fixture({ mail: () => ({ status: "unavailable" }) });
+    const pending = f.transport.run(f.run);
+    await until(() => f.exists("lab.json"));
+    await f.place("setup-done");
+    await until(() => f.exists("mailbox.json"));
+    expect(
+      JSON.parse(await readFile(join(f.directory, "mailbox.json"), "utf8")),
+    ).toMatchObject({ status: "unavailable", messages: [] });
+    await f.place("abort", "route-unavailable");
+    await pending;
+    for (const call of f.calls)
+      if (Array.isArray(call) && call[0] === "expose")
+        expect(call[1]).not.toHaveProperty("mailPort");
   });
 });

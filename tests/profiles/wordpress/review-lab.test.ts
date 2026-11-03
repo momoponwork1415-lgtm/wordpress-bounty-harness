@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  presentHeldVerificationLab,
   runCli,
   runForegroundReviewLab,
   type CliProfile,
@@ -125,6 +126,8 @@ function fakeLab(
     /** `port-80-busy`: another process holds 80; `none`: no port binds at all. */
     readonly exposure?: "free" | "port-80-busy" | "none";
     readonly labId?: string;
+    /** #805: the loopback port the gateway bound for the Lab's mail UI. */
+    readonly mailPort?: number;
   } = {},
 ) {
   const calls: string[] = [];
@@ -172,6 +175,9 @@ function fakeLab(
             container: "wbh-lab-1-host",
             httpPort: input.httpPort === 0 ? 49153 : input.httpPort,
             databasePort: null,
+            ...(options.mailPort === undefined || input.mailPort === undefined
+              ? {}
+              : { mailPort: options.mailPort }),
           };
     },
     async withdrawFromHost() {
@@ -473,7 +479,7 @@ describe("WordPress review Lab", () => {
 
     expect(calls).toEqual(["provision", "expose"]);
     // Port 80 through the recorder, so the site's own redirects keep working (#592).
-    expect(exposures).toEqual([{ httpPort: 80, via: "recorder" }]);
+    expect(exposures).toEqual([{ httpPort: 80, via: "recorder", mailPort: 0 }]);
     expect(provisioned).toEqual([
       { snapshot, setup: { ...setup, databaseAccess: "none" } },
     ]);
@@ -499,6 +505,84 @@ describe("WordPress review Lab", () => {
     await session.close();
     expect(calls).toEqual(["provision", "expose", "withdraw", "teardown"]);
     expect(session).not.toHaveProperty("canaries");
+  });
+
+  it("shows a person where every message the Lab caught is, when the Lab has a mail sink (#805)", async () => {
+    const store = await privateStore();
+    const packageDigest = await sealedPackage(store, reconstruction);
+    const { lab } = fakeLab({ mailPort: 49200 });
+    const session = await openWordPressReviewLab({
+      packageDigest,
+      store,
+      snapshots: frozenSnapshots,
+      lab,
+      browserImage,
+    });
+    expect(session.mail).toEqual({ url: "http://127.0.0.1:49200/" });
+    await session.close();
+
+    const without = await openWordPressReviewLab({
+      packageDigest,
+      store,
+      snapshots: frozenSnapshots,
+      lab: fakeLab().lab,
+      browserImage,
+    });
+    expect(without).not.toHaveProperty("mail");
+    await without.close();
+
+    const signals = new EventEmitter();
+    const lines: string[] = [];
+    await runForegroundReviewLab(
+      () =>
+        openWordPressReviewLab({
+          packageDigest,
+          store,
+          snapshots: frozenSnapshots,
+          lab: fakeLab({ mailPort: 49200 }).lab,
+          browserImage,
+        }),
+      {
+        stdout(line) {
+          lines.push(line);
+          if (line.startsWith("Run the private"))
+            queueMicrotask(() => signals.emit("SIGINT"));
+        },
+        stderr: () => undefined,
+      },
+      signals,
+    );
+    expect(lines).toContain(
+      "captured mail (every recipient, review only): http://127.0.0.1:49200/",
+    );
+
+    const held: string[] = [];
+    const heldSignals = new EventEmitter();
+    await presentHeldVerificationLab(
+      {
+        ref: { campaignId: "c", findingId: "f", verificationId: "v" },
+        labId: "lab-1",
+        endpoint: "http://wordpress",
+        attackerAccounts: {},
+        administrator: {},
+        host: { url: "http://127.0.0.1:80", hostHeader: "wordpress", port: 80 },
+        mail: { url: "http://127.0.0.1:49201/" },
+        receipt: { digest: sha("e"), path: "/private/receipt" },
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+      {
+        stdout(line) {
+          held.push(line);
+          if (line.startsWith("Run lab down"))
+            queueMicrotask(() => heldSignals.emit("SIGTERM"));
+        },
+        stderr: () => undefined,
+      },
+      heldSignals,
+    );
+    expect(held).toContain(
+      "captured mail (every recipient, review only): http://127.0.0.1:49201/",
+    );
   });
 
   it("refuses a missing package before touching the Lab", async () => {
@@ -647,8 +731,8 @@ describe("WordPress review Lab", () => {
       signals,
     );
     expect(exposures).toEqual([
-      { httpPort: 80, via: "recorder" },
-      { httpPort: 0, via: "recorder" },
+      { httpPort: 80, via: "recorder", mailPort: 0 },
+      { httpPort: 0, via: "recorder", mailPort: 0 },
     ]);
     expect(lines).toContain(
       "host loopback: http://127.0.0.1:49153 (Host header: wordpress)",

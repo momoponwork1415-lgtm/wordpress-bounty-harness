@@ -178,6 +178,8 @@ export interface CliProfile {
       readonly hostHeader: string;
       readonly port: number;
     };
+    /** Every message the Lab caught, for the person; absent when the Lab catches none (#805). */
+    readonly mail?: { readonly url: string };
     close(): Promise<void>;
   }>;
   /** Profile-owned admission of an incomplete observation to a manual Lab. */
@@ -435,6 +437,8 @@ export type HeldObservationLab = {
     readonly hostHeader: string;
     readonly port: number;
   };
+  /** Every message the Lab caught, for the person; absent when the Lab catches none (#805). */
+  readonly mail?: { readonly url: string };
   readonly receipt: { readonly digest: string; readonly path: string };
   /** #699: the other attempts this Lab served, each with its own receipt. */
   readonly others?: readonly {
@@ -877,6 +881,13 @@ function hostLines(host: {
   ];
 }
 
+/** #805: where a person reads every message the Lab caught; the attacker side never gets it. */
+function mailLine(mail: { readonly url: string } | undefined): string[] {
+  return mail === undefined
+    ? []
+    : [`captured mail (every recipient, review only): ${mail.url}`];
+}
+
 /** The human's credentials stay in Git-outside Private Evidence, never CLI output. */
 async function privateLabAccessFile(
   state: CliState,
@@ -923,6 +934,7 @@ export async function presentHeldVerificationLab(
       `verification Lab ${session.labId} kept for a person's observation on ${session.endpoint} until ${session.expiresAt}`,
     );
     for (const line of hostLines(session.host)) io.stdout(line);
+    for (const line of mailLine(session.mail)) io.stdout(line);
     io.stdout(
       `attacker accounts: private Lab access file ${accessPath ?? "unavailable"}`,
     );
@@ -1008,6 +1020,7 @@ export async function runForegroundReviewLab(
         );
         if (session.host !== undefined)
           for (const line of hostLines(session.host)) io.stdout(line);
+        for (const line of mailLine(session.mail)) io.stdout(line);
         const shellQuote = (value: string) =>
           `'${value.replaceAll("'", "'\\''")}'`;
         io.stdout(

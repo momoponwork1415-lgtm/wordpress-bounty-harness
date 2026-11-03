@@ -1,8 +1,10 @@
 import {
   DATABASE_NAME,
+  labAccountEmail,
   READ_ONLY_DATABASE_USER,
   type WordPressLabSession,
 } from "./lab-session.js";
+import { installLabMailPlugin } from "./mail-capture.js";
 import type { PreparedWordPressLab } from "./provision-input.js";
 import {
   applyWordPressLabBaseline,
@@ -90,7 +92,7 @@ async function createAccounts({ lab }: WordPressInitialization): Promise<void> {
     "user",
     "create",
     subscriber.username,
-    `${subscriber.username}@example.invalid`,
+    labAccountEmail(subscriber.username),
     "--role=subscriber",
     `--user_pass=${subscriber.password}`,
   ]);
@@ -99,7 +101,7 @@ async function createAccounts({ lab }: WordPressInitialization): Promise<void> {
       "user",
       "create",
       customer.username,
-      `${customer.username}@example.invalid`,
+      labAccountEmail(customer.username),
       "--role=customer",
       `--user_pass=${customer.password}`,
     ]);
@@ -108,7 +110,7 @@ async function createAccounts({ lab }: WordPressInitialization): Promise<void> {
       "user",
       "create",
       victimSubscriber.username,
-      `${victimSubscriber.username}@example.invalid`,
+      labAccountEmail(victimSubscriber.username),
       "--role=subscriber",
       `--user_pass=${victimSubscriber.password}`,
     ]);
@@ -117,7 +119,7 @@ async function createAccounts({ lab }: WordPressInitialization): Promise<void> {
       "user",
       "create",
       victimCustomer.username,
-      `${victimCustomer.username}@example.invalid`,
+      labAccountEmail(victimCustomer.username),
       "--role=customer",
       `--user_pass=${victimCustomer.password}`,
     ]);
@@ -185,6 +187,9 @@ export async function initializeWordPress(
 ): Promise<void> {
   const input: WordPressInitialization = { lab, prepared };
   await installCore(input);
+  // #805: mail goes to the Lab's sink from the first plugin activation on;
+  // the baseline's file modes below apply to this file too.
+  if (lab.created.has("mail")) await installLabMailPlugin(lab);
   const { baseline } = prepared;
   if (baseline !== undefined)
     await asBaselineFailure(() => removeBundledPlugins(lab, baseline));

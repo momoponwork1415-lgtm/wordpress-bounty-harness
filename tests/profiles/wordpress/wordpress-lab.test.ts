@@ -73,6 +73,8 @@ async function fixture(
   strictSourceMode = false,
   dependencySlugs: readonly string[] = [],
   php?: { readonly version: string; readonly runningVersion: string },
+  /** #805: the Lab has a mail sink (`images.mail`). */
+  withMail = false,
 ) {
   const root = await mkdtemp(join(tmpdir(), "wbh-lab-"));
   directories.push(root);
@@ -142,6 +144,9 @@ async function fixture(
     videoOutput: null as Buffer | null,
     /** What `wp user get harness-admin --field=ID` prints (#718). */
     administratorId: "1",
+    /** #805: the Mailpit API's answers by path, `/messages?…` and `/message/<id>`. */
+    mailApi: new Map<string, unknown>(),
+    mailFails: false,
   };
   /** The fake Docker daemon's objects and the loopback ports it bound. */
   const docker = {
@@ -161,6 +166,7 @@ async function fixture(
       wordpressCli: `wordpress-cli@${sha("3")}`,
       browser: `verification-browser@${sha("4")}`,
       recorder: `node-recorder@${sha("5")}`,
+      ...(withMail ? { mail: `mailpit@${sha("6")}` } : {}),
     },
     source: {
       resolve: async () => ({
@@ -316,20 +322,36 @@ async function fixture(
               '{"openedAt":"2026-11-01T00:00:00.000Z","closedAt":"2026-11-01T00:00:01.000Z","bytesIn":12,"bytesOut":34}\nnot json\n',
             stderr: "",
           };
+        if (
+          request.args[0] === "exec" &&
+          request.args[1]?.endsWith("-mail") &&
+          request.args[2] === "wget"
+        ) {
+          const path = (request.args.at(-1) ?? "").replace(
+            "http://127.0.0.1:8025/api/v1",
+            "",
+          );
+          const answer = database.mailApi.get(path);
+          return database.mailFails || answer === undefined
+            ? { exitCode: 1, stdout: "", stderr: "wget: server returned error" }
+            : { exitCode: 0, stdout: JSON.stringify(answer), stderr: "" };
+        }
         if (request.args[0] === "inspect")
           return {
             exitCode: 0,
-            stdout: request.args.at(-1)?.endsWith("-egress1")
-              ? "172.20.0.9"
-              : request.args.at(-1)?.endsWith("-db")
-                ? "172.20.0.3"
-                : request.args.at(-1)?.endsWith("-proxy")
-                  ? "172.20.0.4"
-                  : request.args.at(-1)?.endsWith("-canary")
-                    ? "172.20.0.5"
-                    : request.args.at(-1)?.endsWith("-ctl")
-                      ? "172.20.0.130"
-                      : "172.20.0.2",
+            stdout: request.args.at(-1)?.endsWith("-mail")
+              ? "172.20.0.6"
+              : request.args.at(-1)?.endsWith("-egress1")
+                ? "172.20.0.9"
+                : request.args.at(-1)?.endsWith("-db")
+                  ? "172.20.0.3"
+                  : request.args.at(-1)?.endsWith("-proxy")
+                    ? "172.20.0.4"
+                    : request.args.at(-1)?.endsWith("-canary")
+                      ? "172.20.0.5"
+                      : request.args.at(-1)?.endsWith("-ctl")
+                        ? "172.20.0.130"
+                        : "172.20.0.2",
             stderr: "",
           };
         if (request.args[0] === "exec" && request.args[1]?.endsWith("-proxy")) {
@@ -2427,5 +2449,312 @@ describe("WordPress gVisor Lab", () => {
         (command) => command.args[0] === "network" && command.args[1] === "rm",
       ),
     ).toBe(true);
+  });
+});
+
+describe("the verification Lab's internal mail sink (#805)", () => {
+  const withMail = () =>
+    fixture("ready", undefined, "example", false, [], undefined, true);
+
+  it("starts Mailpit by digest on the Lab's internal network before WordPress, under runsc, and points WordPress mail at it", async () => {
+    const { lab, snapshot, setup, commands } = await withMail();
+    const provisioned = await lab.provision(snapshot, setup, {
+      purpose: "verification",
+    });
+    expect(provisioned.status).toBe("ready");
+    if (provisioned.status !== "ready") return;
+    const id = provisioned.handle.id;
+    const mail = commands.findIndex(
+      ({ args }) => args[0] === "run" && args.includes(`wbh-${id}-mail`),
+    );
+    const wordpress = commands.findIndex(
+      ({ args }) => args[0] === "run" && args.includes(`wbh-${id}-wp`),
+    );
+    expect(mail).toBeGreaterThan(-1);
+    expect(wordpress).toBeGreaterThan(mail);
+    const args = commands[mail]!.args;
+    expect(args).toEqual([
+      "run",
+      "--detach",
+      "--name",
+      `wbh-${id}-mail`,
+      "--runtime=runsc",
+      "--network",
+      `wbh-${id}-net`,
+      "--network-alias",
+      "mailpit",
+      "--read-only",
+      "--cap-drop=ALL",
+      "--security-opt=no-new-privileges",
+      "--user=65534:65534",
+      "--tmpfs=/data:rw,nosuid,nodev,size=64m",
+      "--env",
+      "MP_DATABASE=/data/mailpit.db",
+      "--env",
+      "MP_MAX_MESSAGES=500",
+      "--env",
+      "MP_DISABLE_VERSION_CHECK=true",
+      "--env",
+      "MP_BLOCK_REMOTE_CSS_AND_FONTS=true",
+      `mailpit@${sha("6")}`,
+    ]);
+    // WordPress and WP-CLI name the sink by its Lab address (gVisor has no Docker DNS).
+    expect(commands[wordpress]!.args).toContain(
+      "--add-host=mailpit:172.20.0.6",
+    );
+    const activation = commands.find(
+      ({ args }) => args.includes("plugin") && args.includes("activate"),
+    );
+    expect(activation?.args).toContain("--add-host=mailpit:172.20.0.6");
+    // The must-use plugin goes in before the first plugin is activated.
+    const plugin = commands.findIndex(({ args }) =>
+      args.some((arg) => arg.startsWith("WBH_LAB_MAIL_PLUGIN=")),
+    );
+    expect(plugin).toBeGreaterThan(wordpress);
+    expect(plugin).toBeLessThan(commands.indexOf(activation!));
+    const source = commands[plugin]!.args.find((arg) =>
+      arg.startsWith("WBH_LAB_MAIL_PLUGIN="),
+    )!;
+    expect(source).toContain("phpmailer_init");
+    expect(source).toContain("$phpmailer->Host = 'mailpit';");
+    expect(source).toContain("$phpmailer->Port = 1025;");
+    expect(commands[plugin]!.args.at(-1)).toContain(
+      "/var/www/html/wp-content/mu-plugins/wbh-lab-mail.php",
+    );
+    // The handle names no mail: the attacker side gets mail from the Harness only.
+    expect(JSON.stringify(provisioned.handle)).not.toContain("mail");
+
+    await lab.teardown(provisioned.handle);
+    expect(
+      commands.some(
+        ({ args }) => args[0] === "rm" && args.includes(`wbh-${id}-mail`),
+      ),
+    ).toBe(true);
+  });
+
+  it("creates no new way out: one internal network, no bridge, no published port for the sink", async () => {
+    const { lab, snapshot, setup, commands } = await withMail();
+    const provisioned = await lab.provision(snapshot, setup, {
+      purpose: "verification",
+    });
+    if (provisioned.status !== "ready") throw new Error("not ready");
+    const id = provisioned.handle.id;
+    const networks = commands.filter(
+      ({ args }) => args[0] === "network" && args[1] === "create",
+    );
+    expect(networks).toHaveLength(1);
+    expect(networks[0]!.args).toContain("--internal");
+    const mailCommands = commands.filter(({ args }) =>
+      args.includes(`wbh-${id}-mail`),
+    );
+    for (const { args } of mailCommands) {
+      expect(args).not.toContain("bridge");
+      expect(args).not.toContain("--publish");
+      expect(args.slice(0, 2)).not.toEqual(["network", "connect"]);
+    }
+    expect(
+      commands.some(
+        ({ args }) =>
+          args[0] === "network" &&
+          args[1] === "connect" &&
+          args.includes(`wbh-${id}-mail`),
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps the setup digest of a Lab without a sink, so sealed review packages still rebuild", async () => {
+    const plain = await fixture();
+    const mailing = await withMail();
+    const a = await plain.lab.provision(plain.snapshot, plain.setup, {
+      purpose: "verification",
+    });
+    const b = await mailing.lab.provision(plain.snapshot, plain.setup, {
+      purpose: "verification",
+    });
+    if (a.status !== "ready" || b.status !== "ready")
+      throw new Error("not ready");
+    expect(b.handle.setupDigest).toBe(a.handle.setupDigest);
+    // Without `images.mail` there is no sink and no must-use plugin.
+    expect(
+      plain.commands.some(
+        ({ args }) =>
+          args.some((arg) => arg.endsWith("-mail")) ||
+          args.some((arg) => arg.startsWith("WBH_LAB_MAIL_PLUGIN=")),
+      ),
+    ).toBe(false);
+    expect(await plain.lab.readMail(a.handle)).toEqual({ status: "absent" });
+  });
+
+  it("gives an exploration Lab no sink", async () => {
+    const { lab, snapshot, setup, commands } = await withMail();
+    const provisioned = await lab.provision(snapshot, setup, {
+      purpose: "discovery",
+    });
+    if (provisioned.status !== "ready") throw new Error("not ready");
+    expect(
+      commands.some(({ args }) => args.some((arg) => arg.endsWith("-mail"))),
+    ).toBe(false);
+    expect(await lab.readMail(provisioned.handle)).toEqual({
+      status: "absent",
+    });
+  });
+
+  it("reads what the sink caught through docker exec, in full only where asked, once per message", async () => {
+    const { lab, snapshot, setup, commands, database } = await withMail();
+    const provisioned = await lab.provision(snapshot, setup, {
+      purpose: "verification",
+    });
+    if (provisioned.status !== "ready") throw new Error("not ready");
+    const who = (address: string) => [{ Name: "", Address: address }];
+    database.mailApi.set("/messages?limit=200", {
+      total: 2,
+      messages: [
+        {
+          ID: "adminMsg1",
+          Created: "2026-11-03T00:00:02.000Z",
+          To: who("harness-admin@example.invalid"),
+          Cc: null,
+          Bcc: null,
+        },
+        {
+          ID: "attackerMsg1",
+          Created: "2026-11-03T00:00:01.000Z",
+          To: who("me@attacker.invalid"),
+          Cc: null,
+          Bcc: null,
+        },
+      ],
+    });
+    for (const [id, to] of [
+      ["adminMsg1", "harness-admin@example.invalid"],
+      ["attackerMsg1", "me@attacker.invalid"],
+    ] as const)
+      database.mailApi.set(`/message/${id}`, {
+        ID: id,
+        From: { Name: "WordPress", Address: "wordpress@wordpress.invalid" },
+        To: who(to),
+        Cc: null,
+        Bcc: null,
+        ReplyTo: [],
+        Subject: `subject ${id}`,
+        Text: `text ${id}`,
+        HTML: "",
+      });
+    const reads = () =>
+      commands.filter(
+        ({ args }) => args[0] === "exec" && args[1]?.endsWith("-mail"),
+      );
+    const before = reads().length;
+    const attackerOnly = await lab.readMail(
+      provisioned.handle,
+      (summary) => summary.To[0]?.address === "me@attacker.invalid",
+    );
+    expect(attackerOnly).toEqual({
+      status: "captured",
+      messages: [
+        {
+          id: "attackerMsg1",
+          receivedAt: "2026-11-03T00:00:01.000Z",
+          from: { name: "WordPress", address: "wordpress@wordpress.invalid" },
+          to: [{ name: "", address: "me@attacker.invalid" }],
+          cc: [],
+          bcc: [],
+          replyTo: [],
+          subject: "subject attackerMsg1",
+          text: "text attackerMsg1",
+          html: "",
+        },
+      ],
+    });
+    // The list, then only the attacker's message in full.
+    expect(
+      reads()
+        .slice(before)
+        .map(({ args }) => args.at(-1)),
+    ).toEqual([
+      "http://127.0.0.1:8025/api/v1/messages?limit=200",
+      "http://127.0.0.1:8025/api/v1/message/attackerMsg1",
+    ]);
+    const all = await lab.readMail(provisioned.handle);
+    expect(
+      all.status === "captured" && all.messages.map(({ id }) => id),
+    ).toEqual(["adminMsg1", "attackerMsg1"]);
+    // A message never changes, so the attacker's one is not read again.
+    expect(
+      reads()
+        .slice(before)
+        .filter(({ args }) => args.at(-1)?.endsWith("attackerMsg1")),
+    ).toHaveLength(1);
+
+    database.mailFails = true;
+    expect(await lab.readMail(provisioned.handle)).toEqual({
+      status: "unavailable",
+    });
+  });
+
+  it("publishes the sink's web UI only for a review, never through the attacker's entrance", async () => {
+    const { lab, snapshot, setup, commands, docker } = await withMail();
+    const provisioned = await lab.provision(snapshot, setup, {
+      purpose: "verification",
+    });
+    if (provisioned.status !== "ready") throw new Error("not ready");
+    const { handle } = provisioned;
+    const exposed = await lab.exposeToHost(handle, {
+      httpPort: 0,
+      via: "recorder",
+      mailPort: 0,
+    });
+    expect(exposed).toMatchObject({ status: "exposed" });
+    if (exposed.status !== "exposed") return;
+    expect(exposed.mailPort).toBeGreaterThan(0);
+    const gateway = [...commands]
+      .reverse()
+      .find(
+        ({ args }) =>
+          args[0] === "create" && args.includes(`wbh-${handle.id}-host`),
+      )!;
+    expect(gateway.args).toContain("127.0.0.1::8025");
+    expect(gateway.args).toContain("WBH_MAIL_IP=172.20.0.6");
+    await lab.withdrawFromHost(handle);
+    docker.ports.clear();
+
+    // The handoff's own exposure asks for no mail and publishes none.
+    const plain = await lab.exposeToHost(handle, {
+      httpPort: 0,
+      via: "recorder",
+    });
+    expect(plain).not.toHaveProperty("mailPort");
+    const plainGateway = [...commands]
+      .reverse()
+      .find(
+        ({ args }) =>
+          args[0] === "create" && args.includes(`wbh-${handle.id}-host`),
+      )!;
+    expect(plainGateway.args).not.toContain("127.0.0.1::8025");
+    expect(
+      plainGateway.args.some((arg) => arg.startsWith("WBH_MAIL_IP=")),
+    ).toBe(false);
+    await lab.withdrawFromHost(handle);
+
+    expect(
+      await lab.exposeToHost(handle, {
+        httpPort: 0,
+        via: "recorder",
+        mailPort: 0,
+        deniedPaths: [{ path: "/wp-login.php", match: "exact" }],
+      }),
+    ).toEqual({
+      status: "unavailable",
+      diagnostic: "The attacker entrance does not publish the Lab's mail",
+    });
+  });
+
+  it("names a crashed run's sink as a leftover of its Lab", async () => {
+    const { lab, docker } = await withMail();
+    const id = "0f0e0d0c-0b0a-4908-8706-050403020100";
+    docker.containers.add(`wbh-${id}-mail`);
+    expect(
+      (await lab.cleanupLeftovers({ remove: false, labId: id })).containers,
+    ).toEqual([`wbh-${id}-mail`]);
   });
 });

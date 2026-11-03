@@ -2,6 +2,7 @@ import type { EgressRelay } from "./egress-relay.js";
 import { randomBytes, randomUUID } from "node:crypto";
 
 import type { WordPressLabHandle } from "./contract.js";
+import { LAB_MAIL_HOST, type LabMailMessage } from "./mail-capture.js";
 import type {
   DockerResult,
   LabDocker,
@@ -13,6 +14,11 @@ import type {
 export const DATABASE_NAME = "wordpress";
 export const READ_ONLY_DATABASE_USER = "wbh_reader";
 
+/** The address the Lab gives each account it creates; mail to it is that account's (#805). */
+export function labAccountEmail(username: string): string {
+  return `${username}@example.invalid`;
+}
+
 export interface LabImages {
   readonly database: string;
   readonly wordpress: string;
@@ -20,6 +26,12 @@ export interface LabImages {
   /** Playwright Chromium, used only by the Lab's own observer visits. */
   readonly browser: string;
   readonly recorder: string;
+  /**
+   * ADR 0026 追記 (#805): Mailpit, the verification Lab's internal mail
+   * sink. Absent, a Lab has no mail capture. Not part of the setup digest,
+   * so a sealed review package still rebuilds its Lab.
+   */
+  readonly mail?: string;
 }
 
 type Account = { readonly username: string; readonly password: string };
@@ -30,6 +42,7 @@ const CONTAINERS = [
   "receiver",
   "recorder",
   "control",
+  "mail",
 ] as const;
 type CreatedResource = (typeof CONTAINERS)[number] | "volume" | "network";
 
@@ -51,6 +64,8 @@ export class WordPressLabSession {
   readonly receiver: string;
   /** Exploration Labs only: the control endpoint (`labctl`) the agent calls. */
   readonly control: string;
+  /** Verification Labs with `images.mail`: the internal mail sink (#805). */
+  readonly mail: string;
   /**
    * A discovery-purpose Lab attached to one Trial (ADR 0003, 2026-10-25
    * addendum): no canaries, no lease, a control endpoint, and a fixed
@@ -90,6 +105,10 @@ export class WordPressLabSession {
   /** Exploration Labs: the address WordPress keeps across resets. */
   wordpressIp?: string;
   controlIp?: string;
+  /** The mail sink's Lab address; WordPress and WP-CLI resolve `mailpit` to it. */
+  mailIp?: string;
+  /** Messages already read in full; a caught message never changes. */
+  readonly mailMessages = new Map<string, LabMailMessage>();
   /** gVisor containers cannot use Docker's name resolution, so WordPress gets this address. */
   databaseIp?: string;
   #handle?: WordPressLabHandle;
@@ -132,6 +151,7 @@ export class WordPressLabSession {
     this.recorder = `${prefix}-proxy`;
     this.receiver = `${prefix}-canary`;
     this.control = `${prefix}-ctl`;
+    this.mail = `${prefix}-mail`;
     this.exploration = input.forExploration === true;
     this.databasePassword = randomUUID();
     this.readerPassword = randomBytes(32).toString("hex");
@@ -190,6 +210,10 @@ export class WordPressLabSession {
       // The Apache image owns the shared WordPress volume as UID/GID 33;
       // the CLI image's www-data is UID/GID 82 and cannot create uploads.
       "--user=33:33",
+      // A plugin's activation may send mail; it reaches the Lab's sink too.
+      ...(this.mailIp === undefined
+        ? []
+        : [`--add-host=${LAB_MAIL_HOST}:${this.mailIp}`]),
       ...environment.flatMap((entry) => ["--env", entry]),
       "--env",
       `WORDPRESS_DB_HOST=${this.databaseAddress()}`,

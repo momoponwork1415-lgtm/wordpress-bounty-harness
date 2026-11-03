@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { RECORDER_STATE_DIRECTORY } from "../../../lab/capture.js";
 import { CONTROL_STATE_DIRECTORY } from "../../../lab/control/index.js";
 import type { WordPressLabSession } from "./lab-session.js";
+import { LAB_MAIL_HOST, mailContainerArgs } from "./mail-capture.js";
 
 export const BEACON_LOG = "/tmp/wbh-beacons";
 /** Only a browser script can send the nonce-bound custom header on a POST. */
@@ -199,6 +200,10 @@ async function startWordPress(lab: WordPressLabSession): Promise<string> {
     ...lab.egressRelays.map(
       (relay) => `--add-host=${relay.destination.host}:${relay.ip}`,
     ),
+    // #805: the Lab's own mail sink, on the internal network.
+    ...(lab.mailIp === undefined
+      ? []
+      : [`--add-host=${LAB_MAIL_HOST}:${lab.mailIp}`]),
     "--security-opt=no-new-privileges",
     "--volume",
     `${lab.volume}:/var/www/html`,
@@ -273,12 +278,24 @@ async function startReceiver(lab: WordPressLabSession): Promise<void> {
   lab.receiverIp = await containerIp(lab, lab.receiver);
 }
 
+/**
+ * ADR 0026 追記 (#805): a verification Lab's mail sink, before WordPress so
+ * WordPress starts with its address. Exploration Labs get none.
+ */
+async function startMail(lab: WordPressLabSession): Promise<void> {
+  const image = lab.images.mail;
+  if (lab.exploration || image === undefined) return;
+  await lab.requireDocker(mailContainerArgs(lab, image));
+  lab.created.add("mail");
+  lab.mailIp = await containerIp(lab, lab.mail);
+}
+
 async function waitForHealth(
   lab: WordPressLabSession,
   attempts: number,
 ): Promise<void> {
   for (let attempt = 0; attempt < attempts; attempt++) {
-    const [wordpressHealth, databaseHealth] = await Promise.all([
+    const [wordpressHealth, databaseHealth, mailHealth] = await Promise.all([
       lab.docker(
         [
           "exec",
@@ -302,8 +319,16 @@ async function waitForHealth(
         ],
         10_000,
       ),
+      lab.created.has("mail")
+        ? lab.docker(["exec", lab.mail, "/mailpit", "readyz"], 10_000)
+        : Promise.resolve({ exitCode: 0 }),
     ]);
-    if (wordpressHealth.exitCode === 0 && databaseHealth.exitCode === 0) return;
+    if (
+      wordpressHealth.exitCode === 0 &&
+      databaseHealth.exitCode === 0 &&
+      mailHealth.exitCode === 0
+    )
+      return;
     if (attempt + 1 < attempts)
       await new Promise<void>((resolve) => setTimeout(resolve, 1_000));
   }
@@ -351,8 +376,9 @@ export function controlCommand(
 
 /**
  * Starts only runsc containers; caller owns cleanup after any failure. A
- * verification Lab gets the beacon receiver; an exploration Lab gets the
- * control endpoint instead and no canary receiver.
+ * verification Lab gets the beacon receiver and, with `images.mail`, the
+ * internal mail sink (#805); an exploration Lab gets the control endpoint
+ * instead and neither of the two.
  */
 export async function startLabContainers(
   lab: WordPressLabSession,
@@ -363,6 +389,7 @@ export async function startLabContainers(
   // ADR 0046: relays first, so WordPress starts with their addresses.
   if (egress !== undefined && egress.destinations.length > 0)
     lab.egressRelays = await startEgressRelays(lab, egress.destinations);
+  await startMail(lab);
   const internalIp = await startWordPress(lab);
   const recorderIp = await startRecorder(lab, internalIp);
   if (lab.exploration) await startControl(lab);
