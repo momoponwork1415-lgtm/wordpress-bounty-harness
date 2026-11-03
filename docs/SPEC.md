@@ -58,7 +58,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | Lab provisioner | gVisor内のWordPress + MySQL、ロール別アカウント、HTTP捕捉のrecorder、Lab browser |
 | Lab観測器 | 第7節のHTTP捕捉、Lab状態の差分、被害者画面の記録。成立は判定しない（判定器集合は2026-10-25に削除、ADR 0040） |
 | scope方針 | `src/profiles/wordpress/policy/programme-scope.md`（Wordfence / Patchstack） |
-| prompt雛形 | 新規探索の目的文は campaign 設定の `discovery.mode` で決まり、`deep` は `wp2shell-bounty-v11`、`wide` は `wp2shell-bounty-v22-wide` だけを実行できる（ADR 0039 の 2026-11-02 追記 21）。探索スキル `wbh-recon` v2、`wbh-tools` v1、`wbh-setup` v1 を sandbox に置き、目的文の 1 段落がその場所を示す。旧版の目的文は過去 Trial の digest と構成の照合のために残し、新規 Trial では起動しない。trust 境界宣言の雛形も持つ（ADR 0019、0029、0033、0039） |
+| prompt雛形 | 新規探索の目的文は campaign 設定の `discovery.mode` で決まり、`deep` は `wp2shell-bounty-v11`、`wide` は `wp2shell-bounty-v22-wide` だけを実行できる（ADR 0039 の 2026-11-02 追記 21）。探索スキルは `discovery.skills` で名指したときだけ sandbox に置く。起動可能な版は `wbh-recon` v4、`wbh-tools` v1、`wbh-setup` v1、`wbh-lab` v1（ADR 0043）。旧版の目的文とスキルは過去 Trial の digest と構成の照合のために残す。trust 境界宣言の雛形も持つ（ADR 0019、0029、0033、0039） |
 | Lead型 | sourceに根拠があり、影響までの辺が1つ足りないprimitiveの分類と記録 |
 | 評価対象の表現 | 開発対象のslug、版、修正版、影響分類。正解表の手入力は初期受入条件にしない |
 
@@ -83,8 +83,8 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 ## 6. Discovery runの仕様
 
 - 攻撃者位置: 未認証と subscriber（customer 相当）だけ。contributor 以上は trust 境界の内側として宣言する（第 8a 節）。
-- 入力: 固定ソース（読み取り専用）、人間が書いた trust 境界宣言、Programme Boundary、目的文、Harness が生成する節（`## Run parameters`、Finding / Lead の出力契約 v4、スキルの場所、`discovery.priorResearch: same-target` のときの `## Prior research`）。評価対象の答え、PoC、公開履歴の中身、入口索引は渡さない（不変条件 1、ADR 0012、0034）。
-- 目的文: `discovery.mode` が `deep` なら `wp2shell-bounty-v11`、`wide` なら `wp2shell-bounty-v22-wide` に限る（ADR 0039）。本文を変えたら版を上げ、旧版と digest を残す。文面は ADR 0045 で凍結し、消すだけを許す。探索スキル `wbh-recon` v2、`wbh-tools` v1、`wbh-setup` v1 は sandbox に置き、どこを読み何を仮説にするかは Root が決める。
+- 入力: 固定ソース（読み取り専用）、人間が書いた trust 境界宣言、Programme Boundary、目的文、Harness が生成する節（`## Run parameters`、Finding / Lead の出力契約 v4、`discovery.priorResearch: same-target` のときの `## Prior research`）。名指したスキルは CLI home に別置きする（ADR 0043）。評価対象の答え、PoC、公開履歴の中身、入口索引は渡さない（不変条件 1、ADR 0012、0034）。
+- 目的文: `discovery.mode` が `deep` なら `wp2shell-bounty-v11`、`wide` なら `wp2shell-bounty-v22-wide` に限る（ADR 0039）。本文を変えたら版を上げ、旧版と digest を残す。文面は ADR 0045 で凍結し、消すだけを許す。`discovery.skills` で名指した起動可能なスキルだけを sandbox に置き、どこを読み何を仮説にするかは Root が決める（ADR 0043）。
 - 構成: 対象ごとに Root と子の協調 Trial を 1 回。同時に生きる子の上限は `discovery.maxChildren`（既定 4、1〜8）で Harness が強制し、何体使うかは Root が決める。子の有効な Finding と Lead は Root の最終報告と独立に保存する。Claude runtime は `runtimeShare` で分けられるが、本番の share は 0 である。
 - 許可する操作: 固定ソースの読み取り、Lab があればそこへの HTTP。外向き通信は認証ブローカー経由の provider API だけ（不変条件 2）。`discovery.lab: attached`（既定、ADR 0049）では Trial ごとに探索 Lab を 1 台立て、制御口は `reset` / `observe` と、保存先の観測器 `find`（植えた印の table / column / file）、`sql`（読み取り専用ユーザーで SELECT 1 文、200 行まで）、`trace`（1 リクエストの plugin 内の関数呼び出し列）を受ける。`find`、`sql`、`trace` は 1 つの予算 `discovery.lab.maxLookups`（既定 60）を共有する。Harness は捕捉と状態の差分と要求・答えを封じて回数を数えるだけで、答えを読まず判定しない（ADR 0003 の 2026-10-25 追記と 2026-11-02 追記）。Lab を付けないのは `none` を名指ししたときだけである。
 - 停止規則: 制限時間の上限は 120 分（`runWallTimeMinutes`）。どちらの mode にも既定の最低時間は無く（`discovery.minimumActiveMinutes` の既定 0、ADR 0039 追記 20）、終了は探索スキルの手順（`wbh-recon` 手順 9）が判断して、最初の最終報告で終える。`minimumActiveMinutes` を 1 以上にした `deep` の Trial だけ、早い最終報告を同じセッションで続ける。値は目的文に書かず `## Run parameters` で伝える。継続不能、制限時間、provider、broker、スキーマの失敗は理由付きの `incomplete` で、候補 0 件には数えない（ADR 0033、0039）。

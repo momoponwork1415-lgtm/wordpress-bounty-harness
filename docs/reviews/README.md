@@ -58,6 +58,7 @@ AI に「調べて報告」を頼んだときの成果物を、日付付きで�
 - [2026-10-30-exploration-skills-wbh-recon-v1.md](2026-10-30-exploration-skills-wbh-recon-v1.md): 探索スキル `wbh-recon-v1` の全文、日本語訳、出典対照表（#682）。図は [2026-10-30-exploration-skills-architecture.svg](2026-10-30-exploration-skills-architecture.svg)。
 - [2026-11-01-exploration-skills-wbh-recon-v2.md](2026-11-01-exploration-skills-wbh-recon-v2.md): 探索スキル `wbh-recon-v2`（手順 8 に「子は親の履歴を引き継がずに始める」の 1 文）の全文、日本語訳、差分の出典（#752）。
 - [2026-11-01-exploration-skills-wbh-recon-v3.md](2026-11-01-exploration-skills-wbh-recon-v3.md): 探索スキル `wbh-recon-v3`（手順 9「closing」: 終了の判断を研究 file で行う、#714 / #686）の全文、日本語訳、出典対照表。
+- [2026-11-03-discovery-instruction-overlap-and-recon-v4.md](2026-11-03-discovery-instruction-overlap-and-recon-v4.md): 目的文・生成節・探索スキルの重複監査と、`wbh-recon-v4` の全文、日本語訳、出典対照表（#807）。
 - [2026-11-02-exploration-skills-wbh-falsify-v1.md](2026-11-02-exploration-skills-wbh-falsify-v1.md): 探索スキル `wbh-falsify-v1`（単位ごとの仮定の表と、強制されていない行の両方向の読み、#786）の全文、日本語訳、出典対照表。
 - [2026-11-02-exploration-skills-wbh-falsify-v2.md](2026-11-02-exploration-skills-wbh-falsify-v2.md): 探索スキル `wbh-falsify-v2`（単位ごとに歩きと反証を別の子で 2 回読む、#791）の全文、日本語訳、出典対照表。
 - [2026-11-02-exploration-skills-wbh-lab-v1.md](2026-11-02-exploration-skills-wbh-lab-v1.md): 探索スキル `wbh-lab-v1`（open の行ごとに marker を植え、Find / Query / Trace / Observe で保存先・保存形・走った関数・読み戻しを埋め、最終報告の前に Lab が答えられる行を全部通す、#793 決定 E）の全文、日本語訳、出典対照表。

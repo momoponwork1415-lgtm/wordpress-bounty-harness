@@ -260,24 +260,24 @@ describe("WordPress campaign session", () => {
 describe("discovery skills (ADR 0043)", () => {
   it("accepts pinned skill ids for a deep or wide campaign", async () => {
     const { open } = await fixture({
-      config: { discovery: { lab: "none", skills: ["wbh-recon-v3"] } },
+      config: { discovery: { lab: "none", skills: ["wbh-recon-v4"] } },
     });
     const session = await open();
-    expect(session.config.discovery.skills).toEqual(["wbh-recon-v3"]);
+    expect(session.config.discovery.skills).toEqual(["wbh-recon-v4"]);
     const wide = await fixture({
       config: {
-        discovery: { lab: "none", mode: "wide", skills: ["wbh-recon-v3"] },
+        discovery: { lab: "none", mode: "wide", skills: ["wbh-recon-v4"] },
       },
     });
     expect((await wide.open()).config.discovery.skills).toEqual([
-      "wbh-recon-v3",
+      "wbh-recon-v4",
     ]);
   });
 
   it("rejects unknown ids and repeated skills", async () => {
     for (const config of [
       { discovery: { lab: "none", skills: ["wbh-other-v1"] } },
-      { discovery: { lab: "none", skills: ["wbh-recon-v3", "wbh-recon-v3"] } },
+      { discovery: { lab: "none", skills: ["wbh-recon-v4", "wbh-recon-v4"] } },
     ]) {
       const { open } = await fixture({ config });
       await expect(open()).rejects.toThrow();

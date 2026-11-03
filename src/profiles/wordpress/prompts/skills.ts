@@ -84,6 +84,13 @@ export const WORDPRESS_DISCOVERY_SKILLS = [
     name: "wbh-recon",
     digest:
       "sha256:5563a8df752e112ea0bed7329bf1755b2cde9d4210e41b6802fb07270a2b6970",
+    status: "archived",
+  },
+  {
+    id: "wbh-recon-v4",
+    name: "wbh-recon",
+    digest:
+      "sha256:9a3b70432ff343cc6bc07f0a9ad52f636c4b629ffae8e65b4dc578d69d4fc75d",
     status: "current",
   },
   {

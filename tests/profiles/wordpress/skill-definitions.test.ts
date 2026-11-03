@@ -60,7 +60,7 @@ describe("WordPress discovery skills", () => {
     expect(WORDPRESS_LAUNCHABLE_DISCOVERY_SKILL_IDS).toEqual([
       "wbh-tools-v1",
       "wbh-setup-v1",
-      "wbh-recon-v3",
+      "wbh-recon-v4",
       "wbh-lab-v1",
     ]);
     // #791: v2 was measured on bench h32 and not adopted; it stays readable.
@@ -74,6 +74,9 @@ describe("WordPress discovery skills", () => {
       "archived",
     );
     expect(wordPressDiscoverySkillRecord("wbh-recon-v2")?.status).toBe(
+      "archived",
+    );
+    expect(wordPressDiscoverySkillRecord("wbh-recon-v3")?.status).toBe(
       "archived",
     );
     const tools = wordPressDiscoverySkillRecord("wbh-tools-v1") as
@@ -105,11 +108,15 @@ describe("WordPress discovery skills", () => {
       expect(frontMatter.description).toMatch(/^Use /);
       // The map lives where every agent of the Trial can read it.
       expect(body).toContain("/workspace/research/recon-map.md");
-      if (row.id === "wbh-recon-v2" || row.id === "wbh-recon-v3") {
+      if (
+        row.id === "wbh-recon-v2" ||
+        row.id === "wbh-recon-v3" ||
+        row.id === "wbh-recon-v4"
+      ) {
         // #752: children start from the files, not from the parent's history.
         expect(body).toContain("without the parent's conversation");
       }
-      if (row.id === "wbh-recon-v3") {
+      if (row.id === "wbh-recon-v3" || row.id === "wbh-recon-v4") {
         // #714 / #686: the Trial closes on the research files, not on row counts.
         expect(body).toContain("## Step 9: closing");
         expect(body).toContain(

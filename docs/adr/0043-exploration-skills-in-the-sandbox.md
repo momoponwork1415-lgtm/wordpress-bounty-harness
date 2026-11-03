@@ -127,3 +127,11 @@ amends: 0029（単一協調 Trial の主経路）と 0039（探索の mode）に
 
 - 事実（本番 `prod-v21-20261102-4`、5 Root、2026-11-02）: 目的文が名前で指す `wbh-recon` / `wbh-tools` / `wbh-setup` の SKILL.md は各 4 回以上読まれ、どの文も名指さない `wbh-lab` の SKILL.md は 0 回だった。staging は CLI の一覧に載せるだけで、読ませはしない。
 - 道具を導入する Harness 生成の節は、その使い方を書いたスキルを名前で指してよい。何が installed かという事実であって、舵取りではない。`## Lab` 節に足した 1 文は [ADR 0049 の 2026-11-02 追記 6](0049-lab-resident-exploration.md)にある。
+
+## 2026-11-03 追記 10: `wbh-recon-v4` の独立点検と指示の所有者（#807）
+
+- 所有者は WordPress 特化の audit skill に向けて「新しく作るというよりはちょっと追加する」方針を選び、「それがいい」と確認した。その後「スキルどうしやシステムプロンプト同士の重複の整理も必要」と加えた。今回は既存 Trial の終了時に、担当者と別の Root が固定ソースと研究 file を突き合わせる手順を `wbh-recon-v4` に足す。
+- Root は入口の登録、保存値の読み戻し箇所、ブラウザ側の描画箇所を固定ソースで開き、地図、列挙一覧、担当者の経路 file、目的文が求める登録簿に無い経路を、file・行・記録から漏れた内容付きで未完として登録する。担当 sink がまだ分からなければ未完のまま調べる。新しく未完になった sink は目的文どおり同じ sink の後続担当が追う。点検の自己申告は網羅や Finding 確定の根拠にしない。
+- 指示の重複を照合した結果、目的文 v22 は子を sink 別に配り、`wbh-recon-v3` 手順 8 は subsystem 別に配るため衝突していた。子の分配は目的文が持つ。v4 手順 8 は割り当て済みの子へ地図を渡す手順だけにした。Lab 付きで `wbh-lab` がある場合、Lab に答えられる未完行はその手順 9 を先に通し、その後 recon の終了点検をする。Harness の生成節が Lab の命令・予算・出力契約を持つ境界は変えない。
+- 別に見つかった目的文の「子は 30 行以内で返す」と生成契約の厳密な 4 キー JSON、および目的文の「3 skills」と Lab 付き Trial の 4 本の不一致は、版付き目的文の次の整理で扱う。今回の探索の測定軸を増やさないため、目的文と Harness は変えない。リポジトリ独自の system prompt は無く、目的文と生成節が CLI / SDK へ渡る。監査の対照表は [review 文書](../reviews/2026-11-03-discovery-instruction-overlap-and-recon-v4.md)に置く。
+- v3 の本文と digest は残して `archived`、v4 を `current` にする。全文、日本語訳、出典対照表は同じ review 文書。新規 campaign は `discovery.skills` で v4 を名指すときだけ使う。採否は本番の Lab 発火 / Codex 時間と Wordfence の結果で行い、登録簿で新たに開いた経路の数は診断値にする。効果がなければ v4 を `archived` にし、v3 を `current` に戻して campaign の pin を戻す。既存 Trial の digest は維持する。

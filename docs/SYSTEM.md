@@ -93,9 +93,9 @@ flowchart LR
 
 ## 5. 段 3: 探索
 
-対象ごとに 1 回、Codex の Root と子が協調する Trial を gVisor の使い捨て sandbox で行う。Harness が渡すのは、固定したソース（読み取り専用）、人間が書いた trust 境界宣言、Programme Boundary、目的文、Harness が生成する節（`## Run parameters`、Finding / Lead の出力契約 v4、スキルの場所、`## Prior research`）だけである。評価対象の答え、PoC、公開履歴の中身は渡さない。外向き通信は認証ブローカー経由の provider API に限る。
+対象ごとに 1 回、Codex の Root と子が協調する Trial を gVisor の使い捨て sandbox で行う。Harness が渡すのは、固定したソース（読み取り専用）、人間が書いた trust 境界宣言、Programme Boundary、目的文、Harness が生成する節（`## Run parameters`、Finding / Lead の出力契約 v4、必要なときの `## Prior research`）である。名指したスキルは CLI home に別置きする。評価対象の答え、PoC、公開履歴の中身は渡さない。外向き通信は認証ブローカー経由の provider API に限る。
 
-本番の mode は `wide` で、目的文は `wp2shell-bounty-v22-wide`、スキルは `wbh-recon` v2、`wbh-tools` v1、`wbh-setup` v1 を sandbox に置く。子は同時に 8 まで、制限時間は 120 分で、`wide` は最初の最終報告で終える。Claude runtime の share は 0 である。同じ plugin の前の版の Trial が封じた地図 2 file（`recon-map.md`、`lab-setup.md`）は、`discovery.priorResearch: same-target` のとき `/workspace/research/prior/` に置く。どこを読むか、何を仮説にするか、子に何を任せるかは Root が決める。Harness は舵を取らない。
+標準の `wide` の目的文は `wp2shell-bounty-v22-wide`。`discovery.skills` に id を書いた campaign だけ、その版のスキルを sandbox に置く。リポジトリの `policy/campaign.json` はスキルを指定していない。本番の campaign 設定は Git の外で管理する。子の同時上限は設定値で、制限時間の上限は 120 分、`wide` は最初の最終報告で終える。Claude runtime の share は 0 である。`discovery.priorResearch: same-target` のときは、同じ plugin の前の版の Trial が封じた地図、通常利用の記録、登録簿などの許可 file を `/workspace/research/prior/` に置く（ADR 0048、0049）。どこを読むか、何を仮説にするか、子に何を任せるかは Root が決める。Harness は舵を取らない。
 
 止まった Root は、同じ Snapshot と残りの制限時間で新しい sandbox に再開できる。Codex の `provider-limited` と死んだ持ち主の `interrupted` は自動で、それ以外は操作者の名指しで再開する。言い換えはしない。
 
