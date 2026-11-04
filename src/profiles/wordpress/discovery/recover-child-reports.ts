@@ -1,4 +1,5 @@
 import type { PrivateArtifactStore } from "../../../infrastructure/private-artifact-store.js";
+import { z } from "zod";
 import {
   canonicalDigest,
   canonicalJson,
@@ -20,6 +21,7 @@ const turnsParserVersion = "child-turns-merge-v1";
 type Started = Extract<LedgerEventV1, { type: "discovery-run-started" }>;
 type Finished = Extract<LedgerEventV1, { type: "discovery-run-finished" }>;
 type Recovery = Extract<LedgerEventV1, { type: "child-report-recovered" }>;
+type Pending = Extract<LedgerEventV1, { type: "audit-candidate-pending" }>;
 type Options = {
   readonly campaignId: string;
   readonly ledger: Ledger;
@@ -32,6 +34,11 @@ type Counts = {
   readonly findings: number;
   readonly leads: number;
 };
+
+const archivedRootReportSchema = z.object({
+  findings: z.array(z.unknown()),
+  leads: z.array(z.unknown()),
+});
 
 /** The campaign's archived runs, receipts and diagnostics, read once per call. */
 function archive(options: Options) {
@@ -133,6 +140,7 @@ function archive(options: Options) {
     readonly sourceDiagnosticDigest: string;
     readonly report: Parameters<typeof recordWordPressReport>[0];
     readonly select?: (kind: "finding" | "lead", index: number) => boolean;
+    readonly selectCheck?: (index: number) => boolean;
     /** Older recoveries kept the parser version out of their admission identities. */
     readonly versionedAdmission: boolean;
   }) => {
@@ -188,11 +196,17 @@ function archive(options: Options) {
       trialId: childStart.trialId ?? childStart.runId,
       snapshotDigest: childStart.snapshotDigest,
       reportArtifactDigest: reportRef.digest,
+      runKind: "child",
+      admissionContract:
+        childStart.configuration.admissionContract ?? "direct/v1",
       existingIdentities,
       ...(input.versionedAdmission
         ? { parserVersion: input.parserVersion }
         : {}),
       ...(input.select === undefined ? {} : { select: input.select }),
+      ...(input.selectCheck === undefined
+        ? {}
+        : { selectCheck: input.selectCheck }),
     });
     let findings = 0;
     let leads = 0;
@@ -205,7 +219,158 @@ function archive(options: Options) {
     return { recovered: previous === undefined ? 1 : 0, findings, leads };
   };
 
-  return { started, finished, receiptOf, bound, record };
+  /** Recheck only Root candidates left pending before a completed child's check was recovered. */
+  const reconcilePendingRoots = async (
+    recoveredCheckIds: ReadonlySet<string>,
+  ): Promise<Pick<Counts, "findings" | "leads">> => {
+    if (recoveredCheckIds.size === 0) return { findings: 0, leads: 0 };
+    const current = ledger.readAll({ campaignId }).map(({ event }) => event);
+    const checkedClaims = new Set(
+      current.flatMap((event) =>
+        event.type === "audit-check-recorded" &&
+        event.verdict === "verified" &&
+        recoveredCheckIds.has(event.identity)
+          ? [
+              `${event.trialId}\0${event.snapshotDigest}\0${event.candidateKind}\0${event.claimDigest}`,
+            ]
+          : [],
+      ),
+    );
+    const promoted = new Set(
+      current.flatMap((event) =>
+        event.type === "audit-candidate-promoted"
+          ? [
+              `${event.runId}\0${event.candidateKind}\0${event.candidateIndex}\0${event.claimDigest}`,
+            ]
+          : [],
+      ),
+    );
+    const normalized = new Map(
+      current.flatMap((event) =>
+        event.type === "candidate-normalized"
+          ? [[event.identity, event] as const]
+          : [],
+      ),
+    );
+    const pendingByRoot = new Map<string, Map<string, Pending>>();
+    for (const event of current) {
+      if (event.type !== "audit-candidate-pending") continue;
+      const key = `${event.runId}-${event.candidateKind}-${event.candidateIndex}`;
+      if (
+        // A parser-specific reinterpretation may not match the original Root report.
+        event.identity !== `audit-candidate-pending-${key}` ||
+        event.reason !== "missing-matching-check" ||
+        !checkedClaims.has(
+          `${event.trialId}\0${event.snapshotDigest}\0${event.candidateKind}\0${event.claimDigest}`,
+        ) ||
+        promoted.has(
+          `${event.runId}\0${event.candidateKind}\0${event.candidateIndex}\0${event.claimDigest}`,
+        )
+      )
+        continue;
+      const rootStart = started.get(event.runId);
+      if (
+        rootStart?.runKind !== "explore" ||
+        rootStart.configuration.admissionContract !== "checked/v1" ||
+        rootStart.trialId !== event.trialId ||
+        rootStart.snapshotDigest !== event.snapshotDigest ||
+        !finished.has(event.runId)
+      )
+        continue;
+      const selected =
+        pendingByRoot.get(event.runId) ?? new Map<string, Pending>();
+      selected.set(`${event.candidateKind}\0${event.candidateIndex}`, event);
+      pendingByRoot.set(event.runId, selected);
+    }
+    let findings = 0;
+    let leads = 0;
+    for (const [runId, selected] of pendingByRoot) {
+      const rootStart = started.get(runId)!;
+      const rootFinish = finished.get(runId)!;
+      const receipt = await receiptOf(rootFinish);
+      if (
+        receipt.runId !== runId ||
+        receipt.targetSnapshotDigest !== rootStart.snapshotDigest ||
+        receipt.reportArtifactDigest === "unavailable"
+      )
+        throw new Error(
+          "Archived Root receipt does not match its pending candidates",
+        );
+      const stored = await attachments.readByDigest(
+        "findings",
+        receipt.reportArtifactDigest,
+      );
+      if (stored.status !== "resolved")
+        throw new Error("Archived Root report is unavailable");
+      const report = archivedRootReportSchema.parse(
+        JSON.parse(stored.bytes.toString("utf8")) as unknown,
+      );
+      const existingIdentities = new Set<string>();
+      for (const pending of selected.values()) {
+        const key = `${runId}-${pending.candidateKind}-${pending.candidateIndex}`;
+        const normalizedIdentity = `candidate-normalized-${key}`;
+        const normalizedEvent = normalized.get(normalizedIdentity);
+        const pendingArtifact = pending.artifacts.find(
+          (artifact) => artifact.kind === "candidate",
+        );
+        const normalizedArtifact = normalizedEvent?.artifacts.find(
+          (artifact) => artifact.kind === "candidate",
+        );
+        if (
+          normalizedEvent?.parserVersion !== undefined ||
+          pendingArtifact === undefined ||
+          normalizedArtifact?.digest !== pendingArtifact.digest
+        )
+          throw new Error("Archived Root pending candidate provenance differs");
+        const raw = await evidence.readJson(
+          pendingArtifact.digest,
+          "candidate.json",
+          z.unknown(),
+          8 * 1024 * 1024,
+        );
+        const fromReport = (
+          pending.candidateKind === "finding" ? report.findings : report.leads
+        )[pending.candidateIndex];
+        if (
+          raw.status !== "resolved" ||
+          fromReport === undefined ||
+          canonicalJson(raw.value) !== canonicalJson(fromReport)
+        )
+          throw new Error(
+            "Archived Root report differs from its pending candidate",
+          );
+        existingIdentities.add(normalizedIdentity);
+        existingIdentities.add(pending.identity);
+      }
+      const recorded = await recordWordPressReport(report, {
+        ledger,
+        evidence,
+        base: {
+          schemaVersion: 1,
+          campaignId,
+          snapshotDigest: rootStart.snapshotDigest,
+          occurredAt: (options.clock ?? (() => new Date()))().toISOString(),
+        },
+        runId,
+        runKind: "root",
+        admissionContract: "checked/v1",
+        trialId: rootStart.trialId!,
+        snapshotDigest: rootStart.snapshotDigest,
+        reportArtifactDigest: receipt.reportArtifactDigest,
+        existingIdentities,
+        select: (kind, index) => selected.has(`${kind}\0${index}`),
+      });
+      for (const candidate of recorded.candidates) {
+        if (candidate.outcome !== "recorded" || candidate.status !== "appended")
+          continue;
+        if (candidate.kind === "finding") findings++;
+        else leads++;
+      }
+    }
+    return { findings, leads };
+  };
+
+  return { started, finished, receiptOf, bound, record, reconcilePendingRoots };
 }
 
 const add = (left: Counts, right: Counts): Counts => ({
@@ -263,9 +428,11 @@ export async function recoverWordPressChildReports(
 export async function recoverWordPressChildTurnReports(
   options: Options & { readonly dryRun?: boolean },
 ): Promise<Counts & { readonly skipped: number }> {
-  const { started, finished, receiptOf, bound, record } = archive(options);
+  const { started, finished, receiptOf, bound, record, reconcilePendingRoots } =
+    archive(options);
   let counts: Counts = { recovered: 0, findings: 0, leads: 0 };
   let skipped = 0;
+  const recoveredCheckIds = new Set<string>();
   for (const childFinish of finished.values()) {
     const childStart = started.get(childFinish.runId);
     if (childFinish.outcome !== "completed" || childStart?.runKind !== "child")
@@ -303,13 +470,27 @@ export async function recoverWordPressChildTurnReports(
       lead: merged.leads.flatMap((claim, index) =>
         known.lead.has(canonicalJson(claim)) ? [] : [index],
       ),
+      // Replay the whole check sequence when it differs. Membership would drop
+      // a final A in A -> B -> A when the original capture kept only A.
+      check:
+        canonicalJson(merged.checks ?? []) ===
+        canonicalJson(recorded.checks ?? [])
+          ? []
+          : (merged.checks ?? []).map((_, index) => index),
     };
-    if (added.finding.length + added.lead.length === 0) continue;
+    if (added.finding.length + added.lead.length + added.check.length === 0)
+      continue;
     if (options.dryRun === true) {
       counts = add(counts, {
         recovered: 1,
-        findings: added.finding.length,
-        leads: added.lead.length,
+        findings:
+          child.childStart.configuration.admissionContract === "checked/v1"
+            ? 0
+            : added.finding.length,
+        leads:
+          child.childStart.configuration.admissionContract === "checked/v1"
+            ? 0
+            : added.lead.length,
       });
       continue;
     }
@@ -322,9 +503,22 @@ export async function recoverWordPressChildTurnReports(
         sourceDiagnosticDigest: child.sourceDiagnosticDigest,
         report: merged,
         select: (kind, index) => added[kind].includes(index),
+        selectCheck: (index) => added.check.includes(index),
         versionedAdmission: true,
       }),
     );
+    if (
+      child.childStart.configuration.admissionContract === "checked/v1" &&
+      added.check.length > 0
+    )
+      for (const index of added.check)
+        recoveredCheckIds.add(
+          `audit-check-${child.childStart.runId}-${index}-${turnsParserVersion}`,
+        );
+  }
+  if (options.dryRun !== true) {
+    const promoted = await reconcilePendingRoots(recoveredCheckIds);
+    counts = add(counts, { recovered: 0, ...promoted });
   }
   return { ...counts, skipped };
 }

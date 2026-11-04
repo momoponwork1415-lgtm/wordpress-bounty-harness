@@ -16,6 +16,7 @@ import {
 } from "../../../src/infrastructure/canonical-json.js";
 import { PrivateArtifactStore } from "../../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../../src/ledger/index.js";
+import { recordWordPressReport } from "../../../src/profiles/wordpress/discovery/candidate-admission.js";
 import { recoverWordPressChildTurnReports } from "../../../src/profiles/wordpress/discovery/recover-child-reports.js";
 
 // #539: 完了した Codex の子の前のターンの報告を、記録済みの報告に無い候補だけ追記する。
@@ -76,7 +77,17 @@ afterEach(async () => {
     await rm(directory, { recursive: true, force: true });
 });
 
-async function archivedTrial(recordedReport: unknown) {
+async function archivedTrial(
+  recordedReport: unknown,
+  admissionContract?: "checked/v1",
+  turns: readonly unknown[] = [turnOne, turnTwo],
+  rootReport?: {
+    readonly findings: readonly unknown[];
+    readonly leads: readonly unknown[];
+    readonly examined: string;
+    readonly unexamined: string;
+  },
+) {
   const root = await mkdtemp(join(tmpdir(), "wbh-child-turns-"));
   directories.push(root);
   const evidence = new PrivateArtifactStore({
@@ -128,8 +139,7 @@ async function archivedTrial(recordedReport: unknown) {
         cyber_access_program: "standard",
       },
     },
-    done(turnOne),
-    done(turnTwo),
+    ...turns.map(done),
   ]
     .map((value) => JSON.stringify(value))
     .join("\n");
@@ -137,6 +147,13 @@ async function archivedTrial(recordedReport: unknown) {
     attachments.put("diagnostic", Buffer.from(rootRollout)),
     attachments.put("diagnostic", Buffer.from(childRollout)),
   ]);
+  const rootAttachment =
+    rootReport === undefined
+      ? undefined
+      : await attachments.put(
+          "findings",
+          Buffer.from(canonicalJson(rootReport)),
+        );
   const receipt = async (
     runId: string,
     diagnosticArtifactDigest: string,
@@ -165,7 +182,10 @@ async function archivedTrial(recordedReport: unknown) {
     snapshotDigest: digest,
     occurredAt: now,
   };
-  const configuration = { promptVariant: "synthetic" };
+  const configuration = {
+    promptVariant: "synthetic",
+    ...(admissionContract === undefined ? {} : { admissionContract }),
+  };
   for (const [runId, kind] of [
     [ROOT, "explore"],
     [CHILD, "child"],
@@ -186,7 +206,7 @@ async function archivedTrial(recordedReport: unknown) {
       history: { mode: "none" },
     });
   for (const [runId, receiptDigest] of [
-    [ROOT, await receipt(ROOT, rootDiagnostic.digest)],
+    [ROOT, await receipt(ROOT, rootDiagnostic.digest, rootAttachment?.digest)],
     [
       CHILD,
       await receipt(
@@ -201,10 +221,26 @@ async function archivedTrial(recordedReport: unknown) {
       identity: `discovery-finish-${runId}`,
       type: "discovery-run-finished",
       runId,
-      outcome: "completed",
+      outcome:
+        runId === ROOT && rootReport !== undefined ? "failed" : "completed",
       costUsd: "unavailable",
       wallTimeMs: 1000,
+      ...(runId === ROOT && rootReport !== undefined
+        ? { reason: "evidence" as const, reasonDetail: "audit-check-missing" }
+        : {}),
       artifacts: [{ kind: "native-run-receipt", digest: receiptDigest }],
+    });
+  if (rootReport !== undefined && rootAttachment !== undefined)
+    await recordWordPressReport(rootReport, {
+      ledger,
+      evidence,
+      base,
+      runId: ROOT,
+      runKind: "root",
+      admissionContract: "checked/v1",
+      trialId: ROOT,
+      snapshotDigest: digest,
+      reportArtifactDigest: rootAttachment.digest,
     });
   return {
     ledger,
@@ -256,6 +292,228 @@ it("appends only the claims of earlier child turns, once, bound to the child run
     skipped: 0,
   });
   expect(eventsOf(ledger)).toHaveLength(before + appended.length);
+});
+
+it("cannot backfill a checked/v1 child claim directly into the Finding queue", async () => {
+  const { ledger, options } = await archivedTrial(
+    extractCandidateReport(JSON.stringify(turnTwo)),
+    "checked/v1",
+  );
+  expect(
+    await recoverWordPressChildTurnReports({ ...options, dryRun: true }),
+  ).toEqual({ recovered: 1, findings: 0, leads: 0, skipped: 0 });
+  expect(await recoverWordPressChildTurnReports(options)).toEqual({
+    recovered: 1,
+    findings: 0,
+    leads: 0,
+    skipped: 0,
+  });
+  const events = eventsOf(ledger);
+  expect(
+    events.filter((event) => event.type === "finding-recorded"),
+  ).toHaveLength(0);
+  expect(
+    events.filter((event) => event.type === "audit-candidate-pending"),
+  ).toHaveLength(1);
+});
+
+it("recovers a child check from an earlier turn without admitting a claim", async () => {
+  const last = { ...turnTwo, findings: [], leads: [], checks: [] };
+  const first = {
+    ...turnOne,
+    findings: [],
+    leads: [],
+    checks: [
+      {
+        kind: "finding",
+        candidate: finding("Earlier turn effect", 1),
+        verdict: "verified",
+        explanation: "Source re-read in an earlier child turn",
+      },
+    ],
+  };
+  const { ledger, options } = await archivedTrial(
+    extractCandidateReport(JSON.stringify(last)),
+    "checked/v1",
+    [first, last],
+  );
+  expect(await recoverWordPressChildTurnReports(options)).toEqual({
+    recovered: 1,
+    findings: 0,
+    leads: 0,
+    skipped: 0,
+  });
+  expect(
+    eventsOf(ledger).filter((event) => event.type === "audit-check-recorded"),
+  ).toHaveLength(1);
+  expect(
+    eventsOf(ledger).filter((event) => event.type === "finding-recorded"),
+  ).toHaveLength(0);
+});
+
+it("promotes a previously pending Root claim after recovering its completed child's check", async () => {
+  const candidate = finding("Earlier turn effect", 1);
+  const last = { ...turnTwo, findings: [], leads: [], checks: [] };
+  const first = {
+    ...turnOne,
+    findings: [],
+    leads: [],
+    checks: [
+      {
+        kind: "finding",
+        candidate,
+        verdict: "verified",
+        explanation: "Reopened the current source and checked the guard",
+      },
+    ],
+  };
+  const { ledger, options } = await archivedTrial(
+    extractCandidateReport(JSON.stringify(last)),
+    "checked/v1",
+    [first, last],
+    {
+      findings: [candidate],
+      leads: [],
+      examined: "source",
+      unexamined: "none",
+    },
+  );
+  expect(ledger.read({ type: "audit-candidate-pending" })).toHaveLength(1);
+  expect(ledger.read({ type: "finding-recorded" })).toHaveLength(0);
+  const laterOptions = {
+    ...options,
+    clock: () => new Date("2026-11-04T00:00:00Z"),
+  };
+  expect(await recoverWordPressChildTurnReports(laterOptions)).toEqual({
+    recovered: 1,
+    findings: 1,
+    leads: 0,
+    skipped: 0,
+  });
+  expect(ledger.read({ type: "finding-recorded" })).toHaveLength(1);
+  expect(ledger.read({ type: "audit-candidate-promoted" })).toHaveLength(1);
+  expect(ledger.read({ type: "finding-recorded" })[0]?.event.occurredAt).toBe(
+    "2026-11-04T00:00:00.000Z",
+  );
+  expect(ledger.funnel("campaign-1").auditPending).toBe(0);
+  const count = eventsOf(ledger).length;
+  expect(await recoverWordPressChildTurnReports(laterOptions)).toEqual({
+    recovered: 0,
+    findings: 0,
+    leads: 0,
+    skipped: 0,
+  });
+  expect(eventsOf(ledger)).toHaveLength(count);
+  expect(
+    ledger.read({ type: "discovery-run-finished" })[0]?.event,
+  ).toMatchObject({
+    runId: ROOT,
+    outcome: "failed",
+    reasonDetail: "audit-check-missing",
+  });
+});
+
+it("replays a full A-B-A check sequence when the final A was already captured", async () => {
+  const candidate = finding("Earlier turn effect", 1);
+  const verified = {
+    kind: "finding",
+    candidate,
+    verdict: "verified",
+    explanation: "The current source supports the exact draft",
+  };
+  const refuted = {
+    ...verified,
+    verdict: "refuted",
+    explanation: "A guard appeared to deny the route",
+  };
+  const report = (check: typeof verified) => ({
+    findings: [],
+    leads: [],
+    examined: "source",
+    unexamined: "none",
+    checks: [check],
+  });
+  const { ledger, options } = await archivedTrial(
+    extractCandidateReport(JSON.stringify(report(verified))),
+    "checked/v1",
+    [report(verified), report(refuted), report(verified)],
+  );
+  expect(await recoverWordPressChildTurnReports(options)).toEqual({
+    recovered: 1,
+    findings: 0,
+    leads: 0,
+    skipped: 0,
+  });
+  expect(
+    ledger
+      .read({ type: "audit-check-recorded" })
+      .map(({ event }) =>
+        event.type === "audit-check-recorded"
+          ? [event.checkIndex, event.verdict]
+          : [],
+      ),
+  ).toEqual([
+    [0, "verified"],
+    [1, "refuted"],
+    [2, "verified"],
+  ]);
+});
+
+it("does not replay parser-specific pending claims against the original Root report", async () => {
+  const original = finding("Original Root claim", 1);
+  const reinterpretation = finding("Later parser claim", 2);
+  const last = {
+    findings: [],
+    leads: [],
+    examined: "last",
+    unexamined: "",
+    checks: [],
+  };
+  const first = {
+    ...last,
+    checks: [
+      {
+        kind: "finding",
+        candidate: reinterpretation,
+        verdict: "verified",
+        explanation: "The later parser claim was checked",
+      },
+    ],
+  };
+  const { ledger, options } = await archivedTrial(
+    extractCandidateReport(JSON.stringify(last)),
+    "checked/v1",
+    [first, last],
+    { findings: [original], leads: [], examined: "source", unexamined: "none" },
+  );
+  await recordWordPressReport(
+    { findings: [reinterpretation], leads: [] },
+    {
+      ledger,
+      evidence: options.evidence,
+      base: {
+        schemaVersion: 1,
+        campaignId: "campaign-1",
+        snapshotDigest: digest,
+        occurredAt: now,
+      },
+      runId: ROOT,
+      runKind: "root",
+      admissionContract: "checked/v1",
+      trialId: ROOT,
+      snapshotDigest: digest,
+      reportArtifactDigest: digest,
+      parserVersion: "reparse-v1",
+    },
+  );
+  expect(
+    await recoverWordPressChildTurnReports({
+      ...options,
+      clock: () => new Date("2026-11-04T00:00:00Z"),
+    }),
+  ).toEqual({ recovered: 1, findings: 0, leads: 0, skipped: 0 });
+  expect(ledger.read({ type: "finding-recorded" })).toHaveLength(0);
+  expect(ledger.read({ type: "audit-candidate-promoted" })).toHaveLength(0);
 });
 
 it("appends nothing when the rollout does not reproduce the recorded report", async () => {

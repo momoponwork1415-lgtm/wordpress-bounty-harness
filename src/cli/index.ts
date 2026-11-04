@@ -528,7 +528,7 @@ function choice<const Choices extends readonly string[]>(
 }
 
 function stages(counts: FunnelCounts): string {
-  return `最終JSON到達 ${counts.reached} → 受理 ${counts.accepted} / 保留 ${counts.held} / parked ${counts.parked} → raw ${counts.raw} → verifier通過 ${counts.verified} → confirmed ${counts.confirmed} / reproduced ${counts.reproduced} / contradicted ${counts.contradicted} / incomplete ${counts.incomplete} → reviewed ${counts.reviewed} → in-scope ${counts.inScope} → submitted ${counts.submitted}${counts.submittedExternally > 0 ? ` (external ${counts.submittedExternally})` : ""} → outcome ${counts.outcome}`;
+  return `最終JSON到達 ${counts.reached} → 受理 ${counts.accepted} / 保留 ${counts.held}${counts.auditPending > 0 ? ` / audit pending ${counts.auditPending}` : ""} / parked ${counts.parked} → raw ${counts.raw} → verifier通過 ${counts.verified} → confirmed ${counts.confirmed} / reproduced ${counts.reproduced} / contradicted ${counts.contradicted} / incomplete ${counts.incomplete} → reviewed ${counts.reviewed} → in-scope ${counts.inScope} → submitted ${counts.submitted}${counts.submittedExternally > 0 ? ` (external ${counts.submittedExternally})` : ""} → outcome ${counts.outcome}`;
 }
 
 export function formatStopRow(row: StopRow): string {
@@ -2602,6 +2602,40 @@ const COMMANDS: readonly Command[] = [
           .join(", ");
         print([
           `held  ${event.impact ?? "unclassified"}  ${candidate ?? "(candidate unavailable)"}  ${event.runId}#${event.candidateIndex}  issues: ${issues}  ${candidate === undefined ? "" : state.store.contentPath(candidate)}`.trimEnd(),
+        ]);
+      }
+      return 0;
+    },
+  }),
+  command({
+    name: "review audit-pending",
+    readOnly: true,
+    required: ["campaign"],
+    usage: ["review audit-pending --campaign <id>"],
+    options: { campaign: STR },
+    handler: async ({ values, state, print }) => {
+      const campaignId = required(values.campaign, "campaign");
+      const pending = new Map<
+        string,
+        Extract<LedgerEventV1, { type: "audit-candidate-pending" }>
+      >();
+      for (const { event } of state.ledger.readAll({ campaignId })) {
+        if (
+          event.type !== "audit-candidate-pending" &&
+          event.type !== "audit-candidate-promoted"
+        )
+          continue;
+        const key = `${event.snapshotDigest}\0${event.trialId}\0${event.candidateKind}\0${event.claimDigest}`;
+        if (event.type === "audit-candidate-pending") pending.set(key, event);
+        else pending.delete(key);
+      }
+      if (pending.size === 0) print(["no audit-pending candidates"]);
+      for (const event of pending.values()) {
+        const candidate = event.artifacts.find(
+          (artifact) => artifact.kind === "candidate",
+        )?.digest;
+        print([
+          `audit-pending  ${event.candidateKind}  ${event.reason}  ${event.runId}#${event.candidateIndex}  ${candidate ?? "(candidate unavailable)"}  ${candidate === undefined ? "" : state.store.contentPath(candidate)}`.trimEnd(),
         ]);
       }
       return 0;

@@ -61,3 +61,19 @@ Cloudflare の `confirmed` を本リポジトリの確定へ写さない。agent
 ## 消し方
 
 新しい上位スキルと入力版を本番設定から外し、旧目的文と旧スキルの版を使う。実装 PR は段ごとに戻せるよう分ける。追加した台帳 event と過去 Trial の digest は追記専用のまま読み続ける。
+
+## 2026-11-04 追記: v24-wide の独立点検を出口で強制する
+
+上の決定は v23-wide / `wbh-audit-v1` のスキルによる一巡を定めたが、スキルだけでは子の直接 Finding を止められない。所有者は Harness も Cloudflare の監査手順に寄せることを決めたため、同じ移行の次版として `wp2shell-bounty-v24-wide` と `wbh-audit-v2` に限り、版付きの受理契約 `checked/v1` を使う。v22-wide と v23-wide の `direct/v1`、過去の Finding / Lead、旧台帳イベントは従来どおり読み続ける。本番の既定は比較と採否まで v22-wide のままである。
+
+v24 の Root 最終報告は従来の `findings`、`leads`、`examined`、`unexamined` の 4 キーとする。子の最終報告はこの 4 キーに `checks` を加えた 5 キーとし、各点検を `{kind, candidate, verdict, explanation}` とする。`kind` は `finding` / `lead`、`verdict` は `verified` / `replace` / `refuted` / `blocked` である。点検者は発見者とは別の子として固定ソースと必要な Lab 観測を読み直す。Root は点検済みの正確な候補を最終報告に出す。子が `findings` / `leads` に自発的に出した候補も失わない。
+
+Harness はすべての生候補と点検本文を先に Private Evidence に封じ、台帳には digest と状態だけを追記する。`checked/v1` では、子の実 run が `completed` で Root と異なり、同じ Trial と Target Snapshot に属し、点検の Private Evidence が解決できることを確かめる。その子の `verified` 点検にある候補と Root 候補について、正規化後の claim の canonical digest が一致するときだけ、既存の admission に渡して `finding-recorded` / `lead-recorded`、または Programme Boundary による `finding-parked` へ進める。Root の文面や研究ファイルの自己申告だけでは点検の代わりにならない。
+
+一致する点検が無い Root 候補と、子の自発候補は pending として digest・理由を残し、別の一覧で見られるようにする。`replace` / `refuted` / `blocked` は点検者の報告であり、Harness の成立判定でも人間の `contradicted` でもない。Root 候補の点検が足りない Trial は理由付き `incomplete` とし、正常な候補 0 件に数えない。スキーマ不適合は従来の `candidate-held` と区別する。昇格した対象範囲内の Finding は検証結果に関係なく全件をレビュー列に出す（ADR 0031）。pending 候補を隠れた park や棄却には使わない。
+
+Harness が確かめるのは出力の形式、run と digest の結合、Private Evidence の存在だけである。ソース経路の成立、Lab の観測の意味、脆弱性の確定は判定しない。確定の根拠は引き続き名指しした人間の Lab 観測と再現の記録だけとする（SPEC 不変条件 3〜5）。以前の調査の入力はこの版では増やさず、過去 Finding / Lead の索引は上の決定どおり別の版付き入力契約で扱う。
+
+点検者が発見者と別の子であることはスキルが求める。Harness は点検者の実 run が Root と別であること、さらに claim を子の自発候補として記録した子自身の点検を使わないことを確認する。scratch の経路を最初に発見した子の識別までは証明しない。後続の同じ子による反証または別の子との点検の食い違いは、昇格に使わず pending に残す。
+
+採否は同じ選定帯と Lab 条件の本番比較で決める。pending・独立点検・lookup の件数は診断値とし、Finding の成立数や人間の `match` と読み替えない。戻すときは新規 Trial の v24 / `checked/v1` の指定を外し、旧版の受理経路を使う。追記済みの候補・点検イベントと Private Evidence の digest は削除せず読取を維持する。

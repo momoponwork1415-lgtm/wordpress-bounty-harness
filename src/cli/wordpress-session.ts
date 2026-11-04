@@ -293,11 +293,15 @@ export const wordpressCampaignConfigSchema = z
           message: "discovery.skills names each skill once",
         });
     }
-    const hasAuditSkill =
-      config.discovery.skills?.includes("wbh-audit-v1") ?? false;
-    if (promptId === "wp2shell-bounty-v23-wide") {
+    const auditSkill =
+      promptId === "wp2shell-bounty-v23-wide"
+        ? "wbh-audit-v1"
+        : promptId === "wp2shell-bounty-v24-wide"
+          ? "wbh-audit-v2"
+          : undefined;
+    if (auditSkill !== undefined) {
       for (const required of [
-        "wbh-audit-v1",
+        auditSkill,
         "wbh-setup-v1",
         "wbh-lab-v1",
       ] as const)
@@ -305,27 +309,38 @@ export const wordpressCampaignConfigSchema = z
           context.addIssue({
             code: "custom",
             path: ["discovery", "skills"],
-            message: `wp2shell-bounty-v23-wide requires ${required}`,
+            message: `${promptId} requires ${required}`,
           });
       if (config.discovery.skills?.includes("wbh-recon-v3"))
         context.addIssue({
           code: "custom",
           path: ["discovery", "skills"],
-          message: "wbh-audit-v1 replaces wbh-recon-v3 in this Trial",
+          message: `${auditSkill} replaces wbh-recon-v3 in this Trial`,
         });
       if (config.discovery.lab.mode !== "attached")
         context.addIssue({
           code: "custom",
           path: ["discovery", "lab"],
-          message:
-            "wp2shell-bounty-v23-wide requires an attached exploration Lab",
+          message: `${promptId} requires an attached exploration Lab`,
         });
     }
-    if (hasAuditSkill && promptId !== "wp2shell-bounty-v23-wide")
+    if (
+      config.discovery.skills?.includes("wbh-audit-v1") &&
+      promptId !== "wp2shell-bounty-v23-wide"
+    )
       context.addIssue({
         code: "custom",
         path: ["discovery", "skills"],
         message: "wbh-audit-v1 requires wp2shell-bounty-v23-wide",
+      });
+    if (
+      config.discovery.skills?.includes("wbh-audit-v2") &&
+      promptId !== "wp2shell-bounty-v24-wide"
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["discovery", "skills"],
+        message: "wbh-audit-v2 requires wp2shell-bounty-v24-wide",
       });
     if (
       config.discovery.followUp === "leads" &&

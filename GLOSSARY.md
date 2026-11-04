@@ -1,6 +1,6 @@
 # 用語集
 
-[SPEC.md](docs/SPEC.md) 第 15 節と同じ語は SPEC が正である。ここには、AGENTS.md と運用の文書が引く語と、文書の表記の決め事を置く。
+[SPEC.md](docs/SPEC.md) 第 11 節が参照する用語と、文書の表記の決め事をここに置く。
 
 ## 表記の決め事
 
@@ -45,8 +45,12 @@
 | Root / 子 | 協調 Trial の親エージェントが Root、Root が起動する subagent が子。同時に生きる子の上限は設定値 `discovery.maxChildren`（1〜8）で、何体使うかは Root が決める（ADR 0029、ADR 0039）。 |
 | 探索スキル（discovery skill） | 探索の手順 1 つを書いた `SKILL.md`。campaign 設定 `discovery.skills` で id を名指しすると、Harness が digest を検証してサンドボックスの CLI home に置き、CLI が name と description を Root と子に一覧する。目的文は変えない。registry は `prompts/skills.ts`、本文は `prompts/skills/<id>/SKILL.md`。同じディレクトリの script や参照文も digest で固定して一緒に置く（ADR 0043）。 |
 | Discovery run | モデル実行の記録単位。Trial の中で何回モデルを呼んだかと区別する。 |
-| Finding | 攻撃者の立場、入口から影響までのソース上の経路、観測を備えた未確認の主張。 |
-| Lead | ソースに根拠があり、影響までに未解決の辺が残る手がかり。Finding でも検証結果でもない。`review leads` で人間が全件を見る。 |
+| 探索候補 | Root または子が報告した、受理前の Finding / Lead の主張。 |
+| 独立点検 | スキルの手順では発見者とは別の子が、同じ候補を固定ソースと必要な Lab 観測から読み直すこと。Harness は Root と異なる完了した子の報告であることを確認し、その claim を子の自発候補として記録した子自身の点検を昇格に使わない。scratch の最初の発見者までは証明しない。点検者の `verified` は人間による確定を意味しない。 |
+| pending 候補 | 独立点検との一致が無いなどの理由で、Finding / Lead にまだ昇格していない探索候補。スキーマ不適合の保留候補とは区別する。 |
+| 受理契約 | 探索候補を Finding / Lead として記録する前の条件。`direct/v1` は従来の直接受理、`checked/v1` は独立点検との結合を求める版。 |
+| Finding | 攻撃者の立場、入口から影響までのソース上の経路、観測を備え、受理された未確認の主張。独立点検を経ても脆弱性の確定ではない。 |
+| Lead | ソースに根拠があり、影響までに未解決の辺が残る、受理された手がかり。Finding でも検証結果でもない。`review leads` で人間が全件を見る。 |
 | VerificationResult | Lab での検証 attempt の結果。新しい検証は `incomplete` だけを出し、Harness の捕捉が残ったものは `incomplete(awaiting-human-observation)` として人間の観測を待つ（ADR 0040）。 |
 | Lab 観測（`review observe`） | 人間が review Lab か検証 Lab で見た結果を `match` / `mismatch` / `unavailable` で記録するもの。`review decide --reproduced match` と揃って初めて確定の根拠になる（不変条件 3）。所有者が会話で結果を明言したときは AI 操作役が所有者の名前で代行記録し、attestation を Private Evidence に残す（ADR 0040 追記 3）。 |
 | 保存先の観測器（lookup） | 探索 Lab の制御口の `POST /find`（植えた印がどの table / column / file に入ったか）、`POST /sql`（読み取り専用ユーザーで SELECT 1 文）、`POST /trace`（1 リクエストの plugin 内の関数呼び出し列）。3 つで 1 つの予算 `discovery.lab.maxLookups` を使う。答えは観測で、Harness は読まず判定しない（ADR 0049）。 |
@@ -54,7 +58,7 @@
 | Submission Candidate | 最新版で確認済みの脆弱性、提出先、文案の版を結び付けたレビュー対象。 |
 | Private Evidence | HTTP 記録、ペイロード、画像、認証情報、未公開の発見を置く Git 外の保管先。 |
 | Programme Boundary | Harness が探索に付ける節で、報奨プログラムの対象内とする影響を書く。外にある impact の Finding は `finding-parked` に回す（SPEC 第 8a 節・第 8b 節）。 |
-| レビュー列 | 人間のレビューを待つ Finding の列（review queue）。対象範囲内の Finding は、検証の結果に関係なく全件が出る（SPEC 第 8 節、ADR 0031）。 |
+| レビュー列 | 人間のレビューを待つ Finding の列（review queue）。対象範囲内で受理された Finding は、検証の結果に関係なく全件が出る（SPEC 第 7 節、ADR 0031）。 |
 | 保留候補（candidate-held） | 探索 run の最終 JSON から抽出したが、正規化後も出力契約を通らない Finding / Lead 候補。分類と issue path だけを台帳に残し、本文は Private Evidence に置く（ADR 0018）。 |
 | finding-parked | Programme Boundary 外の impact と、判別の付きにくい 5 分類の Finding。旧契約の申告欄で管理者の脆弱な設定などを選んだ Finding も含む（reason `declared-precondition`、ADR 0038 追記 13）。台帳と Private Evidence に残し、検証・レビュー列・funnel の raw に入れない。一覧は `review parked` で見る（ADR 0032）。 |
 | 帯（`orderingBands`） | 選定の順序でインストール数を区切る境界（既定 100 万 / 10 万 / 1 万）。`install-band-then-published` は高い帯を先に、帯の中は stable 版の公開日が新しい順に並べる（ADR 0037 追記 4）。 |

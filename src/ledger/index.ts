@@ -191,6 +191,8 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       promptDigest: digest.optional(),
       objectiveDigest: digest.optional(),
       contractDigest: digest.optional(),
+      /** Absent on older Trials: candidates from every agent are admitted directly. */
+      admissionContract: z.enum(["direct/v1", "checked/v1"]).optional(),
       /**
        * Redesign 2026-10-25 §5: sha256 of each human-written section of an
        * objective composed from fragments; absent on earlier events and on
@@ -597,6 +599,45 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     primitive: id.optional(),
     missingEdge: id.optional(),
   }),
+  /** A valid checked/v1 claim retained outside the Finding and Lead queues. */
+  event({
+    type: z.literal("audit-candidate-pending"),
+    runId: id,
+    trialId: id,
+    candidateKind: z.enum(["finding", "lead"]),
+    candidateIndex: z.number().int().nonnegative(),
+    claimDigest: digest,
+    reason: z.enum(["child-output", "missing-matching-check"]),
+  }),
+  /** The same candidate later passed the checked/v1 handoff. */
+  event({
+    type: z.literal("audit-candidate-promoted"),
+    runId: id,
+    trialId: id,
+    candidateKind: z.enum(["finding", "lead"]),
+    candidateIndex: z.number().int().nonnegative(),
+    claimDigest: digest,
+    checkRunId: id,
+    checkIndex: z.number().int().nonnegative(),
+  }),
+  /** An actual child report's AI check. The full text stays in Private Evidence. */
+  event({
+    type: z.literal("audit-check-recorded"),
+    runId: id,
+    trialId: id,
+    checkIndex: z.number().int().nonnegative(),
+    candidateKind: z.enum(["finding", "lead"]),
+    claimDigest: digest,
+    verdict: z.enum(["verified", "replace", "refuted", "blocked"]),
+  }),
+  /** A malformed AI check remains inspectable without becoming a verdict. */
+  event({
+    type: z.literal("audit-check-held"),
+    runId: id,
+    trialId: id,
+    checkIndex: z.number().int().nonnegative(),
+    issuePaths: z.array(z.string().max(256)),
+  }),
   event({
     type: z.literal("finding-recorded"),
     findingId: id,
@@ -619,6 +660,14 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     group: z.strictObject({ id, keys: z.array(digest) }).optional(),
     /** ADR 0042: the partition whose tracer reported it; absent outside partitioned Trials. */
     partition: id.optional(),
+    /** A checked/v1 AI process receipt, not a human confirmation. */
+    auditCheck: z
+      .strictObject({
+        runId: id,
+        checkIndex: z.number().int().nonnegative(),
+        digest,
+      })
+      .optional(),
   }),
   /** A Finding held outside the active verification and review queues. */
   event({
@@ -668,6 +717,14 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     continuationOrdinal: z.number().int().nonnegative().optional(),
     /** ADR 0042: the partition whose tracer reported it; absent outside partitioned Trials. */
     partition: id.optional(),
+    /** A checked/v1 AI process receipt, not a human confirmation. */
+    auditCheck: z
+      .strictObject({
+        runId: id,
+        checkIndex: z.number().int().nonnegative(),
+        digest,
+      })
+      .optional(),
   }),
   /**
    * ADR 0042: the enumerator's inventory and partition proposal, after the
@@ -1157,6 +1214,8 @@ export type FunnelCounts = {
   readonly reached: number;
   readonly accepted: number;
   readonly held: number;
+  /** Valid checked/v1 claims still outside the Finding and Lead queues. */
+  readonly auditPending: number;
   /** Findings outside the Programme Boundary; not in accepted or raw (#185). */
   readonly parked: number;
   readonly raw: number;
@@ -1345,6 +1404,7 @@ function emptyCounts(): Counts {
     reached: 0,
     accepted: 0,
     held: 0,
+    auditPending: 0,
     parked: 0,
     raw: 0,
     verified: 0,
@@ -2026,6 +2086,11 @@ export class Ledger {
     const objectiveByRun = new Map<string, string>();
     const candidateKeys = new Set<string>();
     const heldKeys = new Set<string>();
+    const auditPendingKeys = new Map<
+      string,
+      Extract<LedgerEventV1, { type: "audit-candidate-pending" }>
+    >();
+    const auditPromotedKeys = new Set<string>();
     const legacyReached: { runId: string; category: string }[] = [];
     const candidateCategory = new Map<string, string>();
     const normalizationSeen = new Set<string>();
@@ -2172,6 +2237,17 @@ export class Ledger {
           }
           break;
         }
+        case "audit-candidate-pending":
+          auditPendingKeys.set(
+            `${current.snapshotDigest}\0${current.trialId}\0${current.candidateKind}\0${current.claimDigest}`,
+            current,
+          );
+          break;
+        case "audit-candidate-promoted":
+          auditPromotedKeys.add(
+            `${current.snapshotDigest}\0${current.trialId}\0${current.candidateKind}\0${current.claimDigest}`,
+          );
+          break;
         case "finding-recorded":
           if (current.derivationKind !== "fixed-version-control")
             candidateRuns.add(current.runId);
@@ -2310,6 +2386,12 @@ export class Ledger {
       const counts = (byCategory[category] ??= emptyCounts());
       counts.reached++;
       counts.held++;
+    }
+    for (const [key, pending] of auditPendingKeys) {
+      if (auditPromotedKeys.has(key)) continue;
+      totals.auditPending++;
+      objective(pending.runId).auditPending++;
+      (byCategory.unclassified ??= emptyCounts()).auditPending++;
     }
     for (const { runId, category } of legacyReached) {
       totals.reached++;

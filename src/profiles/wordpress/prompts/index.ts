@@ -22,7 +22,7 @@ export type WordPressDiscoveryMode = "deep" | "wide";
 export const WORDPRESS_DISCOVERY_MODES = ["deep", "wide"] as const;
 
 /** Generated Finding / Lead contract versions the Harness appends (ADR 0019). */
-export type WordPressOutputContractVersion = "v1" | "v2" | "v4" | "v5";
+export type WordPressOutputContractVersion = "v1" | "v2" | "v4" | "v5" | "v6";
 
 /**
  * The human-written parts of a discovery objective (redesign 2026-10-25 §5).
@@ -507,6 +507,16 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     // Owner decision 2026-11-04, ADR 0050: the purpose remains here, while
     // the WordPress audit loop and its research records move to wbh-audit.
     // v22 remains the default until production comparison accepts v23.
+  },
+  {
+    id: "wp2shell-bounty-v24-wide",
+    digest:
+      "sha256:8822e7516329d4b142422d68b6f82ada9b02923f13e4b454edfcbb532d5ac63a",
+    outputContract: "v6",
+    status: "candidate",
+    mode: "wide",
+    // v23 objective with the versioned wbh-audit-v2 skill named explicitly.
+    // Its generated contract carries independent Phase 5 child checks.
   },
   {
     id: "wp2shell-whitebox-v1.7",

@@ -36,7 +36,7 @@ describe("WordPress discovery skills", () => {
       expect(row.id.startsWith(`${row.name}-v`)).toBe(true);
       expect(
         skill.body.startsWith(`# ${row.name} v`) ||
-          (row.id === "wbh-audit-v1" &&
+          ((row.id === "wbh-audit-v1" || row.id === "wbh-audit-v2") &&
             skill.body.startsWith("# WordPress audit")),
       ).toBe(true);
       expect(skill.body.length).toBeGreaterThan(500);
@@ -69,6 +69,7 @@ describe("WordPress discovery skills", () => {
       "wbh-recon-v3",
       "wbh-lab-v1",
       "wbh-audit-v1",
+      "wbh-audit-v2",
     ]);
     // #791: v2 was measured on bench h32 and not adopted; it stays readable.
     expect(wordPressDiscoverySkillRecord("wbh-falsify-v2")?.status).toBe(
@@ -106,7 +107,7 @@ describe("WordPress discovery skills", () => {
       expect(body).not.toMatch(TARGET_ANSWERS);
       for (const file of files)
         expect(file.content.toString("utf8")).not.toMatch(TARGET_ANSWERS);
-      if (row.id === "wbh-audit-v1") {
+      if (row.id === "wbh-audit-v1" || row.id === "wbh-audit-v2") {
         expect(body).toContain("## Six phases");
         expect(body).toContain("REGISTRY.md");
         expect(body).toContain(
@@ -183,5 +184,26 @@ describe("WordPress discovery skills", () => {
         );
       }
     }
+  });
+
+  it("keeps the v2 final checker record separate from the Root report", async () => {
+    const v1 = await loadWordPressDiscoverySkill("wbh-audit-v1");
+    const v2 = await loadWordPressDiscoverySkill("wbh-audit-v2");
+    const phase5 = v2.files
+      .find((file) => file.name === "validation-and-reporting.md")
+      ?.content.toString("utf8");
+    const hunting = v2.files
+      .find((file) => file.name === "hunting.md")
+      ?.content.toString("utf8");
+    expect(v1.body).not.toContain("five-key JSON");
+    expect(v2.body).toContain("All children return five keys");
+    expect(v2.body).toContain("Root's final report has only");
+    expect(hunting).toContain("empty `findings`, `leads`, and `checks`");
+    expect(phase5).toContain("one `checks` entry per assigned draft");
+    expect(phase5).toContain(
+      "original, unchanged Root draft claim for every verdict",
+    );
+    expect(phase5).toContain("the corrected claim stays in scratch");
+    expect(phase5).toContain("receives `verified` before reporting it");
   });
 });

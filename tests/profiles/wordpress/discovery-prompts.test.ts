@@ -71,7 +71,7 @@ describe("WordPress prompt table", () => {
   it("derives the id lists and the current versions from the table", () => {
     const ids = WORDPRESS_DISCOVERY_PROMPTS.map((row) => row.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(36);
+    expect(ids).toHaveLength(37);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual(ids);
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       ...ids,
@@ -107,11 +107,12 @@ describe("WordPress prompt table", () => {
       WORDPRESS_DISCOVERY_PROMPTS.filter(
         (row) => (row.status as string) === "candidate",
       ).map((row) => row.id),
-    ).toEqual(["wp2shell-bounty-v23-wide"]);
+    ).toEqual(["wp2shell-bounty-v23-wide", "wp2shell-bounty-v24-wide"]);
     expect(WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS).toEqual([
       "wp2shell-bounty-v11",
       "wp2shell-bounty-v22-wide",
       "wp2shell-bounty-v23-wide",
+      "wp2shell-bounty-v24-wide",
     ]);
     expect(
       WORDPRESS_VERIFIER_PROMPTS.filter((row) => row.status === "current"),
@@ -288,6 +289,17 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
 });
 
 describe("WordPress discovery prompt assets", () => {
+  it("keeps v24's audit purpose identical while naming the new skill", async () => {
+    const v23 = await loadWordPressDiscoveryAsset("wp2shell-bounty-v23-wide");
+    const v24 = await loadWordPressDiscoveryAsset("wp2shell-bounty-v24-wide");
+    expect(v24.text).toBe(
+      v23.text.replace(
+        "installed wbh-audit skill",
+        "installed wbh-audit-v2 skill",
+      ),
+    );
+  });
+
   it("keeps answer strings out of the current Verifier prompt", async () => {
     const prompt = await loadWordPressVerifierPrompt();
     expect(Buffer.byteLength(prompt.text, "utf8")).toBeLessThan(4_000);
@@ -1401,7 +1413,8 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v20-wide" ||
         id === "wp2shell-bounty-v21-wide" ||
         id === "wp2shell-bounty-v22-wide" ||
-        id === "wp2shell-bounty-v23-wide"
+        id === "wp2shell-bounty-v23-wide" ||
+        id === "wp2shell-bounty-v24-wide"
       ) {
         // v5 leaves attacker positions and in-scope effects to the supplied
         // trust boundary and Programme Boundary sections (owner decision, 2026-10-16).
