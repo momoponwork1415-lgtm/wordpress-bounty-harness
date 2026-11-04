@@ -12,6 +12,8 @@ amends: 0043（探索スキルの主従）、0045（2026-11-03 の recon-v4 限�
 
 Cloudflare は公開 repo を単一 repo 用の *skill* と説明し、永続化・再開・複数 repo を扱う Harness は後から別に作ったと述べる（[README](https://github.com/cloudflare/security-audit-skill)、[開発記事](https://blog.cloudflare.com/build-your-own-vulnerability-harness)）。本リポジトリには Snapshot、gVisor、Lab、台帳、Private Evidence、人間の観測が既にある。これらを作り直す代わりに、公開 skill の監査手順を WordPress profile の探索スキルへ移す。派生元の版と MIT の表示を残す。
 
+現行との段ごとの対照と、固定4 sink 担当を外す理由は[比較報告](../reviews/2026-11-04-current-harness-vs-cloudflare-audit-skill.md)に記録する。所有者は 2026-11-04 に「固定割り当てがよくない」「基本的に Audit Skill に寄せる」と確認した。
+
 ## 決定
 
 探索の手順の正本を、版と digest を固定した WordPress 用の上位 `wbh-audit` スキルに置く。Cloudflare の六段階を次のように写す。これは完成時の目標形であり、各段の実装が入るまでは既存の v22-wide とスキルを本番の主経路として使う。
