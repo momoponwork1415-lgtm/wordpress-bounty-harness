@@ -18,10 +18,12 @@ const skillsUrl = new URL(
 const sha256 = (bytes: Uint8Array) =>
   `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 
-// Agent-facing text (ADR 0043): pinned by digest, a procedure only, free of
-// answer clues, target names, bug-type lists and judgment criteria.
+// The older skills contain procedures without attack-class guidance. ADR 0050
+// gives the audit skill source questions but still forbids target answers.
 const ANSWER_CLUES =
   /\bCVE(?:-\d+)?\b|\badvisor(?:y|ies)\b|\bPoC\b|\bpayload\b|<script\b|\bcurl\s+-|(?:past|previous)\s+(?:fix|patch)|TranslatePress|The Events Calendar|Smash Balloon|ThemePunch|revslider|wpforms|woocommerce|Tourfic|Groundhogg|rtMedia|Relevanssi|Brizy|Elementor/i;
+const TARGET_ANSWERS =
+  /\bCVE-\d{4}-\d+\b|TranslatePress|The Events Calendar|Smash Balloon|ThemePunch|revslider|wpforms|woocommerce|Tourfic|Groundhogg|rtMedia|Relevanssi|Brizy|Elementor/i;
 
 describe("WordPress discovery skills", () => {
   it("pins every skill to its digest and names it in the front matter", async () => {
@@ -32,7 +34,11 @@ describe("WordPress discovery skills", () => {
       expect(skill.digest).toBe(row.digest);
       expect(skill.frontMatter.name).toBe(row.name);
       expect(row.id.startsWith(`${row.name}-v`)).toBe(true);
-      expect(skill.body.startsWith(`# ${row.name} v`)).toBe(true);
+      expect(
+        skill.body.startsWith(`# ${row.name} v`) ||
+          (row.id === "wbh-audit-v1" &&
+            skill.body.startsWith("# WordPress audit")),
+      ).toBe(true);
       expect(skill.body.length).toBeGreaterThan(500);
       expect(Buffer.byteLength(skill.text, "utf8")).toBeLessThan(16_000);
       // Supporting files (#687): every file in the directory is pinned, by name and digest.
@@ -62,6 +68,7 @@ describe("WordPress discovery skills", () => {
       "wbh-setup-v1",
       "wbh-recon-v3",
       "wbh-lab-v1",
+      "wbh-audit-v1",
     ]);
     // #791: v2 was measured on bench h32 and not adopted; it stays readable.
     expect(wordPressDiscoverySkillRecord("wbh-falsify-v2")?.status).toBe(
@@ -91,9 +98,23 @@ describe("WordPress discovery skills", () => {
     expect(wordPressDiscoverySkillRecord("wbh-other-v1")).toBeUndefined();
   });
 
-  it("keeps every body a procedure: no answer clues, bug-type lists, criteria or Harness-fixed numbers", async () => {
+  it("keeps target answers out of skills and legacy procedures within their contract", async () => {
     for (const row of WORDPRESS_DISCOVERY_SKILLS) {
-      const { body, frontMatter } = await loadWordPressDiscoverySkill(row.id);
+      const { body, frontMatter, files } = await loadWordPressDiscoverySkill(
+        row.id,
+      );
+      expect(body).not.toMatch(TARGET_ANSWERS);
+      for (const file of files)
+        expect(file.content.toString("utf8")).not.toMatch(TARGET_ANSWERS);
+      if (row.id === "wbh-audit-v1") {
+        expect(body).toContain("## Six phases");
+        expect(body).toContain("REGISTRY.md");
+        expect(body).toContain(
+          "Only a named human's later review Lab observation",
+        );
+        expect(frontMatter.description).toMatch(/^Use /);
+        continue;
+      }
       expect(body).not.toMatch(ANSWER_CLUES);
       expect(body).not.toMatch(
         /\b(?:XSS|SQLi|SQL injection|RCE|LFI|SSRF|CSRF|IDOR)\b/,

@@ -58,6 +58,7 @@ const MAIN_PLANS: Record<string, Plan> = {
   "wp2shell-bounty-v21-wide": inline("v4"),
   // ADR 0039 addendum 21: v21-wide minus the row-count closing rule.
   "wp2shell-bounty-v22-wide": inline("v4"),
+  "wp2shell-bounty-v23-wide": inline("v4"),
   "wp2shell-whitebox-v1.7": inline("v2"),
 };
 

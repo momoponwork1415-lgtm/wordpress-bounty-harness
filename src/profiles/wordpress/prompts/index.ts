@@ -498,6 +498,17 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     // (wbh-recon step 9) and the Trial wall.
   },
   {
+    id: "wp2shell-bounty-v23-wide",
+    digest:
+      "sha256:8fb5d251e8ea6610269dc816ebf30a9c8584565b396b161a2c31c642c28c7e77",
+    outputContract: "v4",
+    status: "candidate",
+    mode: "wide",
+    // Owner decision 2026-11-04, ADR 0050: the purpose remains here, while
+    // the WordPress audit loop and its research records move to wbh-audit.
+    // v22 remains the default until production comparison accepts v23.
+  },
+  {
     id: "wp2shell-whitebox-v1.7",
     digest:
       "sha256:3318ae6a06290ffbf306533f66357eb41401c1c48ccc7de7cc4e991ac3e07afb",

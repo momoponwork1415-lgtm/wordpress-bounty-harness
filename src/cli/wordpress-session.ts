@@ -271,6 +271,8 @@ export const wordpressCampaignConfigSchema = z
   })
   .superRefine((config, context) => {
     const mode = config.discovery.mode;
+    const promptId =
+      config.promptId ?? WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS[mode];
     if (
       config.promptId !== undefined &&
       wordPressDiscoveryModeOf(config.promptId) !== mode
@@ -291,6 +293,40 @@ export const wordpressCampaignConfigSchema = z
           message: "discovery.skills names each skill once",
         });
     }
+    const hasAuditSkill =
+      config.discovery.skills?.includes("wbh-audit-v1") ?? false;
+    if (promptId === "wp2shell-bounty-v23-wide") {
+      for (const required of [
+        "wbh-audit-v1",
+        "wbh-setup-v1",
+        "wbh-lab-v1",
+      ] as const)
+        if (!config.discovery.skills?.includes(required))
+          context.addIssue({
+            code: "custom",
+            path: ["discovery", "skills"],
+            message: `wp2shell-bounty-v23-wide requires ${required}`,
+          });
+      if (config.discovery.skills?.includes("wbh-recon-v3"))
+        context.addIssue({
+          code: "custom",
+          path: ["discovery", "skills"],
+          message: "wbh-audit-v1 replaces wbh-recon-v3 in this Trial",
+        });
+      if (config.discovery.lab.mode !== "attached")
+        context.addIssue({
+          code: "custom",
+          path: ["discovery", "lab"],
+          message:
+            "wp2shell-bounty-v23-wide requires an attached exploration Lab",
+        });
+    }
+    if (hasAuditSkill && promptId !== "wp2shell-bounty-v23-wide")
+      context.addIssue({
+        code: "custom",
+        path: ["discovery", "skills"],
+        message: "wbh-audit-v1 requires wp2shell-bounty-v23-wide",
+      });
     if (
       config.discovery.followUp === "leads" &&
       config.discovery.lab.mode !== "attached"
