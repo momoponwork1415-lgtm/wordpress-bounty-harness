@@ -22,7 +22,7 @@ export type WordPressDiscoveryMode = "deep" | "wide";
 export const WORDPRESS_DISCOVERY_MODES = ["deep", "wide"] as const;
 
 /** Generated Finding / Lead contract versions the Harness appends (ADR 0019). */
-export type WordPressOutputContractVersion = "v1" | "v2" | "v4" | "v5";
+export type WordPressOutputContractVersion = "v1" | "v2" | "v4" | "v5" | "v6";
 
 /**
  * The human-written parts of a discovery objective (redesign 2026-10-25 §5).
@@ -496,6 +496,35 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     // Production v21-wide Roots satisfied the row rule by classifying rows and
     // closed at 11 to 47 minutes; the closing condition lives in the skills
     // (wbh-recon step 9) and the Trial wall.
+  },
+  {
+    id: "wp2shell-bounty-v23-wide",
+    digest:
+      "sha256:8fb5d251e8ea6610269dc816ebf30a9c8584565b396b161a2c31c642c28c7e77",
+    outputContract: "v4",
+    status: "candidate",
+    mode: "wide",
+    // Owner decision 2026-11-04, ADR 0050: the purpose remains here, while
+    // the WordPress audit loop and its research records move to wbh-audit.
+    // v22 remains the default until production comparison accepts v23.
+  },
+  {
+    id: "wp2shell-bounty-v24-wide",
+    digest:
+      "sha256:8822e7516329d4b142422d68b6f82ada9b02923f13e4b454edfcbb532d5ac63a",
+    outputContract: "v6",
+    status: "archived",
+    // v23 objective with the versioned wbh-audit-v2 skill named explicitly.
+    // Its generated contract carries independent Phase 5 child checks.
+  },
+  {
+    id: "wp2shell-bounty-v25-wide",
+    digest:
+      "sha256:cacc8ff2ca04a61446fef3ac42ec6b89502d6b5ea5edbae796f5ad772d5ba3cd",
+    outputContract: "v6",
+    status: "candidate",
+    mode: "wide",
+    // v24 with the CLI-visible skill name and the one-edge Lead handoff clear.
   },
   {
     id: "wp2shell-whitebox-v1.7",

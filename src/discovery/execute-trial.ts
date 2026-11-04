@@ -93,6 +93,8 @@ export type TrialOutcome = {
   readonly counted: boolean;
   readonly foundNew: boolean;
   readonly heldBoundary: boolean;
+  /** A checked/v1 Root claim was preserved but lacked its required audit check. */
+  readonly pendingAuditCheck?: boolean;
   readonly findingsRecorded: number;
   /** What the Harness observed in the Trial's exploration Lab, when one was attached. */
   readonly lab?: TrialLabRecord;
@@ -333,6 +335,7 @@ export async function executeTrial(
     base,
     snapshotDigest: input.snapshotDigest,
     trialId: trial.trialId,
+    admissionContract: planned.configuration.admissionContract ?? "direct/v1",
     seen: context.seen,
     state: draft,
     onFindingRecorded: (count) => {
@@ -427,6 +430,17 @@ export async function executeTrial(
     if (recoveredRoot.recovered) draft.outcome = "completed";
     if (recoveredRoot.failure !== undefined)
       draft.failure = recoveredRoot.failure;
+    if (
+      planned.configuration.admissionContract === "checked/v1" &&
+      draft.pendingAuditCheck === true &&
+      draft.outcome === "completed"
+    ) {
+      draft.outcome = "failed";
+      draft.failure = {
+        reason: "evidence",
+        reasonDetail: "audit-check-missing",
+      };
+    }
   } catch {
     draft.outcome = "failed";
     if (cancellation.signal.aborted) {

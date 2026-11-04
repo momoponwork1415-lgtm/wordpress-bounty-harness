@@ -528,7 +528,7 @@ function choice<const Choices extends readonly string[]>(
 }
 
 function stages(counts: FunnelCounts): string {
-  return `最終JSON到達 ${counts.reached} → 受理 ${counts.accepted} / 保留 ${counts.held} / parked ${counts.parked} → raw ${counts.raw} → verifier通過 ${counts.verified} → confirmed ${counts.confirmed} / reproduced ${counts.reproduced} / contradicted ${counts.contradicted} / incomplete ${counts.incomplete} → reviewed ${counts.reviewed} → in-scope ${counts.inScope} → submitted ${counts.submitted}${counts.submittedExternally > 0 ? ` (external ${counts.submittedExternally})` : ""} → outcome ${counts.outcome}`;
+  return `最終JSON到達 ${counts.reached} → 受理 ${counts.accepted} / 保留 ${counts.held}${counts.auditPending > 0 ? ` / audit pending ${counts.auditPending}` : ""}${counts.auditDisputed > 0 ? ` / audit disputed ${counts.auditDisputed}` : ""} / parked ${counts.parked} → raw ${counts.raw} → verifier通過 ${counts.verified} → confirmed ${counts.confirmed} / reproduced ${counts.reproduced} / contradicted ${counts.contradicted} / incomplete ${counts.incomplete} → reviewed ${counts.reviewed} → in-scope ${counts.inScope} → submitted ${counts.submitted}${counts.submittedExternally > 0 ? ` (external ${counts.submittedExternally})` : ""} → outcome ${counts.outcome}`;
 }
 
 export function formatStopRow(row: StopRow): string {
@@ -719,6 +719,11 @@ export function formatQueue(
     // #424: the overlap group orders the queue; each Finding is still decided on its own.
     const group = [
       `  group ${item.group.id}  ${item.group.size} finding(s)${item.group.representative ? "  representative" : ""}`,
+      ...(item.auditDispute === undefined
+        ? []
+        : [
+            `  audit check disputed: ${item.auditDispute} (see review audit-pending)`,
+          ]),
       // The same route on another Snapshot of the same target; shown, never decided here.
       ...seenBefore.map(
         (seen) =>
@@ -2602,6 +2607,45 @@ const COMMANDS: readonly Command[] = [
           .join(", ");
         print([
           `held  ${event.impact ?? "unclassified"}  ${candidate ?? "(candidate unavailable)"}  ${event.runId}#${event.candidateIndex}  issues: ${issues}  ${candidate === undefined ? "" : state.store.contentPath(candidate)}`.trimEnd(),
+        ]);
+      }
+      return 0;
+    },
+  }),
+  command({
+    name: "review audit-pending",
+    readOnly: true,
+    required: ["campaign"],
+    usage: ["review audit-pending --campaign <id>"],
+    options: { campaign: STR },
+    handler: async ({ values, state, print }) => {
+      const campaignId = required(values.campaign, "campaign");
+      const pending = new Map<
+        string,
+        Extract<
+          LedgerEventV1,
+          { type: "audit-candidate-pending" | "audit-candidate-disputed" }
+        >
+      >();
+      for (const { event } of state.ledger.readAll({ campaignId })) {
+        if (
+          event.type !== "audit-candidate-pending" &&
+          event.type !== "audit-candidate-promoted" &&
+          event.type !== "audit-candidate-disputed"
+        )
+          continue;
+        const key = `${event.snapshotDigest}\0${event.trialId}\0${event.candidateKind}\0${event.claimDigest}`;
+        if (event.type === "audit-candidate-promoted") pending.delete(key);
+        else pending.set(key, event);
+      }
+      if (pending.size === 0) print(["no audit-pending candidates"]);
+      for (const event of pending.values()) {
+        const candidate = event.artifacts.find(
+          (artifact) =>
+            artifact.kind === "candidate" || artifact.kind === "audit-check",
+        )?.digest;
+        print([
+          `${event.type === "audit-candidate-pending" ? "audit-pending" : "audit-disputed"}  ${event.candidateKind}  ${event.type === "audit-candidate-pending" ? event.reason : "later-conflicting-evidence"}  ${event.runId}#${event.candidateIndex}  ${candidate ?? "(artifact unavailable)"}  ${candidate === undefined ? "" : state.store.contentPath(candidate)}`.trimEnd(),
         ]);
       }
       return 0;

@@ -217,6 +217,8 @@ export type ReviewItem = (
   readonly group: FindingGroup;
   /** Groups on other Snapshots sharing a key with this Finding, before any target check. */
   readonly elsewhere: readonly FindingGroupElsewhere[];
+  /** Later AI evidence disputes admission; human Lab observations remain independent. */
+  readonly auditDispute?: string;
 };
 export type ReviewQueue = {
   readonly items: readonly ReviewItem[];
@@ -484,6 +486,20 @@ export class Review<TFacts = unknown> {
     ))
       if (inCampaign(event)) parkedEvents.set(key(event), event);
     const parked = new Set(parkedEvents.keys());
+    const auditDisputes = new Map<string, string>();
+    for (const { event } of this.#ledger.readAll({
+      type: "audit-candidate-disputed",
+    }))
+      if (
+        event.type === "audit-candidate-disputed" &&
+        event.candidateKind === "finding" &&
+        inCampaign(event)
+      )
+        for (const recordId of event.recordIds)
+          auditDisputes.set(
+            `${event.campaignId}\0${recordId}`,
+            event.causingEventIdentity,
+          );
     const externallySubmitted = new Set(
       this.#ledger
         .readAll({ type: "submission-recorded-externally" })
@@ -543,11 +559,14 @@ export class Review<TFacts = unknown> {
       const group = groups.of(finding.campaignId, finding.findingId);
       const elsewhere = groups.elsewhere(finding.campaignId, finding.findingId);
       const decisions = decisionHistory.get(key(finding)) ?? [];
+      const auditDispute = auditDisputes.get(key(finding));
+      const annotate = (item: ReviewItem): ReviewItem =>
+        auditDispute === undefined ? item : { ...item, auditDispute };
       if (verified === undefined) {
         unverified++;
         const current = currentReviewDecision(decisions, finding);
         entries.push({
-          item: {
+          item: annotate({
             status: "not-verified",
             ref: {
               campaignId: finding.campaignId,
@@ -558,7 +577,7 @@ export class Review<TFacts = unknown> {
             decision: current?.decision ?? null,
             group,
             elsewhere,
-          },
+          }),
           current,
           history: decisions,
         });
@@ -574,7 +593,7 @@ export class Review<TFacts = unknown> {
       const current = currentReviewDecision(decisions, ref, sequence);
       const decision = current?.decision ?? null;
       const push = (item: ReviewItem) =>
-        entries.push({ item, current, history: decisions });
+        entries.push({ item: annotate(item), current, history: decisions });
       const result = event.result;
       if (result.status === "contradicted") {
         contradicted++;

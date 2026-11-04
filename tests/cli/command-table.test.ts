@@ -60,6 +60,7 @@ const PINNED_USAGE = [
   "  campaign resume --campaign <id> --run <runId> --config <path>",
   "  continuous concurrency [<n>] [--runtime <name>] --config <path>",
   "  review held --campaign <id>",
+  "  review audit-pending --campaign <id>",
   "  research import --from <state dir> [--slug <slug>]",
 ].join("\n");
 

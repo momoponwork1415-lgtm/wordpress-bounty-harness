@@ -258,6 +258,90 @@ describe("WordPress campaign session", () => {
 });
 
 describe("discovery skills (ADR 0043)", () => {
+  const auditSkills = ["wbh-audit-v1", "wbh-setup-v1", "wbh-lab-v1"];
+  const auditSkillsV2 = ["wbh-audit-v2", "wbh-setup-v1", "wbh-lab-v1"];
+
+  it("pairs the audit objective with its coordinating skill and exploration Lab", async () => {
+    const { open } = await fixture({
+      config: {
+        promptId: "wp2shell-bounty-v23-wide",
+        discovery: { mode: "wide", lab: "attached", skills: auditSkills },
+      },
+    });
+    const session = await open();
+    expect(session.config.promptId).toBe("wp2shell-bounty-v23-wide");
+    expect(session.config.discovery.skills).toEqual(auditSkills);
+    expect(session.config.discovery.lab.mode).toBe("attached");
+
+    const v25 = await fixture({
+      config: {
+        promptId: "wp2shell-bounty-v25-wide",
+        discovery: { mode: "wide", lab: "attached", skills: auditSkillsV2 },
+      },
+    });
+    const v25Session = await v25.open();
+    expect(v25Session.config.promptId).toBe("wp2shell-bounty-v25-wide");
+    expect(v25Session.config.discovery.skills).toEqual(auditSkillsV2);
+  });
+
+  it("rejects incomplete audit launches and conflicting recon instructions", async () => {
+    for (const discovery of [
+      { mode: "wide", lab: "none", skills: auditSkills },
+      { mode: "wide", lab: "attached", skills: ["wbh-setup-v1", "wbh-lab-v1"] },
+      {
+        mode: "wide",
+        lab: "attached",
+        skills: ["wbh-audit-v1", "wbh-setup-v1"],
+      },
+      {
+        mode: "wide",
+        lab: "attached",
+        skills: [...auditSkills, "wbh-recon-v3"],
+      },
+    ]) {
+      const { open } = await fixture({
+        config: { promptId: "wp2shell-bounty-v23-wide", discovery },
+      });
+      await expect(open()).rejects.toThrow();
+    }
+    const oldObjective = await fixture({
+      config: { discovery: { lab: "attached", skills: auditSkills } },
+    });
+    await expect(oldObjective.open()).rejects.toThrow(
+      "wbh-audit-v1 requires wp2shell-bounty-v23-wide",
+    );
+
+    for (const discovery of [
+      { mode: "wide", lab: "none", skills: auditSkillsV2 },
+      { mode: "wide", lab: "attached", skills: ["wbh-setup-v1", "wbh-lab-v1"] },
+      {
+        mode: "wide",
+        lab: "attached",
+        skills: ["wbh-audit-v2", "wbh-setup-v1"],
+      },
+      {
+        mode: "wide",
+        lab: "attached",
+        skills: [...auditSkillsV2, "wbh-recon-v3"],
+      },
+      { mode: "wide", lab: "attached", skills: auditSkills },
+    ]) {
+      const v25 = await fixture({
+        config: { promptId: "wp2shell-bounty-v25-wide", discovery },
+      });
+      await expect(v25.open()).rejects.toThrow();
+    }
+    const wrongObjective = await fixture({
+      config: {
+        promptId: "wp2shell-bounty-v23-wide",
+        discovery: { mode: "wide", lab: "attached", skills: auditSkillsV2 },
+      },
+    });
+    await expect(wrongObjective.open()).rejects.toThrow(
+      "wbh-audit-v2 requires wp2shell-bounty-v25-wide",
+    );
+  });
+
   it("accepts pinned skill ids for a deep or wide campaign", async () => {
     const { open } = await fixture({
       config: { discovery: { lab: "none", skills: ["wbh-recon-v3"] } },

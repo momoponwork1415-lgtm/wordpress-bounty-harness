@@ -11,12 +11,17 @@ const providerReportSchema = z.object({
   leads: z.array(z.unknown()).default([]),
   examined: z.string().default(""),
   unexamined: z.string().default(""),
+  checks: z.array(z.unknown()).optional(),
 });
+
+export type DiscoveryAdmissionContract = "direct/v1" | "checked/v1";
 
 /** The candidate arrays of one agent report, exactly as the agent wrote them. */
 export type CandidateReport = {
   readonly findings: readonly unknown[];
   readonly leads: readonly unknown[];
+  /** Child audit checks; their meaning and admission are profile-owned. */
+  readonly checks?: readonly unknown[] | undefined;
 };
 
 /** Where one report's candidates are recorded and which run they belong to. */
@@ -30,6 +35,10 @@ export type ReportRecorderContext = {
     readonly occurredAt: string;
   };
   readonly runId: string;
+  /** Absent for historical direct callers; the runtime always supplies it. */
+  readonly runKind?: "root" | "child";
+  /** Absent in historical calls means direct/v1. */
+  readonly admissionContract?: DiscoveryAdmissionContract;
   readonly trialId: string;
   readonly snapshotDigest: string;
   readonly reportArtifactDigest: string;
@@ -39,7 +48,7 @@ export type RecordedCandidate = {
   readonly kind: "finding" | "lead";
   readonly index: number;
   /** ADR 0018: a candidate is recorded, parked outside the queues, or held; never rejected. */
-  readonly outcome: "recorded" | "parked" | "held";
+  readonly outcome: "recorded" | "parked" | "held" | "pending";
   /** `existing` when an identical event was already in the ledger. */
   readonly status: "appended" | "existing";
   /** Dedupe signature of a recorded claim; the campaign compares it across Trials. */
@@ -67,8 +76,13 @@ type RecorderOptions = {
   readonly base: ReportRecorderContext["base"];
   readonly snapshotDigest: string;
   readonly trialId: string;
+  readonly admissionContract: DiscoveryAdmissionContract;
   readonly seen: Set<string>;
-  readonly state: { foundNew: boolean; heldBoundary: boolean };
+  readonly state: {
+    foundNew: boolean;
+    heldBoundary: boolean;
+    pendingAuditCheck?: boolean;
+  };
   readonly onFindingRecorded: (count: number) => void;
   readonly recordReport: ReportRecorder;
 };
@@ -78,6 +92,7 @@ export function createReportRecorder(options: RecorderOptions) {
   return async (
     ownerRunId: string,
     attachment: NonNullable<DiscoveryTransportResult["attachment"]>,
+    runKind: "root" | "child",
   ): Promise<void> => {
     const stored = await options.attachments.read(attachment);
     if (stored.status !== "resolved")
@@ -93,12 +108,20 @@ export function createReportRecorder(options: RecorderOptions) {
       throw new DiscoveryReportError("Discovery report is malformed");
     }
     const recorded = await options.recordReport(
-      { findings: report.findings, leads: report.leads },
+      {
+        findings: report.findings,
+        leads: report.leads,
+        ...(runKind === "child" && report.checks !== undefined
+          ? { checks: report.checks }
+          : {}),
+      },
       {
         ledger: options.ledger,
         evidence: options.evidence,
         base: options.base,
         runId: ownerRunId,
+        runKind,
+        admissionContract: options.admissionContract,
         trialId: options.trialId,
         snapshotDigest: options.snapshotDigest,
         reportArtifactDigest: attachment.digest,
@@ -106,6 +129,12 @@ export function createReportRecorder(options: RecorderOptions) {
     );
     for (const candidate of recorded.candidates) {
       if (candidate.outcome === "held") options.state.heldBoundary = true;
+      if (
+        options.admissionContract === "checked/v1" &&
+        runKind === "root" &&
+        candidate.outcome === "pending"
+      )
+        options.state.pendingAuditCheck = true;
       if (
         candidate.kind === "finding" &&
         candidate.outcome === "recorded" &&
@@ -118,5 +147,13 @@ export function createReportRecorder(options: RecorderOptions) {
         options.seen.add(candidate.signature);
       }
     }
+    // Preserve any candidate arrays first, then mark a checked child that
+    // omitted the fifth key as a schema failure. Older reports stay four-key.
+    if (
+      options.admissionContract === "checked/v1" &&
+      runKind === "child" &&
+      report.checks === undefined
+    )
+      throw new DiscoveryReportError("Checked child report lacks checks");
   };
 }

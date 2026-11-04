@@ -71,7 +71,7 @@ describe("WordPress prompt table", () => {
   it("derives the id lists and the current versions from the table", () => {
     const ids = WORDPRESS_DISCOVERY_PROMPTS.map((row) => row.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(35);
+    expect(ids).toHaveLength(38);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual(ids);
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       ...ids,
@@ -102,16 +102,17 @@ describe("WordPress prompt table", () => {
     for (const row of WORDPRESS_DISCOVERY_PROMPTS)
       if (row.status === "archived") expect(row).not.toHaveProperty("mode");
       else expect(row).toHaveProperty("mode");
-    // No candidate under comparison since 2026-11-01 (ADR 0039 addendum 18,
-    // ADR 0045 addendum 1): v15-wide, v18-wide and v19-wide are archived.
+    // The WordPress audit-skill objective is opt-in during its comparison.
     expect(
       WORDPRESS_DISCOVERY_PROMPTS.filter(
         (row) => (row.status as string) === "candidate",
-      ),
-    ).toEqual([]);
+      ).map((row) => row.id),
+    ).toEqual(["wp2shell-bounty-v23-wide", "wp2shell-bounty-v25-wide"]);
     expect(WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS).toEqual([
       "wp2shell-bounty-v11",
       "wp2shell-bounty-v22-wide",
+      "wp2shell-bounty-v23-wide",
+      "wp2shell-bounty-v25-wide",
     ]);
     expect(
       WORDPRESS_VERIFIER_PROMPTS.filter((row) => row.status === "current"),
@@ -288,6 +289,22 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
 });
 
 describe("WordPress discovery prompt assets", () => {
+  it("keeps v24's audit purpose identical while naming the new skill", async () => {
+    const v23 = await loadWordPressDiscoveryAsset("wp2shell-bounty-v23-wide");
+    const v24 = await loadWordPressDiscoveryAsset("wp2shell-bounty-v24-wide");
+    expect(v24.text).toBe(
+      v23.text.replace(
+        "installed wbh-audit skill",
+        "installed wbh-audit-v2 skill",
+      ),
+    );
+    const v25 = await loadWordPressDiscoveryAsset("wp2shell-bounty-v25-wide");
+    expect(v25.text).toContain("Read the installed wbh-audit skill");
+    expect(v25.text).toContain("pinned as wbh-audit-v2");
+    expect(v25.text).toContain("Report a Lead when");
+    expect(v25.text).toContain("one unresolved edge");
+  });
+
   it("keeps answer strings out of the current Verifier prompt", async () => {
     const prompt = await loadWordPressVerifierPrompt();
     expect(Buffer.byteLength(prompt.text, "utf8")).toBeLessThan(4_000);
@@ -1400,7 +1417,10 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v19-wide" ||
         id === "wp2shell-bounty-v20-wide" ||
         id === "wp2shell-bounty-v21-wide" ||
-        id === "wp2shell-bounty-v22-wide"
+        id === "wp2shell-bounty-v22-wide" ||
+        id === "wp2shell-bounty-v23-wide" ||
+        id === "wp2shell-bounty-v24-wide" ||
+        id === "wp2shell-bounty-v25-wide"
       ) {
         // v5 leaves attacker positions and in-scope effects to the supplied
         // trust boundary and Programme Boundary sections (owner decision, 2026-10-16).

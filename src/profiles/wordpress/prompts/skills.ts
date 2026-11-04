@@ -107,6 +107,74 @@ export const WORDPRESS_DISCOVERY_SKILLS = [
       "sha256:58548360a44e53b3e1049f7214eee411679ed6c86ffde6771e99c0f6dd5e6f35",
     status: "current",
   },
+  {
+    id: "wbh-audit-v1",
+    name: "wbh-audit",
+    digest:
+      "sha256:0b7503134dc9635878a40e916ac4a80d6addabb2d133a603a300a23ccc1db579",
+    files: [
+      {
+        name: "reconnaissance.md",
+        digest:
+          "sha256:d3698bc1fd1a038b567c2bf0377281034ab5657783dc5882688edaf139674f71",
+      },
+      {
+        name: "hunting.md",
+        digest:
+          "sha256:3d6c9d559c2c4c83cf0c51ec5670f7d5574fa83165c5a4b7defabc252f750b27",
+      },
+      {
+        name: "wordpress-classes.md",
+        digest:
+          "sha256:4e1490b4bdc991b3e2acc2365eb5ebc85d77a76e5c67abe1d7df66107e4cfc2e",
+      },
+      {
+        name: "validation-and-reporting.md",
+        digest:
+          "sha256:bdb3ee63b65eb2f9a5ad4491ed1a82bf8bb99cd8cae780eb565ed510c7460f0c",
+      },
+      {
+        name: "upstream-license.txt",
+        digest:
+          "sha256:e598e694aa506650c7192d5ea3be0e50aca0d356ea00551c53429f0b01eb6391",
+      },
+    ],
+    status: "current",
+  },
+  {
+    id: "wbh-audit-v2",
+    name: "wbh-audit",
+    digest:
+      "sha256:35a8a57b7c11866c3a8daaf117b8ab47269f4f41b961d237e03cd2ed0f880039",
+    files: [
+      {
+        name: "reconnaissance.md",
+        digest:
+          "sha256:d3698bc1fd1a038b567c2bf0377281034ab5657783dc5882688edaf139674f71",
+      },
+      {
+        name: "hunting.md",
+        digest:
+          "sha256:63784cdc4348de96503ea7759c574498d9ffe87bdd5e3e9ac6ed7a9399dbb1e1",
+      },
+      {
+        name: "wordpress-classes.md",
+        digest:
+          "sha256:4e1490b4bdc991b3e2acc2365eb5ebc85d77a76e5c67abe1d7df66107e4cfc2e",
+      },
+      {
+        name: "validation-and-reporting.md",
+        digest:
+          "sha256:6283480a4ff789f4b9961859fb657b7aa5ccfac45f3418899431dff11ad23acb",
+      },
+      {
+        name: "upstream-license.txt",
+        digest:
+          "sha256:e598e694aa506650c7192d5ea3be0e50aca0d356ea00551c53429f0b01eb6391",
+      },
+    ],
+    status: "current",
+  },
 ] as const satisfies readonly WordPressDiscoverySkillRecord[];
 
 export type WordPressDiscoverySkillId =

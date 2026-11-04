@@ -145,6 +145,7 @@ async function recordRun(
     readonly explorationLab?: { readonly resets: number };
     readonly snapshotDigest?: string;
     readonly promptDigest?: string;
+    readonly admissionContract?: "checked/v1";
     readonly runKind?: "explore" | "child";
     readonly resumesRun?: string;
     readonly resumeSegment?: number;
@@ -268,6 +269,9 @@ async function recordRun(
       promptDigest: options.promptDigest ?? promptDigest,
       objectiveDigest: options.promptDigest ?? promptDigest,
       contractDigest: otherDigest,
+      ...(options.admissionContract === undefined
+        ? {}
+        : { admissionContract: options.admissionContract }),
       trustBoundaryVersion: "trust-boundary-v1",
       sourcePack: { dependency: "mounted" },
       assignmentUnit: "plugin",
@@ -383,6 +387,21 @@ describe("resumability rule (ADR 0036)", () => {
         contentBase64: Buffer.from("plan\n").toString("base64"),
       },
     ]);
+  });
+
+  it("keeps the checked admission contract across a resumed segment", async () => {
+    const stores = await open();
+    await recordRun(stores, {
+      runId: "run-1",
+      admissionContract: "checked/v1",
+      wallTimeMs: 25 * 60_000,
+    });
+    const assessment = await assess(stores);
+    expect(assessment.status).toBe("resumable");
+    if (assessment.status === "resumable")
+      expect(assessment.plan.configuration.admissionContract).toBe(
+        "checked/v1",
+      );
   });
 
   it("refuses every other finish reason and failed-run shape with a named reason and no event", async () => {

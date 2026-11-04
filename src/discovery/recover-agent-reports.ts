@@ -32,6 +32,7 @@ type RecoveryContext = {
   readonly recordReport: (
     ownerRunId: string,
     attachment: ReportAttachment,
+    runKind: "root" | "child",
   ) => Promise<void>;
 };
 
@@ -109,7 +110,7 @@ export async function recoverChildAgentReports(
       receipt.reportArtifactDigest === child.attachment.digest
     ) {
       try {
-        await options.recordReport(receipt.runId, child.attachment);
+        await options.recordReport(receipt.runId, child.attachment, "child");
         if (receipt.terminal === "completed") outcome = "completed";
         else
           failure = {
@@ -163,7 +164,7 @@ export async function recoverRootAgentReport(
   )
     return { recovered: false };
   try {
-    await options.recordReport(run.runId, attachment);
+    await options.recordReport(run.runId, attachment, "root");
     return { recovered: receipt.terminal === "completed" };
   } catch (error) {
     if (!(error instanceof DiscoveryReportError)) throw error;

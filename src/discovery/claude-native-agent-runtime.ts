@@ -346,24 +346,47 @@ export function rootUsage(events: readonly Event[]): NativeRunReceipt["usage"] {
       };
 }
 
-/** The child's last report: its final message, else its latest readable assistant text. */
+/** Preserve checked child claims and checks across turns for self-check provenance. */
 function childReport(finalMessage: unknown, transcript: readonly Event[]) {
   const texts = transcript
     .filter((event) => event.type === "assistant")
     .flatMap(contentOf)
-    .flatMap((block) => (typeof block.text === "string" ? [block.text] : []))
-    .reverse();
-  for (const text of [
-    ...(typeof finalMessage === "string" ? [finalMessage] : []),
-    ...texts,
-  ])
+    .flatMap((block) => (typeof block.text === "string" ? [block.text] : []));
+  if (typeof finalMessage === "string") texts.push(finalMessage);
+  const reports: ReturnType<typeof extractCandidateReport>[] = [];
+  for (const text of texts)
     for (const candidate of reportCandidates(text))
       try {
-        return extractCandidateReport(candidate);
+        const report = extractCandidateReport(candidate);
+        if (
+          reports.length === 0 ||
+          canonicalJson(report) !== canonicalJson(reports.at(-1))
+        )
+          reports.push(report);
+        break;
       } catch {
-        // A later candidate, or an earlier report of the same child, may still be readable.
+        // A later candidate in the same text may still be readable.
       }
-  return undefined;
+  const latest = reports.at(-1);
+  if (latest === undefined) return undefined;
+  if (!reports.some((report) => report.checks !== undefined)) return latest;
+  const distinctClaims = (kind: "findings" | "leads") => {
+    const seen = new Set<string>();
+    return reports
+      .flatMap((report) => report[kind])
+      .filter((claim) => {
+        const identity = canonicalJson(claim);
+        if (seen.has(identity)) return false;
+        seen.add(identity);
+        return true;
+      });
+  };
+  return {
+    ...latest,
+    findings: distinctClaims("findings"),
+    leads: distinctClaims("leads"),
+    checks: reports.flatMap((report) => report.checks ?? []),
+  };
 }
 
 /**
