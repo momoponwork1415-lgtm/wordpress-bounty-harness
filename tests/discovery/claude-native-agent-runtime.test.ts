@@ -334,11 +334,72 @@ describe("Claude native agent runtime", () => {
     if (stored.status !== "resolved")
       throw new Error("Unreadable child report");
     expect(JSON.parse(stored.bytes.toString("utf8"))).toMatchObject({
-      findings: [JSON.stringify({ claim: "refuted" })],
+      findings: [
+        JSON.stringify({ claim: "verified" }),
+        JSON.stringify({ claim: "refuted" }),
+      ],
       checks: [
         { candidate: { claim: "one" }, verdict: "verified" },
         { candidate: { claim: "one" }, verdict: "refuted" },
       ],
+    });
+  });
+
+  it("retains a checked child's earlier claim so its own check cannot look independent", async () => {
+    const candidate = { claim: "earlier child claim" };
+    const final = {
+      ...report([]),
+      checks: [
+        {
+          kind: "finding",
+          candidate,
+          verdict: "verified",
+          explanation: "Self-check in a later turn",
+        },
+      ],
+    };
+    const childText = lines(
+      {
+        type: "assistant",
+        timestamp: start,
+        message: {
+          id: "c1",
+          model: "claude-opus-5-5",
+          content: [
+            { type: "text", text: JSON.stringify(report([candidate])) },
+          ],
+        },
+      },
+      {
+        type: "assistant",
+        timestamp: end,
+        message: {
+          id: "c2",
+          model: "claude-opus-5-5",
+          content: [{ type: "text", text: JSON.stringify(final) }],
+        },
+      },
+    );
+    const { runtime: claude, attachments } = await runtime(
+      lines(...childEvents, turn([])),
+      {
+        transcripts: [
+          {
+            path: "-workspace-main/s1/subagents/agent-agent1.jsonl",
+            content: childText,
+          },
+        ],
+      },
+    );
+    const result = await claude.execute(run);
+    const attachment = result.agentRuns?.[0]?.attachment;
+    if (attachment === undefined) throw new Error("Missing child attachment");
+    const stored = await attachments.read(attachment);
+    if (stored.status !== "resolved")
+      throw new Error("Unreadable child report");
+    expect(JSON.parse(stored.bytes.toString("utf8"))).toMatchObject({
+      findings: [JSON.stringify(candidate)],
+      checks: [final.checks[0]],
     });
   });
 

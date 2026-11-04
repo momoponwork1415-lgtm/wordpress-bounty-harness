@@ -9,7 +9,7 @@ node dist/cli/main.js --state <state> --host <host.json> ledger funnel --campaig
 node dist/cli/main.js --state <state> --host <host.json> ledger runtime --campaign <id>   # model / CLI / catalog / run 数
 node dist/cli/main.js --state <state> --host <host.json> ledger usage --campaign <id>     # UTC 日別の token
 node dist/cli/main.js --state <state> --host <host.json> review parked --campaign <id>    # Programme 外で止めた Finding
-node dist/cli/main.js --state <state> --host <host.json> review audit-pending --campaign <id> # v24 の未昇格候補
+node dist/cli/main.js --state <state> --host <host.json> review audit-pending --campaign <id> # checked/v1 の未昇格候補
 node dist/cli/main.js --state <state> --host <host.json> review leads --campaign <id>     # Lead の一覧（検証列には入らない。人間が読む）
 ```
 
@@ -46,7 +46,7 @@ for (const [c, id] of process.argv.slice(2).map((s) => s.split("="))) {
 - 時刻: `occurredAt` はホストの時計。ずれていることがあるので、長さは `wallTimeMs` で読む。#212 の修正（A2）より前の探索 event は、Root も子も Finding もすべて Trial 開始時刻を持つ。修正後は、各 event が記録した時刻を持つ。子の実際の開始と終了は receipt の `startedAt` / `completedAt` で読む。旧 event は書き換えない。
 - 「Trial に数えない run」は `discovery-run-finished.observed`（filesRead、childThreadsObserved、brokerMetrics.forwardedRequests）で判る。
 - `incomplete` は陰性ではない。件数を「候補 0 件」に混ぜない。
-- v24-wide の `checked/v1` では、子の `audit-check-recorded` と Root 候補の正規化後 digest を照合する。`audit-candidate-pending` は未昇格の有効候補で、スキーマ不適合の `candidate-held` と違う。後で `audit-candidate-promoted` が付いた候補は `review audit-pending` と funnel の `auditPending` から外れる。`verified` は AI の点検結果であり、人間の確定ではない。
+- v25-wide の `checked/v1` では、子の `audit-check-recorded` と Root 候補の正規化後 digest を照合する。`audit-candidate-pending` は未昇格の有効候補で、スキーマ不適合の `candidate-held` と違う。後で `audit-candidate-promoted` が付いた候補は `review audit-pending` と funnel の `auditPending` から外れる。`verified` は AI の点検結果であり、人間の確定ではない。
 - `research-imported`（ADR 0049 決定 D）: `research import --from <別の state dir>` が、別の台帳の終了 Trial を研究 file の引き継ぎ（ADR 0048）の候補として足した記録。campaign は `research-import:<fromState>`、Snapshot は元 Trial のもの。`fromState` は state dir の basename だけで、`fromRunId`、`targetId`、`targetVersion`、`sourceFinishedAt`、`researchDigest`（共有の work directory の `research-<digest>`）、任意の `explorationLabDigest` と `research-stores` artifact（保存先の表、主キーの値なし）を持つ。Trial ではないので funnel と Trial 数に入れない。渡した Trial は `discovery-run-started.configuration.priorResearch.sourceState` で判る。
 
 ## Trial の時系列を出す

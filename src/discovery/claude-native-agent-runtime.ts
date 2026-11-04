@@ -346,7 +346,7 @@ export function rootUsage(events: readonly Event[]): NativeRunReceipt["usage"] {
       };
 }
 
-/** Preserve every child check in turn order; the last readable report supplies claims. */
+/** Preserve checked child claims and checks across turns for self-check provenance. */
 function childReport(finalMessage: unknown, transcript: readonly Event[]) {
   const texts = transcript
     .filter((event) => event.type === "assistant")
@@ -369,9 +369,24 @@ function childReport(finalMessage: unknown, transcript: readonly Event[]) {
       }
   const latest = reports.at(-1);
   if (latest === undefined) return undefined;
-  return reports.some((report) => report.checks !== undefined)
-    ? { ...latest, checks: reports.flatMap((report) => report.checks ?? []) }
-    : latest;
+  if (!reports.some((report) => report.checks !== undefined)) return latest;
+  const distinctClaims = (kind: "findings" | "leads") => {
+    const seen = new Set<string>();
+    return reports
+      .flatMap((report) => report[kind])
+      .filter((claim) => {
+        const identity = canonicalJson(claim);
+        if (seen.has(identity)) return false;
+        seen.add(identity);
+        return true;
+      });
+  };
+  return {
+    ...latest,
+    findings: distinctClaims("findings"),
+    leads: distinctClaims("leads"),
+    checks: reports.flatMap((report) => report.checks ?? []),
+  };
 }
 
 /**

@@ -71,7 +71,7 @@ describe("WordPress prompt table", () => {
   it("derives the id lists and the current versions from the table", () => {
     const ids = WORDPRESS_DISCOVERY_PROMPTS.map((row) => row.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(37);
+    expect(ids).toHaveLength(38);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual(ids);
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       ...ids,
@@ -107,12 +107,12 @@ describe("WordPress prompt table", () => {
       WORDPRESS_DISCOVERY_PROMPTS.filter(
         (row) => (row.status as string) === "candidate",
       ).map((row) => row.id),
-    ).toEqual(["wp2shell-bounty-v23-wide", "wp2shell-bounty-v24-wide"]);
+    ).toEqual(["wp2shell-bounty-v23-wide", "wp2shell-bounty-v25-wide"]);
     expect(WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS).toEqual([
       "wp2shell-bounty-v11",
       "wp2shell-bounty-v22-wide",
       "wp2shell-bounty-v23-wide",
-      "wp2shell-bounty-v24-wide",
+      "wp2shell-bounty-v25-wide",
     ]);
     expect(
       WORDPRESS_VERIFIER_PROMPTS.filter((row) => row.status === "current"),
@@ -298,6 +298,11 @@ describe("WordPress discovery prompt assets", () => {
         "installed wbh-audit-v2 skill",
       ),
     );
+    const v25 = await loadWordPressDiscoveryAsset("wp2shell-bounty-v25-wide");
+    expect(v25.text).toContain("Read the installed wbh-audit skill");
+    expect(v25.text).toContain("pinned as wbh-audit-v2");
+    expect(v25.text).toContain("Report a Lead when");
+    expect(v25.text).toContain("one unresolved edge");
   });
 
   it("keeps answer strings out of the current Verifier prompt", async () => {
@@ -1414,7 +1419,8 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v21-wide" ||
         id === "wp2shell-bounty-v22-wide" ||
         id === "wp2shell-bounty-v23-wide" ||
-        id === "wp2shell-bounty-v24-wide"
+        id === "wp2shell-bounty-v24-wide" ||
+        id === "wp2shell-bounty-v25-wide"
       ) {
         // v5 leaves attacker positions and in-scope effects to the supplied
         // trust boundary and Programme Boundary sections (owner decision, 2026-10-16).

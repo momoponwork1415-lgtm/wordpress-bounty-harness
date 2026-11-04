@@ -513,10 +513,18 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:8822e7516329d4b142422d68b6f82ada9b02923f13e4b454edfcbb532d5ac63a",
     outputContract: "v6",
-    status: "candidate",
-    mode: "wide",
+    status: "archived",
     // v23 objective with the versioned wbh-audit-v2 skill named explicitly.
     // Its generated contract carries independent Phase 5 child checks.
+  },
+  {
+    id: "wp2shell-bounty-v25-wide",
+    digest:
+      "sha256:cacc8ff2ca04a61446fef3ac42ec6b89502d6b5ea5edbae796f5ad772d5ba3cd",
+    outputContract: "v6",
+    status: "candidate",
+    mode: "wide",
+    // v24 with the CLI-visible skill name and the one-edge Lead handoff clear.
   },
   {
     id: "wp2shell-whitebox-v1.7",

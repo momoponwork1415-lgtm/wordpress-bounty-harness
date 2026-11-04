@@ -1,6 +1,6 @@
 # WordPressバグバウンティHarness 仕様書
 
-版: v0.24、2026-11-04。設計判断はこの文書と [ADR](adr/) に置き、食い違えば番号の新しい ADR が勝つ。いまの動きを段ごとに追う説明は [SYSTEM.md](SYSTEM.md)、開発と運用の規則は [DEVELOPMENT.md](DEVELOPMENT.md)、用語は [GLOSSARY.md](../GLOSSARY.md) にある。2026-10 の立ち上げ期の節（当初の ADR 一覧、縦断スライス、移植一覧、spike）は 2026-11-01 に削り、tag `archive/pre-docs-rewrite-2026-11-01` と Git 履歴に残る。
+版: v0.25、2026-11-04。設計判断はこの文書と [ADR](adr/) に置き、食い違えば番号の新しい ADR が勝つ。いまの動きを段ごとに追う説明は [SYSTEM.md](SYSTEM.md)、開発と運用の規則は [DEVELOPMENT.md](DEVELOPMENT.md)、用語は [GLOSSARY.md](../GLOSSARY.md) にある。2026-10 の立ち上げ期の節（当初の ADR 一覧、縦断スライス、移植一覧、spike）は 2026-11-01 に削り、tag `archive/pre-docs-rewrite-2026-11-01` と Git 履歴に残る。
 
 ## 1. 目的と指標
 
@@ -58,7 +58,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | Lab provisioner | gVisor内のWordPress + MySQL、ロール別アカウント、HTTP捕捉のrecorder、Lab browser |
 | Lab観測器 | 第7節のHTTP捕捉、Lab状態の差分、被害者画面の記録。成立は判定しない（判定器集合は2026-10-25に削除、ADR 0040） |
 | scope方針 | `src/profiles/wordpress/policy/programme-scope.md`（Wordfence / Patchstack） |
-| prompt雛形 | 本番の既定は `deep` の `wp2shell-bounty-v11`、`wide` の `wp2shell-bounty-v22-wide`（ADR 0039）。`wp2shell-bounty-v24-wide` は `wbh-audit-v2` と attached Lab を伴う、名指しの比較用候補である。v22 / v23 の出力は `direct/v1`、v24 だけは `checked/v1` で受ける。目的文とスキルの版・digest は過去 Trial の照合用に残す。trust 境界宣言の雛形も持つ（ADR 0019、0029、0033、0039、0050 追記） |
+| prompt雛形 | 本番の既定は `deep` の `wp2shell-bounty-v11`、`wide` の `wp2shell-bounty-v22-wide`（ADR 0039）。`wp2shell-bounty-v25-wide` は `wbh-audit-v2` と attached Lab を伴う、名指しの比較用候補である。v22 / v23 の出力は `direct/v1`、v25 だけは `checked/v1` で受ける。目的文とスキルの版・digest は過去 Trial の照合用に残す。trust 境界宣言の雛形も持つ（ADR 0019、0029、0033、0039、0050 追記） |
 | Lead型 | sourceに根拠があり、影響までの辺が1つ足りないprimitiveの分類と記録 |
 | 評価対象の表現 | 開発対象のslug、版、修正版、影響分類。正解表の手入力は初期受入条件にしない |
 
@@ -71,7 +71,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | `TargetSelection v1` | selection → snapshot | plugin slug、version、スコア内訳、方針の版、選定時刻、必要なら対象slugに結び付けた依存pluginの明示pin |
 | `CampaignInput v1` | snapshot → discovery | Target / Dependency Snapshot digest、trust境界宣言（人間が書く、版付き）、Programme Boundary（匿名化）、公開履歴は `none` のみ（時点で切ったカタログの生成は ADR 0034 で削除。旧runの `catalog` は台帳から読む）、model profile digest、prompt digest、Trial単位の停止規則、Lab設定 |
 | `PlannedTrial` | profile → discovery | Trial id / ordinal、Rootと子（上限は `discovery.maxChildren`）の実行枠、固定sourceの参照、単一Trialのwall上限。旧形式の入口索引・段・Lead継続planは互換読取のみ |
-| `Discovery admission checked/v1` | v24-wide の Root / 子 → discovery / ledger | Root は従来の 4 キー `findings`、`leads`、`examined`、`unexamined`。子はこれに `checks` を加えた 5 キーで、各点検は `{kind, candidate, verdict, explanation}`。`kind` は Finding / Lead、`verdict` は `verified` / `replace` / `refuted` / `blocked`。候補本文と点検本文は Private Evidence、台帳は digest と照合状態だけを持つ。v22 / v23 の `direct/v1` は従来どおり受ける |
+| `Discovery admission checked/v1` | v25-wide の Root / 子 → discovery / ledger | Root は従来の 4 キー `findings`、`leads`、`examined`、`unexamined`。子はこれに `checks` を加えた 5 キーで、各点検は `{kind, candidate, verdict, explanation}`。`kind` は Finding / Lead、`verdict` は `verified` / `replace` / `refuted` / `blocked`。候補本文と点検本文は Private Evidence、台帳は digest と照合状態だけを持つ。v22 / v23 の `direct/v1` は従来どおり受ける |
 | `Finding v1` | discovery → verification / ledger | claim、attacker position（`unauthenticated` / `subscriber` / `customer` のみ）、到達する影響の種別（第8b節の共通分類）、設定前提（`default` / 変更内容）、破られるproperty、入口からeffectまでのtrace（file、function、行）、既存controlへの評価、Lab内で観測した事実、recipe ref（Private）、discovery run id、snapshot digest |
 | `Lead v1` | discovery → ledger | primitive、storage分類、欠けた辺、source trace。本文はPrivate Evidence、台帳はdigestとenumだけ |
 | `VerificationResult v1` | verification → ledger / review | `incomplete` と理由コード（provision、precondition、recipe、observation、evidence、cleanup、digest-mismatch、awaiting-human-observation）、Harness の捕捉（HTTP、Lab 状態の差分、Lab browser の記録）の証拠 ref、Lab Setup digest、`evidenceCapture` enum。判定器があった時期の `runtime-confirmed` / `contradicted` は既存 event として読む（ADR 0040） |
@@ -84,14 +84,14 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 ## 6. Discovery runの仕様
 
 - 攻撃者位置: 未認証と subscriber（customer 相当）だけ。contributor 以上は trust 境界の内側として宣言する（第 8a 節）。
-- 入力: 固定ソース（読み取り専用）、人間が書いた trust 境界宣言、Programme Boundary、目的文、Harness が生成する節（`## Run parameters`、版付きの Finding / Lead 出力契約、スキルの場所、`discovery.priorResearch: same-target` のときの `## Prior research`）。v24-wide では子の `checks` を含む新しい契約を渡す。評価対象の答え、PoC、公開履歴の中身、入口索引は渡さない（不変条件 1、ADR 0012、0034、0050 追記）。
-- 目的文: 本番の既定は `deep` の `wp2shell-bounty-v11`、`wide` の `wp2shell-bounty-v22-wide`（ADR 0039）。`wp2shell-bounty-v24-wide` と `wbh-audit-v2` は名指しした比較 Trial に限る。本文を変えたら版を上げ、旧版と digest を残す。v24 の探索手順は上位スキルが受け持ち、どこを読み何を仮説にするかは Root が決める（ADR 0050 追記）。
-- 構成: 対象ごとに Root と子の協調 Trial を 1 回。同時に生きる子の上限は `discovery.maxChildren`（既定 4、1〜8）で Harness が強制し、何体使うかは Root が決める。v22 / v23 の子の有効な Finding と Lead は Root の最終報告と独立に記録する。v24 では子の自発候補を保全して pending に置き、Root 候補だけを独立点検後に昇格する。Claude runtime は `runtimeShare` で分けられるが、本番の share は 0 である。
+- 入力: 固定ソース（読み取り専用）、人間が書いた trust 境界宣言、Programme Boundary、目的文、Harness が生成する節（`## Run parameters`、版付きの Finding / Lead 出力契約、スキルの場所、`discovery.priorResearch: same-target` のときの `## Prior research`）。v25-wide では子の `checks` を含む新しい契約を渡す。評価対象の答え、PoC、公開履歴の中身、入口索引は渡さない（不変条件 1、ADR 0012、0034、0050 追記）。
+- 目的文: 本番の既定は `deep` の `wp2shell-bounty-v11`、`wide` の `wp2shell-bounty-v22-wide`（ADR 0039）。`wp2shell-bounty-v25-wide` と `wbh-audit-v2` は名指しした比較 Trial に限る。本文を変えたら版を上げ、旧版と digest を残す。v25 の探索手順は上位スキルが受け持ち、どこを読み何を仮説にするかは Root が決める（ADR 0050 追記）。
+- 構成: 対象ごとに Root と子の協調 Trial を 1 回。同時に生きる子の上限は `discovery.maxChildren`（既定 4、1〜8）で Harness が強制し、何体使うかは Root が決める。v22 / v23 の子の有効な Finding と Lead は Root の最終報告と独立に記録する。v25 では子の自発候補を保全して pending に置き、Root 候補だけを独立点検後に昇格する。Claude runtime は `runtimeShare` で分けられるが、本番の share は 0 である。
 - 許可する操作: 固定ソースの読み取り、Lab があればそこへの HTTP。外向き通信は認証ブローカー経由の provider API だけ（不変条件 2）。`discovery.lab: attached`（既定、ADR 0049）では Trial ごとに探索 Lab を 1 台立て、制御口は `reset` / `observe` と、保存先の観測器 `find`（植えた印の table / column / file）、`sql`（読み取り専用ユーザーで SELECT 1 文、200 行まで）、`trace`（1 リクエストの plugin 内の関数呼び出し列）を受ける。`find`、`sql`、`trace` は 1 つの予算 `discovery.lab.maxLookups`（既定 60）を共有する。Harness は捕捉と状態の差分と要求・答えを封じて回数を数えるだけで、答えを読まず判定しない（ADR 0003 の 2026-10-25 追記と 2026-11-02 追記）。Lab を付けないのは `none` を名指ししたときだけである。
-- 停止規則: 制限時間の上限は 120 分（`runWallTimeMinutes`）。どちらの mode にも既定の最低時間は無く（`discovery.minimumActiveMinutes` の既定 0、ADR 0039 追記 20）、終了は探索スキルの手順（v22 は `wbh-recon`、v24 は `wbh-audit`）が判断して、最初の最終報告で終える。`minimumActiveMinutes` を 1 以上にした `deep` の Trial だけ、早い最終報告を同じセッションで続ける。値は目的文に書かず `## Run parameters` で伝える。継続不能、制限時間、provider、broker、スキーマの失敗は理由付きの `incomplete` で、候補 0 件には数えない（ADR 0033、0039、0050 追記）。
+- 停止規則: 制限時間の上限は 120 分（`runWallTimeMinutes`）。どちらの mode にも既定の最低時間は無く（`discovery.minimumActiveMinutes` の既定 0、ADR 0039 追記 20）、終了は探索スキルの手順（v22 は `wbh-recon`、v25 は `wbh-audit`）が判断して、最初の最終報告で終える。`minimumActiveMinutes` を 1 以上にした `deep` の Trial だけ、早い最終報告を同じセッションで続ける。値は目的文に書かず `## Run parameters` で伝える。継続不能、制限時間、provider、broker、スキーマの失敗は理由付きの `incomplete` で、候補 0 件には数えない（ADR 0033、0039、0050 追記）。
 - 再開: 止まった Root（`completed` 以外）は同じ Snapshot、同じ再開段落、残りの制限時間で新しい sandbox に再開できる。Codex の `provider-limited` は backoff 後に再開区間 5 まで自動で、死んだ持ち主の `interrupted` は再起動したランナーが自動で、それ以外は `campaign resume --run` で名指しして再開する。言い換えはしない（ADR 0036）。
-- 出力: Root の最終報告は `findings`、`leads`、`examined`、`unexamined` の 4 キー。v24-wide の子はこれに `checks` を加えた 5 キーを返す。`checks` の各項目は `{kind, candidate, verdict, explanation}` で、`kind` は `finding` / `lead`、`verdict` は `verified` / `replace` / `refuted` / `blocked`。空の配列も許す。v22 / v23 の報告は従来の `direct/v1` で受ける。候補は出力境界で棄却せず、正規化して受理するか理由付きで保留する（ADR 0018、0050 追記）。
-- 昇格: `checked/v1` は v24-wide と `wbh-audit-v2` の組合せにだけ適用する。Harness は子の実 run が `completed` で、Root と別の run、同じ Trial / Target Snapshot であること、点検の Private Evidence が残ること、子の `verified` 点検が持つ候補と Root 候補の正規化後の claim の canonical digest が一致することを確かめる。その claim を子の自発候補として記録した子自身の点検は昇格に使わない。一致した候補だけが `finding-recorded` / `lead-recorded`、または既存の Programme Boundary による `finding-parked` へ進む。`replace` / `refuted` / `blocked` は成立の判定でなく、昇格しない理由付きの点検記録である。Lab の観測、ソース上の成立、脆弱性の確定は Harness が判定しない。
+- 出力: Root の最終報告は `findings`、`leads`、`examined`、`unexamined` の 4 キー。v25-wide の子はこれに `checks` を加えた 5 キーを返す。`checks` の各項目は `{kind, candidate, verdict, explanation}` で、`kind` は `finding` / `lead`、`verdict` は `verified` / `replace` / `refuted` / `blocked`。空の配列も許す。v22 / v23 の報告は従来の `direct/v1` で受ける。候補は出力境界で棄却せず、正規化して受理するか理由付きで保留する（ADR 0018、0050 追記）。
+- 昇格: `checked/v1` は v25-wide と `wbh-audit-v2` の組合せにだけ適用する。Harness は子の実 run が `completed` で、Root と別の run、同じ Trial / Target Snapshot であること、点検の Private Evidence が残ること、子の `verified` 点検が持つ候補と Root 候補の正規化後の claim の canonical digest が一致することを確かめる。その claim を子の自発候補として記録した子自身の点検は昇格に使わない。一致した候補だけが `finding-recorded` / `lead-recorded`、または既存の Programme Boundary による `finding-parked` へ進む。`replace` / `refuted` / `blocked` は成立の判定でなく、昇格しない理由付きの点検記録である。Lab の観測、ソース上の成立、脆弱性の確定は Harness が判定しない。
 - 未昇格: 点検と一致しない Root 候補や子の自発候補は、本文を Private Evidence、digest と状態を追記専用の台帳に残して pending として一覧できる。Root 候補の点検が足りない Trial は理由付き `incomplete` とし、正常な候補 0 件に数えない。スキーマ失敗は従来の `candidate-held` に分ける。Lead はソースに根拠があり影響までの辺が 1 つ足りない primitive で、昇格後も検証列には入らず、`review leads` で人間が全件を見る。
 - 出口の park: impact が Programme Boundary 外の 5 種（`other`、`csrf-to-write`、`missing-authz`、`idor`、`reflected-xss`）と所有者が外した 5 種（`sensitive-object-access`、`content-deletion`、`options-update`、`privesc-to-contributor+`、`auth-bypass-non-admin`）は `finding-parked` として残し、検証列と funnel の raw に入れない。文言からは判定しない。`review restore` で戻せる（ADR 0032、0038 追記 13）。
 - 第 2 Trial（ADR 0044）: `discovery.priorLeads` で Snapshot と Lead の代表を名指ししたときだけ、同じ Snapshot に入力違いの Trial を 1 回行う。自動の追加 Trial でも pass@k でもない。例外として、連続ランナーは `discovery.followUp: leads`（`lab: attached` のときの既定）のとき、終了した Trial に Lead が 1 件以上あり同じ Snapshot に第 2 Trial が無ければ、新しい対象より先に同じ第 2 Trial を 1 回組む。Harness が読むのは Lead の件数と台帳順の id だけで、台帳には `follow-up-scheduled` と `configuration.followUp` を残す（ADR 0049 追記 2）。
@@ -197,7 +197,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 開発セットの gate と判定器の負の対照は役目を終えた。本番が bench である（所有者決定 2026-10-26）。agent 入力を変える PR は本番の同じ選定帯で旧版と新版を交互に回し、[DEVELOPMENT.md](DEVELOPMENT.md) 第 5 節の 6 段で採否を決める。開発セットに戻すのは、本番で対象範囲内の Finding は出るのに人間の観測の `match` が 1 週間 0 件のときだけ。既知の公開事例を再発見する benchmark は、現行の方法が 1 回の Trial で既知の型を外したときに、その型を名指しして回す。手順は [docs/agents/measurement.md](agents/measurement.md)。
 
-v24-wide / `checked/v1` は比較用候補であり、採否の本番計測はこれから行う。pending 候補と独立点検の件数は診断値として分け、Finding 数や人間の `match` と同一視しない（ADR 0050 追記）。
+v25-wide / `checked/v1` は比較用候補であり、採否の本番計測はこれから行う。v24-wide は起動前に archived とし、本文と digest を保存する。pending 候補と独立点検の件数は診断値として分け、Finding 数や人間の `match` と同一視しない（ADR 0050 追記）。
 
 ## 11. 用語
 

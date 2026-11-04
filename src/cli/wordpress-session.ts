@@ -296,7 +296,7 @@ export const wordpressCampaignConfigSchema = z
     const auditSkill =
       promptId === "wp2shell-bounty-v23-wide"
         ? "wbh-audit-v1"
-        : promptId === "wp2shell-bounty-v24-wide"
+        : promptId === "wp2shell-bounty-v25-wide"
           ? "wbh-audit-v2"
           : undefined;
     if (auditSkill !== undefined) {
@@ -335,12 +335,12 @@ export const wordpressCampaignConfigSchema = z
       });
     if (
       config.discovery.skills?.includes("wbh-audit-v2") &&
-      promptId !== "wp2shell-bounty-v24-wide"
+      promptId !== "wp2shell-bounty-v25-wide"
     )
       context.addIssue({
         code: "custom",
         path: ["discovery", "skills"],
-        message: "wbh-audit-v2 requires wp2shell-bounty-v24-wide",
+        message: "wbh-audit-v2 requires wp2shell-bounty-v25-wide",
       });
     if (
       config.discovery.followUp === "leads" &&
