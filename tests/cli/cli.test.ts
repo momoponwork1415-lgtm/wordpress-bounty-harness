@@ -35,6 +35,8 @@ import {
   defineAgentRuntimeProfile,
   defineClaudeRuntimeProfile,
   ProviderAttachmentStore,
+  readNativeRunReceipt,
+  sealNativeRunReceipt,
   type DiscoveryTransportRun,
 } from "../../src/discovery/index.js";
 import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-source-tree.js";
@@ -3229,6 +3231,7 @@ describe("harness CLI vertical slice", () => {
     expect(transportRuns[0]?.maxChildren).toBe(6);
     expect(transportRuns[0]?.resumePrompt?.startsWith("Stop when")).toBe(true);
     expect(prompts[0]).toContain(transportRuns[0]?.resumePrompt);
+    expect(prompts[0]).toContain("# WordPress trust boundary template v1");
     // A zero floor is stated explicitly, with the ceiling and the 120-minute wall.
     expect(prompts[0]).toContain(
       [
@@ -3252,6 +3255,7 @@ describe("harness CLI vertical slice", () => {
     if (started[0]?.event.type === "discovery-run-started")
       expect(started[0].event.configuration).toMatchObject({
         promptVariant: "wp2shell-bounty-v22-wide",
+        trustBoundaryVersion: "trust-boundary-v1",
         mode: "wide",
         wallMinutes: 120,
         minimumActiveMinutes: 0,
@@ -3260,6 +3264,72 @@ describe("harness CLI vertical slice", () => {
         model: "gpt-6.1-sol",
         effort: "high",
       });
+  });
+
+  it("uses the corrected trust boundary for v25 and preserves it on resume", async () => {
+    const { run, configPath, transportRuns, ledger } = await harness({
+      refuseOnCalls: [1],
+      refusalSession: true,
+      zeroFindings: true,
+      config: {
+        promptId: "wp2shell-bounty-v25-wide",
+        discovery: {
+          mode: "wide",
+          lab: "attached",
+          skills: ["wbh-audit-v2", "wbh-setup-v1", "wbh-lab-v1"],
+        },
+      },
+    });
+    const result = await run(
+      "campaign",
+      "run",
+      "synthetic-plugin",
+      "--campaign",
+      "campaign-trust-v2",
+      "--config",
+      configPath,
+    );
+    expect(result.code).toBe(0);
+    expect(transportRuns[0]?.prompt).toContain(
+      "# WordPress trust boundary template v2",
+    );
+    expect(transportRuns[0]?.prompt).toContain(
+      "Only a named human's matching observation in a retained verification Lab or a new review Lab",
+    );
+    expect(transportRuns[0]?.prompt).not.toContain("independent judge");
+    const started = ledger().read({
+      campaignId: "campaign-trust-v2",
+      type: "discovery-run-started",
+    });
+    expect(started[0]?.event.type).toBe("discovery-run-started");
+    if (started[0]?.event.type === "discovery-run-started")
+      expect(started[0].event.configuration.trustBoundaryVersion).toBe(
+        "trust-boundary-v2",
+      );
+    const resumed = await run(
+      "campaign",
+      "resume",
+      "--campaign",
+      "campaign-trust-v2",
+      "--run",
+      transportRuns[0]!.runId,
+      "--config",
+      configPath,
+    );
+    expect(resumed.code).toBe(0);
+    expect(transportRuns[1]?.prompt).toContain(
+      "# WordPress trust boundary template v2",
+    );
+    expect(transportRuns[1]?.prompt).not.toContain("independent judge");
+    const segments = ledger().read({
+      campaignId: "campaign-trust-v2",
+      type: "discovery-run-started",
+    });
+    expect(segments[1]?.event.type).toBe("discovery-run-started");
+    if (segments[1]?.event.type === "discovery-run-started")
+      expect(segments[1].event.configuration.trustBoundaryVersion).toBe(
+        "trust-boundary-v2",
+      );
   });
 
   it("rejects historical prompt and history ablation configs at the new-run boundary", () => {
@@ -4298,6 +4368,9 @@ describe("harness CLI vertical slice", () => {
     expect(unknown.code).toBe(3);
     expect(unknown.stderr).toBe("not resumable: run-unknown");
     expect(transportRuns).toHaveLength(1);
+    expect(transportRuns[0]!.prompt).toContain(
+      "# WordPress trust boundary template v1",
+    );
 
     const resumed = await run(
       "campaign",
@@ -4325,6 +4398,9 @@ describe("harness CLI vertical slice", () => {
     });
     expect(segment.prompt).toContain(segment.resumePrompt!);
     expect(segment.prompt).toBe(transportRuns[0]!.prompt);
+    expect(segment.prompt).toContain(
+      "The independent judge decides runtime confirmation.",
+    );
     expect(resumed.stdout).toContain(
       `resumed ${refusedRunId} as ${segment.runId}  trial ${refusedRunId}  segment 1  remaining wall 110 min`,
     );
@@ -4340,6 +4416,7 @@ describe("harness CLI vertical slice", () => {
       resumesRun: refusedRunId,
       resumeSegment: 1,
       labAttached: false,
+      configuration: { trustBoundaryVersion: "trust-boundary-v1" },
     });
     // The original failure and skip stay; the Trial is counted once.
     expect(
@@ -4382,6 +4459,113 @@ describe("harness CLI vertical slice", () => {
     expect(completed.stderr).toBe("not resumable: run-completed");
     expect(transportRuns).toHaveLength(2);
   });
+
+  it.each(["legacy", "unknown"] as const)(
+    "uses the recorded trust boundary on public resume (%s)",
+    async (caseName) => {
+      const { run, configPath, transportRuns, ledger, store } = await harness({
+        refuseOnCalls: [1],
+        refusalSession: true,
+        zeroFindings: true,
+        config: {
+          promptId: "wp2shell-bounty-v22-wide",
+          discovery: { lab: "none", mode: "wide" },
+        },
+      });
+      const campaign = `campaign-trust-boundary-${caseName}`;
+      const command = ["--campaign", campaign, "--config", configPath];
+      expect((await run("campaign", "run", "--all", ...command)).code).toBe(0);
+      expect(transportRuns).toHaveLength(1);
+
+      const originalStart = ledger()
+        .read({ campaignId: campaign, type: "discovery-run-started" })
+        .find(({ event }) => event.type === "discovery-run-started")?.event;
+      const originalFinish = ledger()
+        .read({ campaignId: campaign, type: "discovery-run-finished" })
+        .find(({ event }) => event.type === "discovery-run-finished")?.event;
+      if (originalStart?.type !== "discovery-run-started")
+        throw new Error("Missing recorded run start");
+      if (originalFinish?.type !== "discovery-run-finished")
+        throw new Error("Missing recorded run finish");
+      const receiptReference = originalFinish.artifacts.find(
+        (artifact) => artifact.kind === "native-run-receipt",
+      );
+      if (receiptReference === undefined)
+        throw new Error("Missing recorded run receipt");
+      const receipt = await readNativeRunReceipt(
+        store(),
+        receiptReference.digest,
+      );
+      if (receipt === undefined) throw new Error("Run receipt unavailable");
+
+      // Append a historical Trial without editing any existing ledger row.
+      const historicalRunId = `${originalStart.runId}-${caseName}`;
+      const { digest: originalDigest, ...receiptBody } = receipt;
+      expect(originalDigest).toBeTruthy();
+      const historicalReceiptBody = { ...receiptBody, runId: historicalRunId };
+      const historicalReceiptDigest = await sealNativeRunReceipt(store(), {
+        ...historicalReceiptBody,
+        digest: canonicalDigest(historicalReceiptBody),
+      });
+      const configuration = { ...originalStart.configuration };
+      delete configuration.trustBoundaryVersion;
+      if (caseName === "unknown")
+        configuration.trustBoundaryVersion = "trust-boundary-v99";
+      expect(
+        await ledger().append({
+          ...originalStart,
+          identity: `historical-trust-start-${caseName}`,
+          runId: historicalRunId,
+          trialId: historicalRunId,
+          configuration,
+        }),
+      ).toMatchObject({ status: "appended" });
+      expect(
+        await ledger().append({
+          ...originalFinish,
+          identity: `historical-trust-finish-${caseName}`,
+          runId: historicalRunId,
+          artifacts: originalFinish.artifacts.map((artifact) =>
+            artifact.kind === "native-run-receipt"
+              ? {
+                  kind: "native-run-receipt" as const,
+                  digest: historicalReceiptDigest,
+                }
+              : artifact,
+          ),
+        }),
+      ).toMatchObject({ status: "appended" });
+
+      const resumed = await run(
+        "campaign",
+        "resume",
+        "--run",
+        historicalRunId,
+        ...command,
+      );
+      if (caseName === "unknown") {
+        expect(resumed.code).toBe(3);
+        expect(resumed.stderr).toBe(
+          "not resumable: prompt-version-differs (trust-boundary-v99 is not in the trust-boundary registry)",
+        );
+        expect(transportRuns).toHaveLength(1);
+      } else {
+        expect(resumed.code).toBe(0);
+        expect(transportRuns).toHaveLength(2);
+        expect(transportRuns[1]!.prompt).toBe(transportRuns[0]!.prompt);
+        expect(transportRuns[1]!.prompt).toContain(
+          "The independent judge decides runtime confirmation.",
+        );
+        const starts = ledger()
+          .read({ campaignId: campaign, type: "discovery-run-started" })
+          .map(({ event }) => event);
+        expect(starts.at(-1)).toMatchObject({
+          resumesRun: historicalRunId,
+          configuration: { trustBoundaryVersion: "trust-boundary-v1" },
+        });
+      }
+    },
+  );
 
   it("resumes under the run parameters the Trial recorded, not a changed campaign configuration (#548)", async () => {
     const { run, configPath, transportRuns, ledger } = await harness({
