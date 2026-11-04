@@ -251,6 +251,103 @@ async function archivedTrial(
 const eventsOf = (ledger: Ledger) =>
   ledger.readAll({ campaignId: "campaign-1" }).map(({ event }) => event);
 
+async function appendArchivedChild(
+  trial: Awaited<ReturnType<typeof archivedTrial>>,
+  childId: string,
+  recordedReport: unknown,
+  turns: readonly unknown[],
+) {
+  const { ledger, options } = trial;
+  const base = {
+    schemaVersion: 1 as const,
+    campaignId: "campaign-1",
+    snapshotDigest: digest,
+    occurredAt: now,
+  };
+  const diagnostic = await options.attachments.put(
+    "diagnostic",
+    Buffer.from(
+      [
+        {
+          timestamp: now,
+          type: "session_meta",
+          payload: {
+            id: childId,
+            source: {
+              subagent: {
+                thread_spawn: {
+                  parent_thread_id: ROOT,
+                  depth: 1,
+                  agent_path: `/root/${childId}`,
+                },
+              },
+            },
+          },
+        },
+        {
+          timestamp: now,
+          type: "turn_context",
+          payload: {
+            model: "gpt-6-sol",
+            effort: "high",
+            cyber_access_program: "standard",
+          },
+        },
+        ...turns.map((report) => ({
+          timestamp: now,
+          type: "event_msg",
+          payload: {
+            type: "task_complete",
+            last_agent_message: JSON.stringify(report),
+          },
+        })),
+      ]
+        .map((event) => JSON.stringify(event))
+        .join("\n"),
+    ),
+  );
+  const receipt = await options.evidence.putFiles({
+    "receipt.json": canonicalJson(
+      createNativeRunReceipt({
+        runId: childId,
+        targetSnapshotDigest: digest,
+        profile,
+        terminal: "completed",
+        reason: "unavailable",
+        startedAt: now,
+        completedAt: "2026-10-08T08:00:01Z",
+        diagnosticArtifactDigest: diagnostic.digest,
+        reportArtifactDigest: canonicalDigest(recordedReport),
+      }),
+    ),
+  });
+  await ledger.append({
+    ...base,
+    identity: `discovery-start-${childId}`,
+    type: "discovery-run-started",
+    runId: childId,
+    trialId: ROOT,
+    runKind: "child",
+    parentRunId: ROOT,
+    configuration: {
+      promptVariant: "synthetic",
+      admissionContract: "checked/v1",
+      agentPath: `/root/${childId}`,
+    },
+    history: { mode: "none" },
+  });
+  await ledger.append({
+    ...base,
+    identity: `discovery-finish-${childId}`,
+    type: "discovery-run-finished",
+    runId: childId,
+    outcome: "completed",
+    costUsd: "unavailable",
+    wallTimeMs: 1000,
+    artifacts: [{ kind: "native-run-receipt", digest: receipt }],
+  });
+}
+
 it("appends only the claims of earlier child turns, once, bound to the child run", async () => {
   // The capture recorded the last turn's report as written (before #539).
   const { ledger, options } = await archivedTrial(
@@ -411,6 +508,309 @@ it("promotes a previously pending Root claim after recovering its completed chil
     outcome: "failed",
     reasonDetail: "audit-check-missing",
   });
+});
+
+it("appends a dispute when another recovered child refutes a promoted Root claim", async () => {
+  const candidate = finding("Earlier turn effect", 1);
+  const empty = {
+    findings: [],
+    leads: [],
+    checks: [],
+    examined: "source",
+    unexamined: "none",
+  };
+  const verified = {
+    ...empty,
+    checks: [
+      {
+        kind: "finding",
+        candidate,
+        verdict: "verified",
+        explanation: "Reopened the current source and checked the guard",
+      },
+    ],
+  };
+  const trial = await archivedTrial(
+    extractCandidateReport(JSON.stringify(empty)),
+    "checked/v1",
+    [verified, empty],
+    { ...empty, findings: [candidate] },
+  );
+  const { ledger, options } = trial;
+  expect(await recoverWordPressChildTurnReports(options)).toMatchObject({
+    recovered: 1,
+    findings: 1,
+  });
+  const original = ledger.read({ type: "finding-recorded" })[0]?.event;
+  expect(original?.type).toBe("finding-recorded");
+  expect(ledger.read({ type: "audit-candidate-promoted" })).toHaveLength(1);
+  await appendArchivedChild(
+    trial,
+    "child-2",
+    extractCandidateReport(JSON.stringify(empty)),
+    [
+      {
+        ...empty,
+        checks: [
+          {
+            kind: "finding",
+            candidate,
+            verdict: "refuted",
+            explanation: "The route is denied by a newly observed guard",
+          },
+        ],
+      },
+      empty,
+    ],
+  );
+  expect(await recoverWordPressChildTurnReports(options)).toMatchObject({
+    recovered: 1,
+    findings: 0,
+  });
+  const disputes = ledger.read({ type: "audit-candidate-disputed" });
+  expect(disputes).toHaveLength(1);
+  expect(disputes[0]?.event).toMatchObject({
+    runId: ROOT,
+    candidateKind: "finding",
+    recordIds: [
+      original?.type === "finding-recorded" ? original.findingId : "",
+    ],
+    causingEventIdentity: `audit-check-child-2-0-child-turns-merge-v1`,
+  });
+  expect(ledger.read({ type: "finding-recorded" })).toHaveLength(1);
+  expect(ledger.funnel("campaign-1").auditDisputed).toBe(1);
+  expect(ledger.funnel("campaign-1").auditPending).toBe(0);
+  const count = eventsOf(ledger).length;
+  await recoverWordPressChildTurnReports(options);
+  expect(eventsOf(ledger)).toHaveLength(count);
+});
+
+it("reconciles a recovered check already admitted before an interrupted reconciliation", async () => {
+  const candidate = finding("Earlier turn effect", 1);
+  const empty = {
+    findings: [],
+    leads: [],
+    checks: [],
+    examined: "source",
+    unexamined: "none",
+  };
+  const verified = {
+    ...empty,
+    checks: [
+      {
+        kind: "finding",
+        candidate,
+        verdict: "verified",
+        explanation: "Reopened the current source and checked the guard",
+      },
+    ],
+  };
+  const trial = await archivedTrial(
+    extractCandidateReport(JSON.stringify(empty)),
+    "checked/v1",
+    [verified, empty],
+    { ...empty, findings: [candidate] },
+  );
+  const { ledger, options } = trial;
+  expect(await recoverWordPressChildTurnReports(options)).toMatchObject({
+    recovered: 1,
+    findings: 1,
+  });
+  const original = ledger.read({ type: "finding-recorded" })[0]?.event;
+  const refuted = {
+    ...empty,
+    checks: [
+      {
+        kind: "finding",
+        candidate,
+        verdict: "refuted",
+        explanation: "A guard denies the route",
+      },
+    ],
+  };
+  await appendArchivedChild(
+    trial,
+    "child-2",
+    extractCandidateReport(JSON.stringify(empty)),
+    [refuted, empty],
+  );
+  // Model an interruption after the recovered report's admission but before
+  // reconcilePromotedRoots. Its audit-check identity already exists on replay.
+  await recordWordPressReport(refuted, {
+    ledger,
+    evidence: options.evidence,
+    base: {
+      schemaVersion: 1,
+      campaignId: "campaign-1",
+      snapshotDigest: digest,
+      occurredAt: now,
+    },
+    runId: "child-2",
+    runKind: "child",
+    admissionContract: "checked/v1",
+    trialId: ROOT,
+    snapshotDigest: digest,
+    reportArtifactDigest: canonicalDigest(refuted),
+    parserVersion: "child-turns-merge-v1",
+  });
+  expect(ledger.read({ type: "audit-candidate-disputed" })).toHaveLength(0);
+  expect(await recoverWordPressChildTurnReports(options)).toMatchObject({
+    recovered: 1,
+    findings: 0,
+  });
+  expect(ledger.read({ type: "audit-candidate-disputed" })).toHaveLength(1);
+  expect(
+    ledger.read({ type: "audit-candidate-disputed" })[0]?.event,
+  ).toMatchObject({
+    causingEventIdentity: "audit-check-child-2-0-child-turns-merge-v1",
+    recordIds: [
+      original?.type === "finding-recorded" ? original.findingId : "",
+    ],
+  });
+  const count = eventsOf(ledger).length;
+  expect(await recoverWordPressChildTurnReports(options)).toMatchObject({
+    recovered: 0,
+    findings: 0,
+  });
+  expect(eventsOf(ledger)).toHaveLength(count);
+});
+
+it("attributes a same-batch verified then refuted recovery to the refuting check", async () => {
+  const candidate = finding("Earlier turn effect", 1);
+  const empty = {
+    findings: [],
+    leads: [],
+    checks: [],
+    examined: "source",
+    unexamined: "none",
+  };
+  const verified = {
+    ...empty,
+    checks: [
+      {
+        kind: "finding",
+        candidate,
+        verdict: "verified",
+        explanation: "Source check supports the claim",
+      },
+    ],
+  };
+  const trial = await archivedTrial(
+    extractCandidateReport(JSON.stringify(empty)),
+    "checked/v1",
+    [verified, empty],
+    { ...empty, findings: [candidate] },
+  );
+  const { ledger, options } = trial;
+  await recoverWordPressChildTurnReports(options);
+  expect(ledger.read({ type: "audit-candidate-promoted" })).toHaveLength(1);
+  await appendArchivedChild(
+    trial,
+    "child-2",
+    extractCandidateReport(JSON.stringify(empty)),
+    [verified, empty],
+  );
+  await appendArchivedChild(
+    trial,
+    "child-3",
+    extractCandidateReport(JSON.stringify(empty)),
+    [
+      {
+        ...empty,
+        checks: [
+          {
+            kind: "finding",
+            candidate,
+            verdict: "refuted",
+            explanation: "A guard denies the route",
+          },
+        ],
+      },
+      empty,
+    ],
+  );
+  expect(await recoverWordPressChildTurnReports(options)).toMatchObject({
+    recovered: 2,
+    findings: 0,
+  });
+  expect(ledger.read({ type: "audit-candidate-disputed" })).toHaveLength(1);
+  expect(
+    ledger.read({ type: "audit-candidate-disputed" })[0]?.event,
+  ).toMatchObject({
+    causingEventIdentity: "audit-check-child-3-0-child-turns-merge-v1",
+  });
+});
+
+it("disputes a promoted claim when recovery shows its verifying child was also the claimant", async () => {
+  const candidate = finding("Earlier turn effect", 1);
+  const empty = {
+    findings: [],
+    leads: [],
+    examined: "source",
+    unexamined: "none",
+  };
+  const rootReport = { ...empty, findings: [candidate] };
+  const last = {
+    ...empty,
+    checks: [
+      {
+        kind: "finding",
+        candidate,
+        verdict: "verified",
+        explanation: "Reopened the current source and checked the guard",
+      },
+    ],
+  };
+  const trial = await archivedTrial(
+    extractCandidateReport(JSON.stringify(last)),
+    "checked/v1",
+    [{ ...empty, findings: [candidate], checks: [] }, last],
+    rootReport,
+  );
+  const { ledger, options } = trial;
+  const base = {
+    schemaVersion: 1 as const,
+    campaignId: "campaign-1",
+    snapshotDigest: digest,
+    occurredAt: now,
+  };
+  await recordWordPressReport(last, {
+    ledger,
+    evidence: options.evidence,
+    base,
+    runId: CHILD,
+    runKind: "child",
+    admissionContract: "checked/v1",
+    trialId: ROOT,
+    snapshotDigest: digest,
+    reportArtifactDigest: digest,
+  });
+  const rootRef = await options.attachments.put(
+    "findings",
+    Buffer.from(canonicalJson(rootReport)),
+  );
+  await recordWordPressReport(rootReport, {
+    ledger,
+    evidence: options.evidence,
+    base,
+    runId: ROOT,
+    runKind: "root",
+    admissionContract: "checked/v1",
+    trialId: ROOT,
+    snapshotDigest: digest,
+    reportArtifactDigest: rootRef.digest,
+  });
+  expect(ledger.read({ type: "audit-candidate-promoted" })).toHaveLength(1);
+  expect(await recoverWordPressChildTurnReports(options)).toMatchObject({
+    recovered: 1,
+    findings: 0,
+  });
+  expect(
+    ledger.read({ type: "audit-candidate-disputed" })[0]?.event,
+  ).toMatchObject({
+    causingEventIdentity: `audit-candidate-pending-${CHILD}-finding-0-child-turns-merge-v1`,
+  });
+  expect(ledger.read({ type: "finding-recorded" })).toHaveLength(1);
 });
 
 it("replays a full A-B-A check sequence when the final A was already captured", async () => {

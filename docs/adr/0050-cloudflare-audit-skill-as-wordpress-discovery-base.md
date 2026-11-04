@@ -76,6 +76,8 @@ Harness が確かめるのは出力の形式、run と digest の結合、Privat
 
 点検者が発見者と別の子であることはスキルが求める。Harness は点検者の実 run が Root と別であること、さらに claim を子の自発候補として記録した子自身の点検を使わないことを確認する。scratch の経路を最初に発見した子の識別までは証明しない。後続の同じ子による反証または別の子との点検の食い違いは、昇格に使わず pending に残す。
 
+完了した子の過去ターンを復旧したとき、昇格済み claim の独立点検条件が後から満たされなくなる場合がある。Harness は元の `finding-recorded` / `lead-recorded` と人間の観測を消さず、原因イベントへの digest 参照を持つ `audit-candidate-disputed` を追記する。`review audit-pending`、Finding のレビュー表示、funnel の `audit disputed` に出す。これは AI 点検の受理状態であり、脆弱性の成立・不成立の判定ではない。
+
 採否は同じ選定帯と Lab 条件の本番比較で決める。pending・独立点検・lookup の件数は診断値とし、Finding の成立数や人間の `match` と読み替えない。戻すときは新規 Trial の v24 / `checked/v1` の指定を外し、旧版の受理経路を使う。追記済みの候補・点検イベントと Private Evidence の digest は削除せず読取を維持する。
 
 ## 2026-11-04 追記: v25-wide を比較用の目的文にする

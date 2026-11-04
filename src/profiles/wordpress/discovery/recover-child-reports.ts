@@ -12,7 +12,11 @@ import {
 } from "../../../discovery/codex-native-agent-runtime.js";
 import { readNativeRunReceipt } from "../../../discovery/native-run-receipts.js";
 import type { ProviderAttachmentStore } from "../../../discovery/provider-research-report.js";
-import { recordWordPressReport } from "./candidate-admission.js";
+import {
+  recordWordPressReport,
+  verifiedAuditChecks,
+  wordPressAuditClaimDigest,
+} from "./candidate-admission.js";
 
 const parserVersion = "child-coverage-array-v1";
 /** #539: completed Codex children whose earlier turns' reports the capture dropped. */
@@ -22,6 +26,10 @@ type Started = Extract<LedgerEventV1, { type: "discovery-run-started" }>;
 type Finished = Extract<LedgerEventV1, { type: "discovery-run-finished" }>;
 type Recovery = Extract<LedgerEventV1, { type: "child-report-recovered" }>;
 type Pending = Extract<LedgerEventV1, { type: "audit-candidate-pending" }>;
+type AuditCause = Extract<
+  LedgerEventV1,
+  { type: "audit-check-recorded" | "audit-candidate-pending" }
+>;
 type Options = {
   readonly campaignId: string;
   readonly ledger: Ledger;
@@ -370,7 +378,161 @@ function archive(options: Options) {
     return { findings, leads };
   };
 
-  return { started, finished, receiptOf, bound, record, reconcilePendingRoots };
+  /** Keep a later invalidated admission visible without deleting earlier evidence. */
+  const reconcilePromotedRoots = async (
+    recoveredEventIds: ReadonlySet<string>,
+  ): Promise<void> => {
+    if (recoveredEventIds.size === 0) return;
+    const current = ledger.readAll({ campaignId }).map(({ event }) => event);
+    const recovered = current.filter(
+      (event): event is AuditCause =>
+        recoveredEventIds.has(event.identity) &&
+        (event.type === "audit-check-recorded" ||
+          (event.type === "audit-candidate-pending" &&
+            event.reason === "child-output")),
+    );
+    const eventIndex = new Map(
+      current.map((event, index) => [event.identity, index] as const),
+    );
+    const disputed = new Set(
+      current.flatMap((event) =>
+        event.type === "audit-candidate-disputed"
+          ? [event.promotedIdentity]
+          : [],
+      ),
+    );
+    const verifiedByRoot = new Map<
+      string,
+      Awaited<ReturnType<typeof verifiedAuditChecks>>
+    >();
+    for (const promotion of current) {
+      if (
+        promotion.type !== "audit-candidate-promoted" ||
+        disputed.has(promotion.identity)
+      )
+        continue;
+      const causes = recovered.filter(
+        (event) =>
+          (eventIndex.get(event.identity) ?? -1) >
+            (eventIndex.get(promotion.identity) ?? -1) &&
+          event.trialId === promotion.trialId &&
+          event.snapshotDigest === promotion.snapshotDigest &&
+          event.candidateKind === promotion.candidateKind &&
+          event.claimDigest === promotion.claimDigest,
+      );
+      if (causes.length === 0) continue;
+      const checkOptions = {
+        ledger,
+        evidence,
+        base: {
+          schemaVersion: 1 as const,
+          campaignId,
+          snapshotDigest: promotion.snapshotDigest,
+          occurredAt: promotion.occurredAt,
+        },
+        runId: promotion.runId,
+        trialId: promotion.trialId,
+        snapshotDigest: promotion.snapshotDigest,
+      };
+      const claimKey = `${promotion.candidateKind}\0${promotion.claimDigest}`;
+      let verified = verifiedByRoot.get(promotion.runId);
+      if (verified === undefined) {
+        verified = await verifiedAuditChecks(checkOptions, current);
+        verifiedByRoot.set(promotion.runId, verified);
+      }
+      if (verified.has(claimKey)) continue;
+      // Replay only the recovered facts after this promotion. The check which
+      // originally enabled the promotion may itself have come from recovery.
+      // A dispute needs a recovered fact that changes this gate from valid to
+      // invalid, rather than merely sharing the claim digest.
+      const causeIds = new Set(causes.map((event) => event.identity));
+      const withoutCauses = current.filter(
+        (event) => !causeIds.has(event.identity),
+      );
+      let wasVerified = (
+        await verifiedAuditChecks(checkOptions, withoutCauses)
+      ).has(claimKey);
+      if (!wasVerified) continue;
+      let cause: AuditCause | undefined;
+      const included = new Set<string>();
+      for (const event of causes) {
+        included.add(event.identity);
+        const withPrefix = current.filter(
+          (candidate) =>
+            !causeIds.has(candidate.identity) ||
+            included.has(candidate.identity),
+        );
+        const nowVerified = (
+          await verifiedAuditChecks(checkOptions, withPrefix)
+        ).has(claimKey);
+        if (wasVerified && !nowVerified) cause = event;
+        wasVerified = nowVerified;
+      }
+      if (cause === undefined) continue;
+      const recordIds: string[] = [];
+      for (const event of current) {
+        if (event.type !== "finding-recorded" && event.type !== "lead-recorded")
+          continue;
+        if (
+          (promotion.candidateKind === "finding" &&
+            event.type !== "finding-recorded") ||
+          (promotion.candidateKind === "lead" &&
+            event.type !== "lead-recorded") ||
+          event.runId !== promotion.runId ||
+          event.snapshotDigest !== promotion.snapshotDigest
+        )
+          continue;
+        const artifact = event.artifacts.find(
+          (entry) => entry.kind === promotion.candidateKind,
+        );
+        if (artifact === undefined) continue;
+        const raw = await evidence.readJson(
+          artifact.digest,
+          `${promotion.candidateKind}.json`,
+          z.unknown(),
+          8 * 1024 * 1024,
+        );
+        if (
+          raw.status !== "resolved" ||
+          wordPressAuditClaimDigest(promotion.candidateKind, raw.value) !==
+            promotion.claimDigest
+        )
+          continue;
+        recordIds.push(
+          event.type === "finding-recorded" ? event.findingId : event.leadId,
+        );
+      }
+      const result = await ledger.append({
+        schemaVersion: 1,
+        campaignId,
+        snapshotDigest: promotion.snapshotDigest,
+        occurredAt: (options.clock ?? (() => new Date()))().toISOString(),
+        identity: `audit-candidate-disputed-${canonicalDigest(promotion.identity).slice(7)}`,
+        type: "audit-candidate-disputed",
+        runId: promotion.runId,
+        trialId: promotion.trialId,
+        candidateKind: promotion.candidateKind,
+        candidateIndex: promotion.candidateIndex,
+        claimDigest: promotion.claimDigest,
+        promotedIdentity: promotion.identity,
+        causingEventIdentity: cause.identity,
+        recordIds: [...new Set(recordIds)],
+        artifacts: cause.artifacts,
+      });
+      if (result.status === "conflict")
+        throw new Error(`Ledger conflict: ${promotion.identity}`);
+    }
+  };
+
+  return {
+    started,
+    finished,
+    receiptOf,
+    bound,
+    record,
+    reconcilePendingRoots,
+    reconcilePromotedRoots,
+  };
 }
 
 const add = (left: Counts, right: Counts): Counts => ({
@@ -428,11 +590,19 @@ export async function recoverWordPressChildReports(
 export async function recoverWordPressChildTurnReports(
   options: Options & { readonly dryRun?: boolean },
 ): Promise<Counts & { readonly skipped: number }> {
-  const { started, finished, receiptOf, bound, record, reconcilePendingRoots } =
-    archive(options);
+  const {
+    started,
+    finished,
+    receiptOf,
+    bound,
+    record,
+    reconcilePendingRoots,
+    reconcilePromotedRoots,
+  } = archive(options);
   let counts: Counts = { recovered: 0, findings: 0, leads: 0 };
   let skipped = 0;
   const recoveredCheckIds = new Set<string>();
+  const recoveredEventIds = new Set<string>();
   for (const childFinish of finished.values()) {
     const childStart = started.get(childFinish.runId);
     if (childFinish.outcome !== "completed" || childStart?.runKind !== "child")
@@ -507,6 +677,31 @@ export async function recoverWordPressChildTurnReports(
         versionedAdmission: true,
       }),
     );
+    // The recovery can stop after admission and before Root reconciliation.
+    // Include the deterministic identities admitted by an earlier invocation
+    // when replaying the same sealed rollout.
+    const recoveredIdentities = new Set([
+      ...added.check.map(
+        (index) =>
+          `audit-check-${child.childStart.runId}-${index}-${turnsParserVersion}`,
+      ),
+      ...(["finding", "lead"] as const).flatMap((kind) =>
+        added[kind].map(
+          (index) =>
+            `audit-candidate-pending-${child.childStart.runId}-${kind}-${index}-${turnsParserVersion}`,
+        ),
+      ),
+    ]);
+    for (const { event } of options.ledger.readAll({
+      campaignId: options.campaignId,
+    }))
+      if (
+        recoveredIdentities.has(event.identity) &&
+        (event.type === "audit-check-recorded" ||
+          (event.type === "audit-candidate-pending" &&
+            event.reason === "child-output"))
+      )
+        recoveredEventIds.add(event.identity);
     if (
       child.childStart.configuration.admissionContract === "checked/v1" &&
       added.check.length > 0
@@ -519,6 +714,7 @@ export async function recoverWordPressChildTurnReports(
   if (options.dryRun !== true) {
     const promoted = await reconcilePendingRoots(recoveredCheckIds);
     counts = add(counts, { recovered: 0, ...promoted });
+    await reconcilePromotedRoots(recoveredEventIds);
   }
   return { ...counts, skipped };
 }

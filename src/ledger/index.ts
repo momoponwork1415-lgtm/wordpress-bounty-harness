@@ -620,6 +620,18 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     checkRunId: id,
     checkIndex: z.number().int().nonnegative(),
   }),
+  /** Later child evidence disputes a prior AI admission; it is not a vulnerability verdict. */
+  event({
+    type: z.literal("audit-candidate-disputed"),
+    runId: id,
+    trialId: id,
+    candidateKind: z.enum(["finding", "lead"]),
+    candidateIndex: z.number().int().nonnegative(),
+    claimDigest: digest,
+    promotedIdentity: id,
+    causingEventIdentity: id,
+    recordIds: z.array(id),
+  }),
   /** An actual child report's AI check. The full text stays in Private Evidence. */
   event({
     type: z.literal("audit-check-recorded"),
@@ -1216,6 +1228,8 @@ export type FunnelCounts = {
   readonly held: number;
   /** Valid checked/v1 claims still outside the Finding and Lead queues. */
   readonly auditPending: number;
+  /** Previously promoted claims with a later conflicting AI check. */
+  readonly auditDisputed: number;
   /** Findings outside the Programme Boundary; not in accepted or raw (#185). */
   readonly parked: number;
   readonly raw: number;
@@ -1405,6 +1419,7 @@ function emptyCounts(): Counts {
     accepted: 0,
     held: 0,
     auditPending: 0,
+    auditDisputed: 0,
     parked: 0,
     raw: 0,
     verified: 0,
@@ -2091,6 +2106,10 @@ export class Ledger {
       Extract<LedgerEventV1, { type: "audit-candidate-pending" }>
     >();
     const auditPromotedKeys = new Set<string>();
+    const auditDisputedKeys = new Map<
+      string,
+      Extract<LedgerEventV1, { type: "audit-candidate-disputed" }>
+    >();
     const legacyReached: { runId: string; category: string }[] = [];
     const candidateCategory = new Map<string, string>();
     const normalizationSeen = new Set<string>();
@@ -2248,6 +2267,12 @@ export class Ledger {
             `${current.snapshotDigest}\0${current.trialId}\0${current.candidateKind}\0${current.claimDigest}`,
           );
           break;
+        case "audit-candidate-disputed":
+          auditDisputedKeys.set(
+            `${current.snapshotDigest}\0${current.trialId}\0${current.candidateKind}\0${current.claimDigest}`,
+            current,
+          );
+          break;
         case "finding-recorded":
           if (current.derivationKind !== "fixed-version-control")
             candidateRuns.add(current.runId);
@@ -2392,6 +2417,11 @@ export class Ledger {
       totals.auditPending++;
       objective(pending.runId).auditPending++;
       (byCategory.unclassified ??= emptyCounts()).auditPending++;
+    }
+    for (const disputed of auditDisputedKeys.values()) {
+      totals.auditDisputed++;
+      objective(disputed.runId).auditDisputed++;
+      (byCategory.unclassified ??= emptyCounts()).auditDisputed++;
     }
     for (const { runId, category } of legacyReached) {
       totals.reached++;

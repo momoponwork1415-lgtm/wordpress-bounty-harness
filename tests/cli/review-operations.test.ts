@@ -441,6 +441,69 @@ describe("review operations on recorded history", () => {
     expect(second.stdout).not.toContain("root-1#0");
     expect(second.stdout).toContain("root-1#1");
     expect(ledger.funnel(campaignId).auditPending).toBe(1);
+    await ledger.append({
+      schemaVersion: 1,
+      identity: "audit-disputed-0",
+      campaignId,
+      snapshotDigest,
+      occurredAt: "2026-11-04T00:02:00Z",
+      type: "audit-candidate-disputed",
+      runId: "root-1",
+      trialId: "trial-1",
+      candidateKind: "finding",
+      candidateIndex: 0,
+      claimDigest,
+      promotedIdentity: "audit-promoted-0",
+      causingEventIdentity: "audit-check-child-2-0",
+      recordIds: [],
+      artifacts: [{ kind: "audit-check", digest: candidate }],
+    });
+    const disputed = await run(
+      "review",
+      "audit-pending",
+      "--campaign",
+      campaignId,
+    );
+    expect(disputed.stdout).toContain(
+      `audit-disputed  finding  later-conflicting-evidence  root-1#0  ${candidate}`,
+    );
+    expect(disputed.stdout).toContain("root-1#1");
+    expect(ledger.funnel(campaignId).auditDisputed).toBe(1);
+  });
+
+  it("marks an AI admission dispute in review without hiding a prior human result", async () => {
+    const { run, ledger, findings, snapshotDigest, campaignId, runId } =
+      await recordedReviewState();
+    const claimDigest = `sha256:${"d".repeat(64)}`;
+    const causingEventIdentity = "audit-check-child-2-0";
+    await ledger.append({
+      schemaVersion: 1,
+      identity: "audit-disputed-reviewed-finding",
+      campaignId,
+      snapshotDigest,
+      occurredAt: "2026-11-04T00:02:00Z",
+      type: "audit-candidate-disputed",
+      runId,
+      trialId: runId,
+      candidateKind: "finding",
+      candidateIndex: 0,
+      claimDigest,
+      promotedIdentity: "audit-promoted-reviewed-finding",
+      causingEventIdentity,
+      recordIds: [findings.accountTakeover.findingId],
+      artifacts: [],
+    });
+    const queue = await run("review", "--campaign", campaignId);
+    expect(queue.stdout).toMatch(/^runtime-confirmed .* account-takeover$/m);
+    expect(queue.stdout).toContain(
+      `audit check disputed: ${causingEventIdentity}`,
+    );
+    expect(queue.stdout).toContain(
+      `finding ${findings.accountTakeover.findingId}`,
+    );
+    expect(
+      (await run("ledger", "funnel", "--campaign", campaignId)).stdout,
+    ).toContain("audit disputed 1");
   });
 
   it("lists recorded verification results, records a decision and counts the funnel", async () => {

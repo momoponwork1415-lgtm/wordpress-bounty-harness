@@ -217,13 +217,35 @@ function claimFor(kind: Kind, raw: unknown) {
     : wordpressLeadClaimSchema.parse(value);
 }
 
+/** Stable normalized claim key shared by admission and archived reconciliation. */
+export function wordPressAuditClaimDigest(kind: Kind, raw: unknown): string {
+  const value = z.record(z.string(), z.unknown()).parse(raw);
+  const fields = Object.keys(
+    kind === "finding"
+      ? wordpressFindingClaimSchema.shape
+      : wordpressLeadClaimSchema.shape,
+  );
+  const claim = Object.fromEntries(
+    fields
+      .filter((field) => Object.hasOwn(value, field))
+      .map((field) => [field, value[field]]),
+  );
+  return canonicalDigest(claimFor(kind, claim));
+}
+
 /** Only actual completed child runs can provide a checked/v1 promotion receipt. */
-async function verifiedAuditChecks(
-  options: WordPressReportRecordingOptions,
+export async function verifiedAuditChecks(
+  options: Pick<
+    WordPressReportRecordingOptions,
+    "ledger" | "evidence" | "base" | "runId" | "trialId" | "snapshotDigest"
+  >,
+  sourceEvents?: readonly LedgerEventV1[],
 ): Promise<ReadonlyMap<string, AuditCheckRef>> {
-  const events = options.ledger
-    .readAll({ campaignId: options.base.campaignId })
-    .map(({ event }) => event);
+  const events =
+    sourceEvents ??
+    options.ledger
+      .readAll({ campaignId: options.base.campaignId })
+      .map(({ event }) => event);
   const starts = new Map(
     events.flatMap((event) =>
       event.type === "discovery-run-started"
