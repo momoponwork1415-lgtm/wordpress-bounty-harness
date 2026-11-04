@@ -400,7 +400,9 @@ async function harness(
             stderr: "",
           };
         // The exploration Lab's control endpoint: one reset request, then none.
-        if (request.args[0] === "exec" && request.args[1]?.endsWith("-ctl")) {
+        const controlContainer =
+          request.args[1] === "-i" ? request.args[2] : request.args[1];
+        if (request.args[0] === "exec" && controlContainer?.endsWith("-ctl")) {
           if (request.args.includes("next")) {
             if (controlRequests.length === 0)
               return { exitCode: 3, stdout: "", stderr: "" };
@@ -410,7 +412,11 @@ async function harness(
               stderr: "",
             };
           }
-          if (request.args.includes("answer"))
+          if (request.args.includes("answer-stdin")) {
+            if (request.stdin === undefined)
+              throw new Error("Control answer stdin is missing");
+            controlAnswers.push(JSON.parse(request.stdin) as unknown);
+          } else if (request.args.includes("answer"))
             controlAnswers.push(
               JSON.parse(
                 Buffer.from(request.args.at(-1) ?? "", "base64").toString(),

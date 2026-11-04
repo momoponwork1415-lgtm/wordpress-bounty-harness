@@ -720,6 +720,7 @@ describe("WordPress gVisor Lab", () => {
         "--runtime=runsc",
         "--read-only",
         "--cap-drop=ALL",
+        `--tmpfs=/var/lib/wbh-control:rw,nosuid,nodev,size=32m`,
         "serve",
       ]),
     );
@@ -763,12 +764,27 @@ describe("WordPress gVisor Lab", () => {
       "next",
       "10",
     ]);
-    expect(
-      await lab.answerControlRequest(handle, "a".repeat(32), {
-        statusCode: 200,
-        body: { status: "reset" },
-      }),
-    ).toBe(true);
+    const answer = {
+      statusCode: 200,
+      body: { status: "traced", entries: ["x".repeat(200_000)] },
+    };
+    expect(await lab.answerControlRequest(handle, "a".repeat(32), answer)).toBe(
+      true,
+    );
+    const answerCommand = commands.at(-1);
+    expect(answerCommand?.args).toEqual([
+      "exec",
+      "-i",
+      `wbh-${id}-ctl`,
+      "node",
+      "/opt/wbh-control/cli.js",
+      "answer-stdin",
+      "a".repeat(32),
+    ]);
+    expect(Buffer.byteLength(answerCommand?.stdin ?? "")).toBeGreaterThan(
+      128 * 1024,
+    );
+    expect(JSON.parse(answerCommand!.stdin!)).toEqual(answer);
     expect(await lab.teardown(handle)).toEqual({ status: "removed" });
     expect(
       commands.some(

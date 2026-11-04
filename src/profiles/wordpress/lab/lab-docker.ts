@@ -26,6 +26,7 @@ export type RunDocker = (
   args: readonly string[],
   timeoutMs?: number,
   maxOutputBytes?: number,
+  stdin?: string,
 ) => Promise<DockerResult>;
 /** Runs one Docker command and throws `LabDockerFailure` on a non-zero exit. */
 export type RequireDocker = (
@@ -72,7 +73,14 @@ export function createLabDocker(runner: DockerRunner): LabDocker {
     args,
     timeoutMs = 60_000,
     maxOutputBytes = 64 * 1024,
-  ) => runner.run({ args, timeoutMs, maxOutputBytes });
+    stdin,
+  ) =>
+    runner.run({
+      args,
+      timeoutMs,
+      maxOutputBytes,
+      ...(stdin === undefined ? {} : { stdin }),
+    });
   return {
     run,
     async require(args, timeoutMs) {

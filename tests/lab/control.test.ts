@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import type { Server } from "node:http";
+import { Readable } from "node:stream";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +10,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   answerControlRequest,
   createControlServer,
+  MAX_CONTROL_ANSWER_BYTES,
   nextControlRequest,
+  readControlAnswer,
 } from "../../src/lab/control/index.js";
 
 const servers: Server[] = [];
@@ -62,6 +65,33 @@ describe("exploration Lab control endpoint", () => {
     });
     // Answered and removed: nothing is pending any more.
     expect(await nextControlRequest(directory, 50, 10)).toBeNull();
+  });
+
+  it("reads a trace answer larger than one Linux argv argument from stdin and releases the waiting command", async () => {
+    const { directory, call } = await fixture();
+    const pending = call("POST", "/trace", JSON.stringify({ path: "/" }));
+    const request = await nextControlRequest(directory, 2_000, 10);
+    expect(request?.command).toBe("trace");
+    const answer = {
+      statusCode: 200,
+      body: { status: "traced", entries: ["x".repeat(200_000)] },
+    };
+    const serialized = JSON.stringify(answer);
+    expect(Buffer.byteLength(serialized)).toBeGreaterThan(128 * 1024);
+    const fromStdin = await readControlAnswer(
+      Readable.from([Buffer.from(serialized)]),
+    );
+    answerControlRequest(directory, request!.id, fromStdin);
+    expect(await pending).toEqual({ status: 200, body: answer.body });
+    expect(await nextControlRequest(directory, 50, 10)).toBeNull();
+  });
+
+  it("bounds the answer read from stdin", async () => {
+    await expect(
+      readControlAnswer(
+        Readable.from([Buffer.alloc(MAX_CONTROL_ANSWER_BYTES + 1)]),
+      ),
+    ).rejects.toThrow("Control answer is too large");
   });
 
   it("names its commands for anything else and decides nothing itself", async () => {

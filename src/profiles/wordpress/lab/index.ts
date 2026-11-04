@@ -16,6 +16,7 @@ import {
 import type { HttpCaptureRead } from "../../../lab/capture.js";
 import {
   CONTROL_COMMANDS,
+  MAX_CONTROL_ANSWER_BYTES,
   type ControlAnswer,
   type ControlRequest,
 } from "../../../lab/control/index.js";
@@ -750,9 +751,16 @@ export function openWordPressLab(options: {
       const lab = sessionFor(handle);
       if (lab === undefined || !lab.exploration || !/^[a-f0-9]{32}$/.test(id))
         return false;
-      const encoded = Buffer.from(JSON.stringify(answer)).toString("base64");
+      const serialized = JSON.stringify(answer);
+      if (Buffer.byteLength(serialized) > MAX_CONTROL_ANSWER_BYTES)
+        return false;
       const result = await lab
-        .docker(controlCommand(lab, ["answer", id, encoded]))
+        .docker(
+          controlCommand(lab, ["answer-stdin", id], true),
+          undefined,
+          undefined,
+          serialized,
+        )
         .catch(() => null);
       return result?.exitCode === 0;
     },
