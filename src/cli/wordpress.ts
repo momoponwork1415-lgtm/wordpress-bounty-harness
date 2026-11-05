@@ -585,8 +585,8 @@ type WordPressDiscoverySource = Awaited<
 >;
 
 /**
- * The campaign's active floor (60 minutes by default for `deep`, none for
- * `wide`, ADR 0033 / 0039); a resumed segment inherits what is left of it.
+ * The campaign's active floor (none by default, ADR 0033 / 0039); a resumed
+ * segment inherits what is left of it.
  */
 function wordPressMinimumActiveMs(config: WordPressCampaignConfig): number {
   return config.discovery.minimumActiveMinutes * 60_000;
@@ -796,20 +796,25 @@ export function wordPressLabSection(
 
 /**
  * The last paragraph of the objective is the pinned directive early Root
- * resumes receive. The deep objective's starts "Before giving up,"; the wide
- * objective's is its bounded stop rule and starts "Stop when" (ADR 0039).
+ * resumes receive. The archived deep objectives' starts "Before giving up,";
+ * the wide objective's is its bounded stop rule and starts "Stop when" (ADR
+ * 0039). A segment uses the mode its Trial recorded; Trials from before the
+ * mode was recorded were deep.
  */
 const WORDPRESS_RESUME_PARAGRAPH_PREFIX = {
   deep: "Before giving up,",
   wide: "Stop when",
 } as const;
 
-function wordPressResumeParagraph(objective: WordPressDiscoveryAsset): string {
+function wordPressResumeParagraph(
+  objective: WordPressDiscoveryAsset,
+  recordedMode?: "deep" | "wide",
+): string {
   const resumePrompt = objective.text
     .trim()
     .split(/\n\s*\n/)
     .at(-1);
-  const mode = wordPressDiscoveryModeOf(objective.id) ?? "deep";
+  const mode = recordedMode ?? wordPressDiscoveryModeOf(objective.id) ?? "deep";
   if (
     resumePrompt === undefined ||
     !resumePrompt.startsWith(WORDPRESS_RESUME_PARAGRAPH_PREFIX[mode])
@@ -1227,7 +1232,12 @@ async function resumeWordPressRun(
     loadWordPressDiscoveryAsset(recordedPrompt),
     loadWordPressDiscoveryAsset(trustBoundaryId),
   ]);
-  const resumePrompt = wordPressResumeParagraph(objective);
+  const resumePrompt = wordPressResumeParagraph(
+    objective,
+    started.configuration.mode === "partitioned"
+      ? undefined
+      : started.configuration.mode,
+  );
   // A segment receives the skills its Trial recorded, at the recorded digests
   // (ADR 0043); a version the registry no longer has cannot be rebuilt.
   const recordedSkills: WordPressDiscoverySkill[] = [];

@@ -63,17 +63,21 @@ it("starts the checked-in wide v26 campaign with one concurrent target on the La
     priorResearch: "same-target",
   });
   expect(config.discovery.mode).toBe("wide");
-  // deep v11 stays available for named Trials: the same file in deep mode still parses.
-  expect(
-    wordpressCampaignConfigSchema.parse({
-      ...(source as object),
+  // Deep was retired on 2026-11-05 (ADR 0039 addendum): v11 and deep no longer parse.
+  for (const fields of [
+    { discovery: { lab: "none", mode: "deep" } },
+    {
       discovery: { lab: "none", mode: "deep" },
       promptId: "wp2shell-bounty-v11",
-    }),
-  ).toMatchObject({
-    promptId: "wp2shell-bounty-v11",
-    discovery: { mode: "deep", minimumActiveMinutes: 0 },
-  });
+    },
+    { discovery: { lab: "none" }, promptId: "wp2shell-bounty-v11" },
+  ])
+    expect(
+      wordpressCampaignConfigSchema.safeParse({
+        ...(source as object),
+        ...fields,
+      }).success,
+    ).toBe(false);
   expect(
     wordpressCampaignConfigSchema.parse({
       ...(source as object),
@@ -191,7 +195,7 @@ it("runs the v26 wide example with an attached Lab for at least 60 active minute
 });
 
 it.each(["3.3.1", "3.2.6"])(
-  "runs the pinned %s production example as one source-first 120-minute v11 Trial",
+  "runs the pinned %s production example as one source-first 120-minute wide Trial",
   async (version) => {
     const source = (await example(
       "campaign-production-v1.json",
@@ -200,7 +204,7 @@ it.each(["3.3.1", "3.2.6"])(
     expect(source).not.toHaveProperty("promptId");
     // ADR 0049: an example that names no Lab mode now gets the default, attached.
     expect(wordpressCampaignConfigSchema.parse(source)).toMatchObject({
-      promptId: "wp2shell-bounty-v11",
+      promptId: "wp2shell-bounty-v26-wide",
       runWallTimeMinutes: 120,
       discovery: { lab: { mode: "attached" } },
     });

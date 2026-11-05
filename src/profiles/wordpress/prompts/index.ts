@@ -18,8 +18,12 @@ interface WordPressPromptRecord {
   readonly status: "current" | "candidate" | "archived";
 }
 
-export type WordPressDiscoveryMode = "deep" | "wide";
-export const WORDPRESS_DISCOVERY_MODES = ["deep", "wide"] as const;
+/**
+ * The launch mode a new Trial may take. `deep` was retired on 2026-11-05
+ * (ADR 0039 addendum); its Trials keep `mode: "deep"` in the ledger.
+ */
+export type WordPressDiscoveryMode = "wide";
+export const WORDPRESS_DISCOVERY_MODES = ["wide"] as const;
 
 /** Generated Finding / Lead contract versions the Harness appends (ADR 0019). */
 export type WordPressOutputContractVersion = "v1" | "v2" | "v4" | "v5";
@@ -58,7 +62,7 @@ export interface WordPressDiscoveryPromptRecord extends WordPressPromptRecord {
   readonly fragments?: readonly WordPressPromptFragment[];
 }
 
-// Paragraphs the deep and wide objectives share unchanged.
+// Paragraphs the archived deep and wide objectives share unchanged.
 const TASK = { section: "objective", file: "task-v10" } as const;
 const SOURCES = { section: "objective", file: "sources-v8" } as const;
 // Only the archived v10 and v12-wide carry it; v11, v13-wide and v14-wide drop it
@@ -223,8 +227,8 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:0ce13a617484c0e0b7ff3af6a55b4b821ea106189a897ed573040e9d5ad16ae9",
     outputContract: "v4",
-    status: "current",
-    mode: "deep",
+    // The deep objective until deep was retired (ADR 0039 addendum 2026-11-05).
+    status: "archived",
     // v10 without the lifetime paragraph, the child count and the minutes;
     // the Run parameters section states the enforced values (ADR 0039 追記 4).
     // The hand-over paragraph follows the research paragraph (owner
@@ -577,7 +581,7 @@ function currentOf<const Row extends WordPressPromptRecord>(
   return current[0]!;
 }
 
-/** The existing default declaration for deep and wide production Trials. */
+/** The existing default declaration for production Trials. */
 export const WORDPRESS_TRUST_BOUNDARY = currentOf(WORDPRESS_TRUST_BOUNDARIES);
 
 /** Current v26 receives the corrected declaration. */
@@ -609,7 +613,6 @@ export const WORDPRESS_DISCOVERY_PROMPT_IDS: readonly WordPressDiscoveryPromptId
 
 /** The current discovery objective of each launch mode (ADR 0039). */
 export const WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS = {
-  deep: currentOf(WORDPRESS_DISCOVERY_PROMPTS, "deep").id,
   wide: currentOf(WORDPRESS_DISCOVERY_PROMPTS, "wide").id,
 } as const satisfies Record<WordPressDiscoveryMode, WordPressDiscoveryPromptId>;
 
@@ -622,9 +625,9 @@ export const WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS =
     row.status === "archived" ? [] : [row.id],
   );
 
-/** The `deep` objective: the single cooperative Trial every earlier decision names. */
+/** The current objective of the only launch mode, `wide`. */
 export const WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID =
-  WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS.deep;
+  WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS.wide;
 
 /** The mode a current or candidate objective launches under; archived objectives have none. */
 export function wordPressDiscoveryModeOf(

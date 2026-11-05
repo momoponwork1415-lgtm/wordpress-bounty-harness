@@ -28,7 +28,7 @@ node dist/cli/main.js --state <確認した state> --host <確認した host 設
 稼働中は 5〜10 分おきに、止まっているときは状態変化の有無を次の項目で見る。
 
 1. **選定**: 選ばれた slug と版、インストール数、更新日、初回 / 版上昇の理由、除外理由の件数。選定レポートは `selection-batch-bound` の artifact digest から Private Evidence を辿る。読むのは slug・版・数字だけ。
-2. **Trial**: `discovery-run-started` に実際に記録された prompt 版と、稼働中のランナーが使う Git 外の campaign 設定を照合する。リポジトリの既定は `deep` が v11、`wide` が v26-wide（ADR 0051）だが、既存ランナーが自動的に切り替わるわけではない。同時に走る Root の数、Root ごとの子の数、wall、観測値（読んだ file 数、token）も見る。終了 event がない run は completed や候補 0 件に数えない。
+2. **Trial**: `discovery-run-started` に実際に記録された prompt 版と、稼働中のランナーが使う Git 外の campaign 設定を照合する。リポジトリの既定は `wide` の v26-wide（ADR 0051。`deep` は 2026-11-05 に退役）だが、既存ランナーが自動的に切り替わるわけではない。同時に走る Root の数、Root ごとの子の数、wall、観測値（読んだ file 数、token）も見る。終了 event がない run は completed や候補 0 件に数えない。
 3. **失敗**: provider 429（`provider-limited`）、`provider-cyber-policy` の拒否、`run-failed`、schema error、停滞（終了 event が無く出力も 30 分以上止まる run。2026-10-17 は websocket 426 の後に無言で止まり wall も発火しなかった）。host の memory（`free -g`）と container 数（`docker ps --format '{{.Names}}'` の `wbh-`）。
 4. **Finding**: 件数だけ。category 別、`finding-parked` か対象範囲内か。本文、payload、path、証拠は読まない・引用しない。
 5. **runner の停止**: `stale`、`stopped`、`stopping`、backoff の理由と直前の例外を記録する。再起動はしない。

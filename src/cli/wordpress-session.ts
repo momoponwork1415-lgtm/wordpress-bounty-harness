@@ -80,19 +80,16 @@ export const DISCOVERY_RUN_MEMORY_MIB =
 const runnablePrompt = z.enum(WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS);
 
 /**
- * ADR 0029 cap and the default wall of both modes. `wide` used 20 until the
- * owner's 2026-10-25 decision (ADR 0039 addendum 3).
+ * ADR 0029 cap and the default wall. `wide` used 20 until the owner's
+ * 2026-10-25 decision (ADR 0039 addendum 3).
  */
 const WORDPRESS_DEFAULT_WALL_MINUTES = 120;
 /**
- * ADR 0033 / 0039: the active floor by mode unless discovery.minimumActiveMinutes
- * sets one. ADR 0039 addendum 20 (#686): no mode has a floor by default; the
+ * ADR 0033 / 0039: the active floor unless discovery.minimumActiveMinutes
+ * sets one. ADR 0039 addendum 20 (#686): there is no floor by default; the
  * ending is the skill's judgment (wbh-recon v3 step 9).
  */
-const WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES = {
-  deep: 0,
-  wide: 0,
-} as const;
+const WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES = 0;
 
 /**
  * Whether a discovery Lab is attached and how often the Root may reset it
@@ -171,8 +168,12 @@ const commonCampaignFields = {
         .refine((mode) => mode !== "partitioned", {
           message: "Partitioned mode was removed in #685",
         })
-        .transform((mode) => mode as "deep" | "wide")
-        .default("deep"),
+        .refine((mode) => mode !== "deep", {
+          message:
+            "Deep mode was retired on 2026-11-05; name a wide Trial instead",
+        })
+        .transform((mode) => mode as "wide")
+        .default("wide"),
       /** Ceiling on live children; the Root decides how many it uses. */
       maxChildren: z
         .number()
@@ -180,14 +181,14 @@ const commonCampaignFields = {
         .min(1)
         .max(MAX_CHILDREN_LIMIT)
         .default(DEFAULT_MAX_CHILDREN),
-      /** Defaults by mode: 60 for `deep`, 0 for `wide` (ADR 0039). */
+      /** Defaults to 0 (ADR 0039 addendum 20). */
       minimumActiveMinutes: z.number().int().min(0).max(119).optional(),
       enumerator: z.unknown().optional(),
       partition: z.unknown().optional(),
       tracer: z.unknown().optional(),
       /**
        * ADR 0043: exploration skills staged into the agent CLI's home for a
-       * `deep` or `wide` Trial; absent, none. Ids name pinned versions.
+       * Trial; absent, none. Ids name pinned versions.
        */
       skills: z
         .array(z.enum(WORDPRESS_LAUNCHABLE_DISCOVERY_SKILL_IDS))
@@ -264,7 +265,7 @@ const commonCampaignFields = {
 export const wordpressCampaignConfigSchema = z
   .strictObject({
     ...commonCampaignFields,
-    /** Defaults to the 120-minute cap in both modes (ADR 0039 addendum 3). */
+    /** Defaults to the 120-minute cap (ADR 0039 addendum 3). */
     runWallTimeMinutes: z.number().positive().max(120).optional(),
     /** Defaults to the current objective of the mode. */
     promptId: runnablePrompt.optional(),
@@ -335,7 +336,7 @@ export const wordpressCampaignConfigSchema = z
       });
     const floor =
       config.discovery.minimumActiveMinutes ??
-      WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES[mode];
+      WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES;
     if (
       floor > 0 &&
       (config.runWallTimeMinutes ?? WORDPRESS_DEFAULT_WALL_MINUTES) <= floor
@@ -389,7 +390,7 @@ export const wordpressCampaignConfigSchema = z
       ...config.discovery,
       minimumActiveMinutes:
         config.discovery.minimumActiveMinutes ??
-        WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES[config.discovery.mode],
+        WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES,
     },
     promptId:
       config.promptId ??

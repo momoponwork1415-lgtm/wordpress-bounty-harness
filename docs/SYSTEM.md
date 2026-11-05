@@ -105,7 +105,7 @@ flowchart LR
 | --- | --- | --- |
 | sandbox、ブローカー、同時対象数、子の上限、制限時間、生成節、出力の全件保存、再開 | 目的文、スキル、読む順、仮説、子の使い方 | trust 境界宣言、目的文とスキルの承認（owner-approved は AI に委任） |
 
-- 設定の鍵: `discovery.mode`、`promptId`、`discovery.skills`、`discovery.maxChildren`、`runWallTimeMinutes`、`discovery.priorResearch`、`discovery.lab`、`resources.maxConcurrentTargets`、`resources.maxConcurrentTargetsByRuntime`、`resources.memoryBudgetMiB`。live の上書きは `continuous concurrency`
+- 設定の鍵: `discovery.mode`（`wide` だけ。`deep` は 2026-11-05 に退役）、`promptId`、`discovery.skills`、`discovery.maxChildren`、`runWallTimeMinutes`、`discovery.priorResearch`、`discovery.lab`、`resources.maxConcurrentTargets`、`resources.maxConcurrentTargetsByRuntime`、`resources.memoryBudgetMiB`。live の上書きは `continuous concurrency`
 - 台帳: `discovery-run-started`、`discovery-run-finished`、`thread-resume`、`discovery-report-recovered`、`child-report-recovered`
 - 正本: SPEC 第 2 節（不変条件 1、2）と第 6 節、ADR 0029、ADR 0036、ADR 0039（2026-11-01 追記 19）、ADR 0048、`src/discovery/`、`src/profiles/wordpress/prompts/`、`src/cli/wordpress-session.ts`
 
