@@ -35,12 +35,7 @@ import {
   readWordPressFinding,
   type WordPressFinding,
 } from "../profiles/wordpress/discovery/finding.js";
-import {
-  wordPressDiscoveryOutputContract,
-  wordPressDiscoveryOutputContractV2,
-  wordPressDiscoveryOutputContractV4,
-  wordPressDiscoveryOutputContractV5,
-} from "../profiles/wordpress/discovery/output-contract.js";
+import { wordPressDiscoveryOutputContractV4 } from "../profiles/wordpress/discovery/output-contract.js";
 import type {
   WordPressLabHandle,
   WordPressLabSetup,
@@ -52,7 +47,7 @@ import {
   WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS,
   wordPressDiscoveryModeOf,
   wordPressDiscoveryPrompt,
-  wordPressTrustBoundaryForObjective,
+  WORDPRESS_TRUST_BOUNDARY,
   wordPressTrustBoundaryId,
   type WordPressDiscoveryAsset,
   type WordPressOutputContractVersion,
@@ -607,12 +602,7 @@ function wordPressOutputContractFor(id: string) {
   const { contract } = wordPressDiscoveryContractPlan(id);
   if (contract === null)
     throw new Error("Prompt carries its own output contract");
-  return {
-    v1: wordPressDiscoveryOutputContract,
-    v2: wordPressDiscoveryOutputContractV2,
-    v4: wordPressDiscoveryOutputContractV4,
-    v5: wordPressDiscoveryOutputContractV5,
-  }[contract]();
+  return { v4: wordPressDiscoveryOutputContractV4 }[contract]();
 }
 
 /**
@@ -886,9 +876,6 @@ async function planWordPressDiscovery(
                 contractDigest: outputContractFor(selectedObjective.id).digest,
               }
             : {}),
-          ...(selectedObjective.sectionDigests === undefined
-            ? {}
-            : { sectionDigests: selectedObjective.sectionDigests }),
           // The whole text the Root receives: objective plus generated sections.
           inputDigest: `sha256:${createHash("sha256").update(prompt).digest("hex")}`,
           trustBoundaryVersion: trustBoundary.id,
@@ -1127,8 +1114,9 @@ async function resumeWordPressRun(
           executor: boundaries.executor,
         };
   // A segment continues the objective its Trial recorded, not the campaign's
-  // current one (#548, ADR 0036 addendum 2026-10-27). Archived versions stay
-  // in the registry; a version the registry no longer has cannot be rebuilt.
+  // current one (#548, ADR 0036 addendum 2026-10-27). Earlier versions moved
+  // to `history/prompts/` (2026-11-05); a version the registry no longer has
+  // cannot be rebuilt.
   const recordedPrompt = WORDPRESS_DISCOVERY_PROMPT_IDS.find(
     (id) => id === started.configuration.promptVariant,
   );
@@ -1139,7 +1127,8 @@ async function resumeWordPressRun(
       detail: `${started.configuration.promptVariant} is not in the prompt registry`,
     };
   // Older runs did not record a trust-boundary version; all of them used v1.
-  const recordedTrustBoundary = started.configuration.trustBoundaryVersion;
+  const recordedTrustBoundary =
+    started.configuration.trustBoundaryVersion ?? "trust-boundary-v1";
   const trustBoundaryId = wordPressTrustBoundaryId(recordedTrustBoundary);
   if (trustBoundaryId === undefined)
     return {
@@ -1602,9 +1591,7 @@ async function runWordPressCampaign(
   }
   const [objective, trustBoundary] = await Promise.all([
     loadWordPressDiscoveryAsset(config.promptId),
-    loadWordPressDiscoveryAsset(
-      wordPressTrustBoundaryForObjective(config.promptId),
-    ),
+    loadWordPressDiscoveryAsset(WORDPRESS_TRUST_BOUNDARY.id),
   ]);
   return runCampaignPipeline({
     campaignId: input.campaignId,
