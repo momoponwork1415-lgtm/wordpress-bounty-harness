@@ -13,7 +13,7 @@
 
 checkout、`--state`、`--host`、campaign 設定、選定方針、接頭辞、出力ログを、稼働中のプロセスの引数と起動記録から確認する。Git 内の [campaign.json](../../src/profiles/wordpress/policy/campaign.json) は新規設定の基準であり、稼働中の runner が読んでいる Git 外の設定を置き換えない。認証情報ファイルの中身を表示しない。
 
-2026-11-05 時点の引継ぎ情報: 直近の起動記録では checkout が `/home/dev/worktree/prod38`、本番 state が `/home/dev/.local/state/wordpress-bounty-harness`、Git 外 host 設定が `/home/dev/.config/wordpress-bounty-harness/host-production-v12-latest-core-xdebug-20261102.json`、接頭辞が `prod-c22` だった。campaign は `prod-c22-20261104-9`。Git 外 campaign 設定は `campaign-production-claude-opus-wide-3-skills-v22-lab-20261104.json` で、v22-wide、Lab 付き、Claude のみ、探索スキル 4 本、`priorResearch: same-target` である。PID ファイルのプロセスは存在せず、memo の `running` は古い。終了 event のない Trial が 3 件ある。この段落は状態の写しであり、次回の監視では必ず再確認する。リポジトリの新しい wide 方針は v26-wide だが、本番設定は自動的に切り替わらない。この設定は `discovery.skills` を持つので、2026-11-05 の staging 削除（ADR 0043 追記 10）以後の checkout では parse で止まる。
+2026-11-05 夜の引継ぎ情報: 旧 runner（接頭辞 `prod-c22`、checkout `/home/dev/worktree/prod38`、v22-wide、Claude のみ、探索スキル 4 本）は 2026-11-05 12:02Z に方針変更で選定 batch を捨てて止まり、PID は死んでいる。停止マーカー `continuous-prod-c22.stop` が残る。終了 event のない Trial が 3 件ある。旧 Git 外設定 `campaign-production-claude-opus-wide-3-skills-v22-lab-20261104.json` は `discovery.skills` を持つので、2026-11-05 の staging 削除以後の checkout では parse で止まる。v26 用の Git 外設定は用意済みで未起動: host `host-production-v13-latest-core-xdebug-ultra-20261105.json`（Codex `gpt-6-sol` effort ultra、Claude Root は Opus 5.5 の max）、campaign `campaign-production-v26-codex4-claude1-floor0-20261105.json`（v26-wide、Lab 2/20/60、最低 0 分、子 4、`runtimeShare` Codex 4 / Claude 1、`priorResearch: same-target`）、選定 `selection-production-v26-band-10k-1m-20261105.json`。起動は所有者の言葉、新しい接頭辞と log path、main からの新しい build を待つ。この段落は状態の写しであり、次回の監視では必ず再確認する。
 
 ## 3. 観測する
 
@@ -49,7 +49,7 @@ node dist/cli/main.js --state <確認した state> --host <確認した host 設
 
 1. 新しい main を**別の** checkout で build し、旧 Git 外設定を残して v26 の Git 外設定を別ファイルに作る。目的文、Lab、最低時間、子の上限、研究引継ぎが [campaign.json](../../src/profiles/wordpress/policy/campaign.json) と一致するか確認する。
 2. 終了 event のない旧 Trial を台帳から列挙し、runtime と回収可否を確認する。2026-11-05 の `prod-c22-20261104-9` の 3 件は Claude の未終了 run で、[ADR 0036](../adr/0036-operator-resume-after-provider-refusal.md) の規則上 `campaign resume` は `run-unfinished` で拒否する。旧台帳を残して未終了として報告する。同じ接頭辞で runner を再起動すると、その対象は新しい Trial になり得る。
-3. 同時に動く本番 runner がないことと停止マーカーを確認する。旧選定方針の `promptVariant` は v22 なので、v26 用の選定方針を別ファイルで作り、**同じ接頭辞**で v26 設定の `continuous run --resume` を起動する。選定方針の digest が変わるため、runner は旧選定 batch を `selection-batch-discarded`（`policy-changed`）で記録して新しい batch を選ぶ。旧 Claude run は終了 event のない記録として残り、個別再開はできない。runner のログで batch 破棄と新選定を確認し、`continuous status` と次の `discovery-run-started` の prompt ID で切り替えを確かめる。
+3. 同時に動く本番 runner がないことと停止マーカーを確認する。v26 用の選定方針と campaign 設定（第 2 節の 3 本）を使い、**新しい接頭辞**と新しい log path で `continuous run` を起動する（旧接頭辞の memo は v22 の batch を持つため）。旧 Claude run は終了 event のない記録として残り、個別再開はできない。runner のログで新選定を確認し、`continuous status` と次の `discovery-run-started` の prompt ID（v26-wide）、`configuration.minimumActiveMinutes`（0）、`maxChildren`（4）、`effort`（ultra）で切り替えを確かめる。
 
 ## 5. しないこと
 
