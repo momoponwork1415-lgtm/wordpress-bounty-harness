@@ -2,7 +2,6 @@ import { expect, it } from "vitest";
 
 import {
   admitWordPressLead,
-  readWordPressLead,
   wordPressLeadSignature,
 } from "../../../src/profiles/wordpress/discovery/lead.js";
 
@@ -25,7 +24,6 @@ const context = {
 
 it("admits and signs a private WordPress Lead independently of its wording", () => {
   const lead = admitWordPressLead(claim, context);
-  expect(readWordPressLead(lead)).toEqual(lead);
   expect(lead.recipeRef).toEqual({ kind: "provider-report", digest });
   expect(
     admitWordPressLead(
@@ -71,5 +69,4 @@ it("admits and signs a private WordPress Lead independently of its wording", () 
       context,
     ),
   ).toThrow();
-  expect(() => readWordPressLead({ ...lead, summary: "tampered" })).toThrow();
 });

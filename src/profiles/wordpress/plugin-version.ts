@@ -1,21 +1,14 @@
-/**
- * Plugin version ordering as WordPress.org and Wordfence print it: numeric
- * tokens compare as numbers, alphabetic tokens (beta, rc) sort before a
- * release, and trailing zeros do not change the version.
- */
-export interface VersionInterval {
-  readonly fromVersion: string;
-  readonly fromInclusive: boolean;
-  readonly toVersion: string;
-  readonly toInclusive: boolean;
-}
-
 function versionTokens(version: string): readonly (number | string)[] {
   return (version.toLowerCase().match(/[0-9]+|[a-z]+/gu) ?? []).map((token) =>
     /^[0-9]+$/u.test(token) ? Number(token) : token,
   );
 }
 
+/**
+ * Plugin version ordering as WordPress.org and Wordfence print it: numeric
+ * tokens compare as numbers, alphabetic tokens (beta, rc) sort before a
+ * release, and trailing zeros do not change the version.
+ */
 export function compareVersions(left: string, right: string): number {
   const leftTokens = versionTokens(left);
   const rightTokens = versionTokens(right);
@@ -58,22 +51,4 @@ export function compareVersions(left: string, right: string): number {
     return leftToken < rightToken ? -1 : 1;
   }
   return 0;
-}
-
-/** `*` on either side means unbounded. */
-export function intervalContains(
-  interval: VersionInterval,
-  version: string,
-): boolean {
-  const afterLower =
-    interval.fromVersion === "*" ||
-    compareVersions(version, interval.fromVersion) > 0 ||
-    (interval.fromInclusive &&
-      compareVersions(version, interval.fromVersion) === 0);
-  const beforeUpper =
-    interval.toVersion === "*" ||
-    compareVersions(version, interval.toVersion) < 0 ||
-    (interval.toInclusive &&
-      compareVersions(version, interval.toVersion) === 0);
-  return afterLower && beforeUpper;
 }

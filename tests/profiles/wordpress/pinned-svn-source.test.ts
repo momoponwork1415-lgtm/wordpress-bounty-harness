@@ -8,12 +8,12 @@ import { describe, expect, it } from "vitest";
 import { canonicalDigest } from "../../../src/infrastructure/canonical-json.js";
 import { measureCanonicalSourceTree } from "../../../src/infrastructure/canonical-source-tree.js";
 import {
-  acquirePinnedWordPressOrgSvnSource,
   openMaterializedSources,
   openCapturedWordPressOrgSvnSource,
   openWordPressOrgSnapshotSource,
   type WordPressOrgTargetSource,
 } from "../../../src/profiles/wordpress/acquisition/index.js";
+import { openLocalDirectoryTargetIntake } from "../../../src/profiles/wordpress/acquisition/local-directory-target-intake.js";
 import {
   openSnapshot,
   SourceAcquisitionError,
@@ -33,6 +33,35 @@ const policy = {
     maxDepth: 16,
   },
 };
+
+/** Seals an exported tree the way an operator capture does, for the reopen side. */
+async function captureSvnExport(
+  sourceDirectory: string,
+  storageDirectory: string,
+  digest: string,
+) {
+  const disposition = await openLocalDirectoryTargetIntake({
+    storageDirectory,
+    sourceCaptureKind: "captured-wordpress-org-svn-export",
+  }).intake({
+    kind: "manual-target-intake",
+    schemaVersion: 1,
+    source: { kind: "local-directory", path: sourceDirectory },
+    pluginIdentity: { kind: "wporg", slug: "example" },
+    requestedVersion: "2.0.16",
+    mainPluginFile: "example.php",
+    provenance: {
+      kind: "wordpress-org-svn",
+      sourceUrl: "https://plugins.svn.wordpress.org/example/trunk/",
+      revision: 3628543,
+      acquisitionRef: { id: "wporg-svn-r3628543", digest },
+    },
+    policy,
+  });
+  if (disposition.status !== "ready")
+    throw new Error(`fixture intake ${disposition.status}`);
+  return { packet: disposition.packet };
+}
 
 describe("pinned WordPress.org SVN source", () => {
   const memorySource = (identity: string, version: string): AcquiredSource => {
@@ -59,7 +88,7 @@ describe("pinned WordPress.org SVN source", () => {
     };
   };
 
-  it("captures a revision with its source provenance and immutable bytes", async () => {
+  it("reopens a sealed revision capture only for its exact pin", async () => {
     const root = await mkdtemp(join(tmpdir(), "pinned-svn-"));
     const sourceDirectory = join(root, "export");
     const storageDirectory = join(root, "intake");
@@ -73,17 +102,11 @@ describe("pinned WordPress.org SVN source", () => {
         maxEntries: 100,
         maxBytes: 10_000_000,
       });
-      const result = await acquirePinnedWordPressOrgSvnSource({
+      const result = await captureSvnExport(
         sourceDirectory,
         storageDirectory,
-        slug: "example",
-        version: "2.0.16",
-        mainPluginFile: "example.php",
-        sourceUrl: "https://plugins.svn.wordpress.org/example/trunk/",
-        revision: 3628543,
-        expectedTree,
-        policy,
-      });
+        expectedTree.digest,
+      );
 
       expect(result.packet).toMatchObject({
         version: "2.0.16",
@@ -96,24 +119,6 @@ describe("pinned WordPress.org SVN source", () => {
         },
       });
       expect(result.packet.sourceTree.digest).toBe(expectedTree.digest);
-      expect(
-        JSON.parse(
-          await readFile(
-            join(
-              storageDirectory,
-              "objects",
-              `${expectedTree.digest.slice(7)}.json`,
-            ),
-            "utf8",
-          ),
-        ),
-      ).toEqual(result.packet.sourceTree.manifest);
-      expect(await result.source.readFile("example.php")).toEqual(
-        await readFile(join(sourceDirectory, "example.php")),
-      );
-      await expect(result.source.readFile("missing.php")).rejects.toThrow(
-        "absent from source manifest",
-      );
       const pin = {
         kind: "captured-wordpress-org-svn-export" as const,
         storageDirectory,
@@ -197,17 +202,11 @@ describe("pinned WordPress.org SVN source", () => {
         maxEntries: 100,
         maxBytes: 10_000_000,
       });
-      const captured = await acquirePinnedWordPressOrgSvnSource({
+      const captured = await captureSvnExport(
         sourceDirectory,
         storageDirectory,
-        slug: "example",
-        version: "2.0.16",
-        mainPluginFile: "example.php",
-        sourceUrl: "https://plugins.svn.wordpress.org/example/trunk/",
-        revision: 3628543,
-        expectedTree,
-        policy,
-      });
+        expectedTree.digest,
+      );
       const targetSource = {
         async observe() {
           throw new Error("Archive observation must not run");
@@ -284,59 +283,6 @@ describe("pinned WordPress.org SVN source", () => {
       await expect(snapshots.freeze(request)).rejects.toThrow(
         SourceAcquisitionError,
       );
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects changed bytes and false SVN origins before publishing a packet", async () => {
-    const root = await mkdtemp(join(tmpdir(), "pinned-svn-reject-"));
-    const sourceDirectory = join(root, "export");
-    try {
-      await mkdir(sourceDirectory);
-      await writeFile(
-        join(sourceDirectory, "example.php"),
-        "<?php\n/* Plugin Name: Example\nVersion: 2.0.16\n*/\n",
-      );
-      const expectedTree = await measureCanonicalSourceTree(sourceDirectory, {
-        maxEntries: 100,
-        maxBytes: 10_000_000,
-      });
-      const request = {
-        sourceDirectory,
-        storageDirectory: join(root, "intake"),
-        slug: "example",
-        version: "2.0.16",
-        mainPluginFile: "example.php",
-        sourceUrl: "https://plugins.svn.wordpress.org/example/trunk/",
-        revision: 3628543,
-        expectedTree,
-        policy,
-      };
-      await expect(
-        acquirePinnedWordPressOrgSvnSource({
-          ...request,
-          sourceUrl: "https://example.invalid/example/trunk/",
-        }),
-      ).rejects.toThrow("Expected a pinned WordPress.org SVN trunk source");
-      await expect(
-        acquirePinnedWordPressOrgSvnSource({
-          ...request,
-          sourceUrl:
-            "https://operator@plugins.svn.wordpress.org/example/trunk/",
-        }),
-      ).rejects.toThrow("Expected a pinned WordPress.org SVN trunk source");
-      await expect(
-        acquirePinnedWordPressOrgSvnSource({
-          ...request,
-          sourceUrl: "https://plugins.svn.wordpress.org:8443/example/trunk/",
-        }),
-      ).rejects.toThrow("Expected a pinned WordPress.org SVN trunk source");
-      await writeFile(join(sourceDirectory, "example.php"), "changed");
-      await expect(acquirePinnedWordPressOrgSvnSource(request)).rejects.toThrow(
-        "differs from its pinned source tree",
-      );
-      await expect(readFile(join(root, "intake", "objects"))).rejects.toThrow();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

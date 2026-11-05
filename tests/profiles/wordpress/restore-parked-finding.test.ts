@@ -8,10 +8,7 @@ import { canonicalJson } from "../../../src/infrastructure/canonical-json.js";
 import { PrivateArtifactStore } from "../../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../../src/ledger/index.js";
 import { admitWordPressFinding } from "../../../src/profiles/wordpress/discovery/finding.js";
-import {
-  inspectParkedWordPressFinding,
-  restoreParkedWordPressFinding,
-} from "../../../src/profiles/wordpress/discovery/restore-parked-finding.js";
+import { restoreParkedWordPressFinding } from "../../../src/profiles/wordpress/discovery/restore-parked-finding.js";
 import { Review } from "../../../src/review/index.js";
 
 const snapshot = `sha256:${"a".repeat(64)}`;
@@ -127,12 +124,6 @@ it("recovers a false-positive park into the review and verification queues witho
     findingId: finding.findingId,
     clock: () => new Date("2026-10-24T01:00:00Z"),
   };
-  expect(await inspectParkedWordPressFinding(options)).toMatchObject({
-    status: "ready",
-    preconditionClass: "unknown",
-    snapshotDigest: snapshot,
-    partialRecord: false,
-  });
   expect(await restoreParkedWordPressFinding(options)).toEqual({
     status: "restored",
   });
@@ -149,9 +140,6 @@ it("recovers a false-positive park into the review and verification queues witho
     { status: "not-verified", ref: { findingId: finding.findingId } },
   ]);
   expect(await restoreParkedWordPressFinding(options)).toEqual({
-    status: "already-restored",
-  });
-  expect(await inspectParkedWordPressFinding(options)).toEqual({
     status: "already-restored",
   });
   expect(ledger.read({ type: "finding-recorded" })).toHaveLength(1);

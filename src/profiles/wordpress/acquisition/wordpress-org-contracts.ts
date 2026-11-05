@@ -188,9 +188,6 @@ export interface WordPressOrgAcquisitionFailureWithOriginal
   readonly reason: "metadata-archive-mismatch";
 }
 
-export type WordPressOrgSourceFailure =
-  WordPressOrgObservationFailure | WordPressOrgAcquisitionFailure;
-
 type DeferredIntakeDisposition = Extract<
   IntakeDisposition,
   { readonly status: "deferred" }
