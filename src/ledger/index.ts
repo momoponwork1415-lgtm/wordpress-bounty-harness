@@ -1441,15 +1441,12 @@ export class Ledger {
   readonly #db: DatabaseSync;
   readonly #artifacts: PrivateArtifactStore;
   readonly #readOnly: boolean;
-  readonly #findingGroupKeyCache: ReadonlyMap<string, readonly string[]>;
 
   constructor(options: {
     readonly databasePath: string;
     readonly artifactStore: PrivateArtifactStore;
     /** Open an existing ledger without initialization or append capability. */
     readonly readOnly?: boolean;
-    /** Digest-only projection of legacy Finding keys from Private Evidence. */
-    readonly findingGroupKeyCache?: ReadonlyMap<string, readonly string[]>;
   }) {
     this.#readOnly = options.readOnly ?? false;
     this.#db = new DatabaseSync(options.databasePath, {
@@ -1460,7 +1457,6 @@ export class Ledger {
     // turns a short transaction into a failed Trial.
     this.#db.exec("PRAGMA busy_timeout = 30000");
     this.#artifacts = options.artifactStore;
-    this.#findingGroupKeyCache = options.findingGroupKeyCache ?? new Map();
     if (this.#readOnly) return;
     this.#db.exec(`
       CREATE TABLE IF NOT EXISTS ledger_events (
@@ -1477,15 +1473,11 @@ export class Ledger {
     `);
   }
 
-  /** Read a current event's keys or a versioned cache entry for an old event. */
+  /** A current event's group keys; a pre-group event (#668) is unkeyed. */
   findingGroupKeyDigests(
     event: Extract<LedgerEventV1, { type: "finding-recorded" }>,
   ): readonly string[] {
-    if (event.group !== undefined) return event.group.keys;
-    const artifact = event.artifacts.find((ref) => ref.kind === "finding");
-    return artifact === undefined
-      ? []
-      : (this.#findingGroupKeyCache.get(artifact.digest) ?? []);
+    return event.group?.keys ?? [];
   }
 
   async append(

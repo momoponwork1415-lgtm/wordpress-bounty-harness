@@ -4,13 +4,12 @@ import {
 } from "../lab/egress-plan.js";
 import { z } from "zod";
 
-import { lstat, readFile, writeFile } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 import { summarizeRecordedRuntimes } from "../discovery/index.js";
 import { canonicalJson } from "../infrastructure/canonical-json.js";
-import { serializeFindingGroupKeyCache } from "../ledger/finding-group-key-cache.js";
 import { readFindingGroups } from "../ledger/finding-groups.js";
 import {
   EXTERNAL_OUTCOMES,
@@ -153,10 +152,6 @@ export type ResumeCampaignRunSummary =
 /** A profile composition: everything target-specific the commands need. */
 export interface CliProfile {
   review(state: CliState): Review;
-  /** One-time, profile-owned derivation of pre-group Finding keys. */
-  deriveLegacyFindingGroupKeyCache?(
-    state: CliState,
-  ): Promise<ReadonlyMap<string, readonly string[]>>;
   /** Profile-owned, digest-only keys derived from a stored Lead. */
   leadGroupKeyDigests?(lead: unknown): readonly string[];
   /** A profile may provide a fresh, foreground Lab for human reproduction. */
@@ -442,8 +437,6 @@ interface ReviewSignalSource {
 
 export type CliEnvironment = {
   readonly stateDirectory: string;
-  /** Optional digest-only projection for pre-group Finding events (#653). */
-  readonly findingGroupKeyCachePath?: string;
   readonly profile: CliProfile;
   readonly clock?: () => Date;
   readonly newId?: () => string;
@@ -1448,26 +1441,6 @@ const COMMANDS: readonly Command[] = [
       if (result.status === "already-restored")
         throw new Error(`Finding ${findingId} is already restored`);
       print([`restored finding ${findingId} to the review queue`]);
-      return 0;
-    },
-  }),
-  command({
-    name: "review group-cache",
-    readOnly: true,
-    required: ["output"],
-    usage: ["review group-cache --output <file>"],
-    options: { output: STR },
-    handler: async ({ values, state, environment, print }) => {
-      const derive = environment.profile.deriveLegacyFindingGroupKeyCache;
-      if (derive === undefined)
-        throw new UsageError("This profile has no legacy Finding group keys");
-      const cache = await derive(state);
-      const output = required(values.output, "output");
-      await writeFile(output, serializeFindingGroupKeyCache(cache), {
-        flag: "wx",
-        mode: 0o600,
-      });
-      print([`wrote ${cache.size} legacy Finding key entries to ${output}`]);
       return 0;
     },
   }),
@@ -2642,9 +2615,6 @@ export async function runCli(
       environment,
       {
         readOnly: handler.readOnly,
-        ...(environment.findingGroupKeyCachePath === undefined
-          ? {}
-          : { findingGroupKeyCachePath: environment.findingGroupKeyCachePath }),
       },
     );
     return await invoke({

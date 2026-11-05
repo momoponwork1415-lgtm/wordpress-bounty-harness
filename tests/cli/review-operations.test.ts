@@ -1,4 +1,4 @@
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -16,50 +16,6 @@ import {
 
 /** Admin commands on a recorded ledger; no selection, discovery or Lab runs (#495). */
 describe("review operations on recorded history", () => {
-  it("writes a digest-only legacy group cache once without changing the ledger", async () => {
-    const { run, root, ledger, store, snapshotDigest } =
-      await recordedReviewState();
-    const artifactDigest = await store.putFiles({
-      "finding.json": canonicalJson({
-        sourceTrace: [
-          { file: "includes/old.php", function: "handle", line: 2 },
-        ],
-      }),
-    });
-    await ledger.append({
-      schemaVersion: 1,
-      identity: "legacy-ungrouped",
-      campaignId: "campaign-1",
-      snapshotDigest,
-      occurredAt: "2026-10-28T00:00:00Z",
-      type: "finding-recorded",
-      findingId: "legacy-ungrouped",
-      runId: "recorded-run-1",
-      category: "sqli",
-      artifacts: [{ kind: "finding", digest: artifactDigest }],
-    });
-    const output = join(root, "group-key-cache.json");
-    const before = ledger.readAll().length;
-    const created = await run("review", "group-cache", "--output", output);
-    expect(created.code).toBe(0);
-    const bytes = await readFile(output, "utf8");
-    const parsed = JSON.parse(bytes) as {
-      readonly ruleVersion: string;
-      readonly entries: readonly unknown[];
-    };
-    expect(parsed.ruleVersion).toBe("profile-file-function/v1");
-    expect(parsed.entries).toContainEqual({
-      artifactDigest,
-      keyDigests: [expect.stringMatching(/^sha256:/)],
-    });
-    expect(bytes).not.toContain("includes/old.php");
-    expect((await stat(output)).mode & 0o777).toBe(0o600);
-    expect(ledger.readAll()).toHaveLength(before);
-    const repeated = await run("review", "group-cache", "--output", output);
-    expect(repeated.code).not.toBe(0);
-    expect(await readFile(output, "utf8")).toBe(bytes);
-  });
-
   it("fails a command that reaches selection, discovery or a Lab", async () => {
     const { run, root, executions } = await recordedReviewState();
     const config = ["--config", join(root, "campaign.json")];
