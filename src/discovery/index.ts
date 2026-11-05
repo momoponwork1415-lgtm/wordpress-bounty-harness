@@ -5,8 +5,6 @@ export {
   type CampaignHistory,
   type CampaignInputV1,
   type PlannedDiscoveryRun,
-  type PriorLeadsConfiguration,
-  type FollowUpConfiguration,
   type PlannedTrial,
 } from "./campaign.js";
 export {
@@ -80,7 +78,6 @@ export {
 } from "./claude-gvisor-sandbox.js";
 export { CLAUDE_RUNNER_DENIALS } from "./claude-runner.js";
 export { runParametersSection, type RunParameters } from "./run-parameters.js";
-export { priorLeadsSection, type PriorLead } from "./prior-leads.js";
 export {
   MAX_PRIOR_RESEARCH_FILE_BYTES,
   MAX_PRIOR_RESEARCH_FILES,

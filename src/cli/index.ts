@@ -43,7 +43,7 @@ import {
   type TargetLimit,
   type VerifyNextSummary,
 } from "./pipeline.js";
-import { holdDiscoverySweep, type FollowUpTarget } from "./continuous.js";
+import { holdDiscoverySweep } from "./continuous.js";
 import {
   continuousCommand,
   type ContinuousHostStatus,
@@ -246,23 +246,10 @@ export interface CliProfile {
       readonly resumeProviderLimited?: { log(line: string): void };
       /** The runner only: the operator's live limit under maxConcurrentTargets. */
       readonly targetLimit?: TargetLimit;
-      /**
-       * The runner only (ADR 0049 C): this campaign runs one follow-up Trial
-       * per listed Snapshot (ADR 0044's second Trial) instead of a selection;
-       * a refused one is recorded, logged and left out.
-       */
-      readonly followUp?: {
-        readonly targets: readonly FollowUpTarget[];
-        log(line: string): void;
-      };
     },
   ): Promise<CampaignSummary>;
-  /** ADR 0049 C: whether the runner schedules follow-up Trials under this campaign config. */
-  followUpPolicy?(configPath: string): Promise<"leads" | "none">;
   /** The campaign config's maxConcurrentTargets, the ceiling of `continuous concurrency`. */
   targetCeiling?(configPath: string): Promise<number>;
-  /** Why `continuous run` refuses this campaign config, or undefined when it may run it. */
-  continuousRunRefusal?(configPath: string): Promise<string | undefined>;
   /** The campaign config's per-runtime caps, the ceilings of `continuous concurrency --runtime`. */
   runtimeCeilings?(
     configPath: string,

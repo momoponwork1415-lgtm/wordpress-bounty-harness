@@ -96,32 +96,7 @@ export type PlannedDiscoveryRun = {
     };
     readonly model?: string;
     readonly effort?: string;
-    /** ADR 0044: the named representatives a second Trial received; absent otherwise. */
-    readonly priorLeads?: PriorLeadsConfiguration;
-    /** ADR 0049 C: set when the continuous runner scheduled this second Trial itself. */
-    readonly followUp?: FollowUpConfiguration;
   };
-};
-
-/** ADR 0049 C: what `discovery-run-started.configuration.followUp` records. */
-export type FollowUpConfiguration = {
-  /** The ended Trial's Root run whose Leads this Trial received. */
-  readonly of: string;
-  /** How many Leads that Trial recorded; the first 8 are the representatives. */
-  readonly leadCount: number;
-};
-
-/** ADR 0044: what `discovery-run-started.configuration.priorLeads` records. */
-export type PriorLeadsConfiguration = {
-  /** How many representatives (one per group) the section names. */
-  readonly representatives: number;
-  /** canonical digest of the Snapshot digest and the sorted Lead ids. */
-  readonly representativesDigest: string;
-  readonly leadIds: string[];
-  /** How many gap sentences the shape check withheld. */
-  readonly gapWithheld: number;
-  /** sha256 of the generated `## Prior leads` section. */
-  readonly sectionDigest: string;
 };
 
 export type PlannedTrial = {

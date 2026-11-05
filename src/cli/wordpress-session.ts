@@ -122,35 +122,6 @@ const discoveryLabSchema = z
     maxLookups: maxLookups ?? 60,
   }));
 
-const sha256Digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
-
-/**
- * ADR 0044: one Snapshot of a named second Trial and the Lead representatives
- * it receives, either as Lead ids or as the `--rule pair --json` output of
- * `scripts/lead-groups.mjs` (its Lead-represented groups of this Snapshot).
- * At most 8 per Snapshot (design 2026-10-31 §1).
- */
-export const MAX_PRIOR_LEADS_PER_SNAPSHOT = 8;
-const priorLeadsTargetSchema = z
-  .strictObject({
-    snapshotDigest: sha256Digest,
-    leadIds: z
-      .array(sha256Digest)
-      .min(1)
-      .max(MAX_PRIOR_LEADS_PER_SNAPSHOT)
-      .refine((ids) => new Set(ids).size === ids.length, {
-        message: "leadIds names each Lead once",
-      })
-      .optional(),
-    groupsPath: z.string().min(1).optional(),
-  })
-  .refine(
-    (target) =>
-      (target.leadIds === undefined) !== (target.groupsPath === undefined),
-    { message: "A prior-leads target names leadIds or groupsPath, not both" },
-  );
-export type WordPressPriorLeadsTarget = z.infer<typeof priorLeadsTargetSchema>;
-
 export const LEGACY_VERIFIER_RETIRED =
   "The legacy Codex Verifier is retired; a verification skill handoff must be explicitly requested";
 
@@ -194,16 +165,8 @@ const commonCampaignFields = {
         .array(z.enum(WORDPRESS_LAUNCHABLE_DISCOVERY_SKILL_IDS))
         .max(MAX_STAGED_SKILLS)
         .optional(),
-      /**
-       * ADR 0044: present only for a named second Trial. Its targets are the
-       * named Snapshots, not a selection, and each receives the Harness's
-       * `## Prior leads` section; it requires `lab: attached`.
-       */
-      priorLeads: z
-        .strictObject({
-          targets: z.array(priorLeadsTargetSchema).min(1).max(50),
-        })
-        .optional(),
+      /** ADR 0044's named second Trial was removed on 2026-11-05; refused below. */
+      priorLeads: z.unknown().optional(),
       /**
        * ADR 0048: `same-target` passes the map and setup record of the latest
        * earlier Trial on another Snapshot of the same target under the
@@ -212,12 +175,10 @@ const commonCampaignFields = {
        */
       priorResearch: z.enum(["none", "same-target"]).default("none"),
       /**
-       * ADR 0049 C: whether the continuous runner schedules one follow-up
-       * Trial (ADR 0044's second Trial, with Lab) for an ended Trial that left
-       * Leads. Absent, it follows the Lab: `leads` with `lab: attached`,
-       * `none` with `lab: none` (`wordPressFollowUpPolicy`).
+       * ADR 0049 C's follow-up Trial was removed on 2026-11-05. `none` is
+       * still read so configurations that name it parse; `leads` is refused.
        */
-      followUp: z.enum(["leads", "none"]).optional(),
+      followUp: z.unknown().optional(),
     })
     .prefault({}),
   selectionPolicyPath: z.string().min(1).optional(),
@@ -293,34 +254,21 @@ export const wordpressCampaignConfigSchema = z
         });
     }
     if (
-      config.discovery.followUp === "leads" &&
-      config.discovery.lab.mode !== "attached"
+      config.discovery.followUp !== undefined &&
+      config.discovery.followUp !== "none"
     )
       context.addIssue({
         code: "custom",
         path: ["discovery", "followUp"],
         message:
-          "A follow-up Trial runs with discovery.lab attached (ADR 0049); name followUp none with lab none",
+          "The follow-up Trial was removed on 2026-11-05 (ADR 0049); drop discovery.followUp or name none",
       });
-    const priorLeads = config.discovery.priorLeads;
-    if (priorLeads !== undefined) {
-      if (config.discovery.lab.mode !== "attached")
-        context.addIssue({
-          code: "custom",
-          path: ["discovery", "priorLeads"],
-          message:
-            "A prior-leads Trial runs with discovery.lab attached (ADR 0044)",
-        });
-      const snapshots = priorLeads.targets.map(
-        (target) => target.snapshotDigest,
-      );
-      if (new Set(snapshots).size !== snapshots.length)
-        context.addIssue({
-          code: "custom",
-          path: ["discovery", "priorLeads", "targets"],
-          message: "discovery.priorLeads names each Snapshot once",
-        });
-    }
+    if (config.discovery.priorLeads !== undefined)
+      context.addIssue({
+        code: "custom",
+        path: ["discovery", "priorLeads"],
+        message: "discovery.priorLeads was removed on 2026-11-05 (ADR 0044)",
+      });
     for (const role of ["enumerator", "partition", "tracer"] as const)
       if (config.discovery[role] !== undefined)
         context.addIssue({
@@ -504,20 +452,6 @@ export type WordPressVerification = Verification<
 >;
 
 /** The campaign config file, validated; a budget below one discovery run stops here. */
-/**
- * ADR 0049 C: whether the runner schedules follow-up Trials under this
- * configuration. Absent `discovery.followUp` follows the Lab, so a campaign
- * that names `lab: none` schedules none without naming it.
- */
-export function wordPressFollowUpPolicy(
-  config: WordPressCampaignConfig,
-): "leads" | "none" {
-  return (
-    config.discovery.followUp ??
-    (config.discovery.lab.mode === "attached" ? "leads" : "none")
-  );
-}
-
 export async function readWordPressCampaignConfig(
   configPath: string,
 ): Promise<WordPressCampaignConfig> {
