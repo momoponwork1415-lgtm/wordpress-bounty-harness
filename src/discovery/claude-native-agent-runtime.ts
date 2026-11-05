@@ -549,12 +549,8 @@ export class ClaudeNativeAgentRuntime {
                   ...(run.resume === undefined || run.resumeNotice === undefined
                     ? {}
                     : { resumeNotice: run.resumeNotice }),
-                  ...(run.skills === undefined
-                    ? {}
-                    : { skills: run.skills.map((skill) => skill.name) }),
                 },
                 subagentModel: profile.subagent.modelId,
-                ...(run.skills === undefined ? {} : { skills: run.skills }),
                 ...(run.priorResearch === undefined
                   ? {}
                   : {

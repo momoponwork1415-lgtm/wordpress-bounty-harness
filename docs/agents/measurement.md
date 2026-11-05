@@ -69,7 +69,7 @@ PR の「測った数字」に貼る列は固定する。
 
 ## 5b. 過去の探索スキルの計測記録（ADR 0043）
 
-以下は当時の実験設計と結果を読むための記録であり、現行 v26-wide の採否手順ではない。`discovery.skills` を書いた campaign は、目的文も契約も変えずに、名指しした `SKILL.md` を sandbox の CLI home に置く。台帳の `discovery-run-started.configuration.skills [{id, digest}]` で実験時の設定を見分ける。
+以下は当時の実験設計と結果を読むための記録であり、現行 v26-wide の採否手順ではない。staging とスキル本文は 2026-11-05 に削除した（ADR 0043 追記 10、本文は tag `archive/pre-v26-cleanup`）。`discovery.skills` を書いた campaign は、目的文も契約も変えずに、名指しした `SKILL.md` を sandbox の CLI home に置く。台帳の `discovery-run-started.configuration.skills [{id, digest}]` で実験時の設定を見分ける。
 
 - 当時の比較対象は同じ mode・同じ選定帯で `discovery.skills` を書かない Trial とし、campaign を 2 つ用意して対象を交互に回す計画だった。現行の必須手順にはしない。
 - 数えるものは上の表と同じ（Finding / Trial、Lead / Trial、段 1b の成立、Lab で人間が `match` を記録した数、読んだ file 数、token、時間）。加えて research artifact を開いて `recon-map.md` の有無と大きさ、Corrections 節の行数を書く。`wbh-tools-v1` の腕では `tools/hooks.tsv`、`tools/sinks.tsv`、`tools/README.md` の有無と行数も書く。中身は読まない。

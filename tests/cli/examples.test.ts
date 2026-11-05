@@ -136,6 +136,22 @@ it("rejects every removed partitioned campaign setting at parse time", () => {
   }
 });
 
+it("rejects discovery.skills at parse time", () => {
+  const result = wordpressCampaignConfigSchema.safeParse({
+    schemaVersion: 1,
+    programmeBoundary: { version: "v", text: "t" },
+    wordpressVersion: "6.8",
+    lab: { siteTitle: "s", initialPosts: [], customerRole: false },
+    discovery: { skills: ["wbh-recon-v3"] },
+  });
+  expect(result.success).toBe(false);
+  expect(
+    result.error?.issues.find(
+      (issue) => issue.path.join(".") === "discovery.skills",
+    )?.message,
+  ).toBe("Exploration skills were removed in the v26 cleanup");
+});
+
 it("parses the historical 20-minute v22-wide example with the current selection policy (ADR 0039)", async () => {
   const config = wordpressCampaignConfigSchema.parse(
     JSON.parse(

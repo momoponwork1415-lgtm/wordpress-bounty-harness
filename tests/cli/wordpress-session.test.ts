@@ -257,30 +257,13 @@ describe("WordPress campaign session", () => {
   });
 });
 
-describe("discovery skills (ADR 0043)", () => {
-  it("accepts pinned skill ids for a deep or wide campaign", async () => {
+describe("discovery skills (ADR 0043, removed in the v26 cleanup)", () => {
+  it("refuses a campaign that names exploration skills", async () => {
     const { open } = await fixture({
       config: { discovery: { lab: "none", skills: ["wbh-recon-v3"] } },
     });
-    const session = await open();
-    expect(session.config.discovery.skills).toEqual(["wbh-recon-v3"]);
-    const wide = await fixture({
-      config: {
-        discovery: { lab: "none", mode: "wide", skills: ["wbh-recon-v3"] },
-      },
-    });
-    expect((await wide.open()).config.discovery.skills).toEqual([
-      "wbh-recon-v3",
-    ]);
-  });
-
-  it("rejects unknown ids and repeated skills", async () => {
-    for (const config of [
-      { discovery: { lab: "none", skills: ["wbh-other-v1"] } },
-      { discovery: { lab: "none", skills: ["wbh-recon-v3", "wbh-recon-v3"] } },
-    ]) {
-      const { open } = await fixture({ config });
-      await expect(open()).rejects.toThrow();
-    }
+    await expect(open()).rejects.toThrow(
+      "Exploration skills were removed in the v26 cleanup",
+    );
   });
 });

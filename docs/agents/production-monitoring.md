@@ -13,7 +13,7 @@
 
 checkout、`--state`、`--host`、campaign 設定、選定方針、接頭辞、出力ログを、稼働中のプロセスの引数と起動記録から確認する。Git 内の [campaign.json](../../src/profiles/wordpress/policy/campaign.json) は新規設定の基準であり、稼働中の runner が読んでいる Git 外の設定を置き換えない。認証情報ファイルの中身を表示しない。
 
-2026-11-05 時点の引継ぎ情報: 直近の起動記録では checkout が `/home/dev/worktree/prod38`、本番 state が `/home/dev/.local/state/wordpress-bounty-harness`、Git 外 host 設定が `/home/dev/.config/wordpress-bounty-harness/host-production-v12-latest-core-xdebug-20261102.json`、接頭辞が `prod-c22` だった。campaign は `prod-c22-20261104-9`。Git 外 campaign 設定は `campaign-production-claude-opus-wide-3-skills-v22-lab-20261104.json` で、v22-wide、Lab 付き、Claude のみ、探索スキル 4 本、`priorResearch: same-target` である。PID ファイルのプロセスは存在せず、memo の `running` は古い。終了 event のない Trial が 3 件ある。この段落は状態の写しであり、次回の監視では必ず再確認する。リポジトリの新しい wide 方針は v26-wide だが、本番設定は自動的に切り替わらない。
+2026-11-05 時点の引継ぎ情報: 直近の起動記録では checkout が `/home/dev/worktree/prod38`、本番 state が `/home/dev/.local/state/wordpress-bounty-harness`、Git 外 host 設定が `/home/dev/.config/wordpress-bounty-harness/host-production-v12-latest-core-xdebug-20261102.json`、接頭辞が `prod-c22` だった。campaign は `prod-c22-20261104-9`。Git 外 campaign 設定は `campaign-production-claude-opus-wide-3-skills-v22-lab-20261104.json` で、v22-wide、Lab 付き、Claude のみ、探索スキル 4 本、`priorResearch: same-target` である。PID ファイルのプロセスは存在せず、memo の `running` は古い。終了 event のない Trial が 3 件ある。この段落は状態の写しであり、次回の監視では必ず再確認する。リポジトリの新しい wide 方針は v26-wide だが、本番設定は自動的に切り替わらない。この設定は `discovery.skills` を持つので、2026-11-05 の staging 削除（ADR 0043 追記 10）以後の checkout では parse で止まる。
 
 ## 3. 観測する
 

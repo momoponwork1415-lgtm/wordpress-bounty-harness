@@ -172,7 +172,7 @@ export async function* query({ options }) {
 }
 `;
 
-describe("Claude runner skills (ADR 0043)", () => {
+describe("Claude runner tool surface", () => {
   const base = {
     prompt: "p",
     resumePrompt: "r",
@@ -183,20 +183,6 @@ describe("Claude runner skills (ADR 0043)", () => {
     outputSchema: { type: "object" },
   };
 
-  it("enables exactly the staged skills from the user setting source and offers the Skill tool", async () => {
-    const events = await runWithConfig(SKILLS_SDK, {
-      ...base,
-      skills: ["wbh-recon"],
-    });
-    const result = events.find((event) => event.type === "result");
-    expect(result).toMatchObject({
-      settingSources: ["user"],
-      skills: ["wbh-recon"],
-      skillDecision: "allow",
-    });
-    expect(result?.tools).toContain("Skill");
-  });
-
   it("loads no setting source and offers no Skill tool without skills", async () => {
     const events = await runWithConfig(SKILLS_SDK, base);
     const result = events.find((event) => event.type === "result");
@@ -206,13 +192,5 @@ describe("Claude runner skills (ADR 0043)", () => {
       skillDecision: CLAUDE_RUNNER_DENIALS.outsideSurface,
     });
     expect(result?.tools).not.toContain("Skill");
-  });
-
-  it("refuses a skill list that is empty, too long or badly named", async () => {
-    for (const skills of [[], ["Bad Name"], ["../x"], Array(9).fill("s")]) {
-      await expect(
-        runWithConfig(SKILLS_SDK, { ...base, skills }),
-      ).rejects.toMatchObject({ code: 2 });
-    }
   });
 });
