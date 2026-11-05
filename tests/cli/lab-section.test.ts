@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import { wordPressLabSection } from "../../src/cli/wordpress.js";
+import { MAX_RESUME_NOTICE_LENGTH } from "../../src/discovery/sandbox-layout.js";
 import type { WordPressLabHandle } from "../../src/profiles/wordpress/lab/index.js";
 
 const handle = {
@@ -42,5 +43,28 @@ describe("## Lab section", () => {
     expect(digest(resumed)).toBe(
       "sha256:d12a49b9bda043db10c13d9fad3edea00f688aead0d4475d64586539785a483f",
     );
+  });
+
+  // A resumed segment sends this section as its first-turn notice; the
+  // sandboxes refuse a notice past MAX_RESUME_NOTICE_LENGTH. At 4,096 every
+  // Lab-attached resume failed as policy before the model ran (2026-11-06).
+  it("fits the resumed-segment notice bound with production-length accounts", () => {
+    const long = "x".repeat(64);
+    const production = {
+      ...handle,
+      endpoint: `http://${"w".repeat(63)}`,
+      attackerAccounts: {
+        subscriber: { username: long, password: long },
+        customer: { username: long, password: long },
+      },
+      exploration: {
+        control: { host: "labctl", ipv4: "172.20.0.130" },
+        administrator: { username: "harness-admin", password: long },
+      },
+    } satisfies WordPressLabHandle;
+    const used = { resetsUsed: 2, observationsUsed: 20, lookupsUsed: 60 };
+    const resumed = wordPressLabSection(production, budget, used);
+    expect(resumed.length).toBeGreaterThan(4_096);
+    expect(resumed.length).toBeLessThanOrEqual(MAX_RESUME_NOTICE_LENGTH);
   });
 });

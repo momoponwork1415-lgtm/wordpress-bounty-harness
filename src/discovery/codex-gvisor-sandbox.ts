@@ -60,6 +60,7 @@ import {
   isCodexSessionPath,
 } from "./native-run-receipts.js";
 import {
+  MAX_RESUME_NOTICE_LENGTH,
   SANDBOX_RESEARCH_MOUNT_PATH,
   SANDBOX_SOURCE_MOUNT_PATH,
   dependencyMountPathsAreDisjoint,
@@ -856,7 +857,7 @@ export class GvisorCodexSandbox implements CodexSandbox {
       (command.resumeNotice !== undefined &&
         (command.resume === undefined ||
           command.resumeNotice.length === 0 ||
-          command.resumeNotice.length > 4_096)) ||
+          command.resumeNotice.length > MAX_RESUME_NOTICE_LENGTH)) ||
       (command.runMarker !== undefined &&
         (command.researchMount === undefined ||
           !runIdPattern.test(command.runMarker.runId) ||
