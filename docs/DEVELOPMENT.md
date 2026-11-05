@@ -15,7 +15,7 @@
 - **本番が bench。** 探索の数字は本番の対象から取る（所有者決定 2026-10-26）。開発セットに戻すのは、本番で対象範囲内の Finding は出るのに人間の観測の `match` が 1 週間 0 件のときだけ。既知の公開事例の benchmark は、現行の方法が 1 回の Trial で既知の型を外したときに、その型を名指しして回す。pass@3 のような反復は置かない。
 - **変えない 5 つ。** 不変条件 1〜8、Harness は制御だけ、確定は人間の Lab 観測だけ、探索プロンプトの文面（消すだけは許す）、設計変更は月 1 回（[ADR 0045](adr/0045-frozen-core-and-three-exploration-forces.md)）。2026-11-05 に所有者が決めた 7 月 30 日方式の版付き目的文だけ、文面の凍結の例外とする（[ADR 0051](adr/0051-july30-prompt-pilot.md)）。
 - **リポジトリの探索既定。** wide は v26-wide の単一目的文、探索 Lab 付き、最低 60 分、子の上限 3 とし、別 Snapshot の研究 file を `priorResearch: same-target` で引き継ぐ。六段階探索方式は `experimental/` に置き、明示した campaign だけで試す。同一 Snapshot の自動再探索は、未解決経路を判定する契約ができるまで切る。稼働中の本番ランナーは Git 外の設定を持ち、このリポジトリの既定を変えるだけでは切り替わらない（ADR 0051 の 2026-11-05 追記）。
-- **採否前は対で、採用後は新版だけを測る。** agent 入力を変える比較候補は第 5 節のとおり同じ選定帯と Lab 条件で旧版・新版を交互に回す。採用後の監視では新版だけを本番で回し、過去の同じ分母の数字と比べる。分母は Codex 1 時間あたりの Lab 発火数と Wordfence の結果（ADR 0045）。手順は [docs/agents/measurement.md](agents/measurement.md)、採否は第 5 節の 6 段。
+- **採否前は対で、採用後は新版だけを測る。** agent 入力を変える比較候補は第 5 節のとおり同じ選定帯と Lab 条件で旧版・新版を交互に回す。採用後の監視では新版だけを本番で回し、過去の同じ分母の数字と比べる。分母は Codex 1 時間あたりの Lab 発火数と Wordfence の結果（ADR 0045）。手順は [docs/agents/measurement.md](agents/measurement.md)、採否は第 5 節の 6 段。ただし所有者が採用を決めた v26-wide の主経路化では v22-wide との交互比較を求めない（ADR 0051 の 2026-11-05 追記）。
 - **Harness の変更は制御だけ。** 選定、Snapshot、sandbox、制限、保存、park、Lab の供給、観測の記録、台帳。探索と検証の「やり方」が code に現れたらプロンプトかスキルへ移す（[AGENTS.md](../AGENTS.md) の責務）。bug 修正と削除は随時、新しい機構は ADR 0045 の月 1 回の枠で。
 - **文書の役割。** 正本は [SPEC.md](SPEC.md) と [ADR](adr/)。いまの動きの説明は [SYSTEM.md](SYSTEM.md)。調べて報告した文書は [docs/reviews/](reviews/) に日付付きで置き、正本ではない。本番の設定、台帳、Private Evidence は Git 外。
 - **人間の判断点は 2 つ。** 提出前のレビュー（Lab で自分の目で観測する）と外部行動の承認。人間はコマンドを打たず、会話で述べたことを AI が本人の名で記録する（2026-10-31）。
@@ -40,7 +40,7 @@
 
 - テンプレートの 5 項目（問い、変えたこと、変えなかったこと、測った数字、消し方）を日本語で埋める。AI が書いてよいが、所有者が分からない行があれば merge しない。書き直しを依頼する。
 - 探索に触る PR は数字を貼る。分母は本番の対象である（所有者決定 2026-10-26 の 2 回目: 「今後は開発ベンチではなく普通に本番探索して止まったらバグ修正」）。同日の 1 回目の決定（開発セット 6 case × 3 run）は、次の切り分けのときだけに残す。
-  - **本番で比べる。** agent 入力を変える PR（prompt 本文、契約節、Lab setup）は、同じ選定帯で旧版と新版を交互に回し、Trial 数をそろえて比べる。campaign ID に版を入れ、台帳の `discovery-run-started` の prompt 版で分ける。mirror を探索入力にしたときと同じやり方である（[2026-10-25 の報告](reviews/2026-10-25-wordfence-mirror-as-exploration-input.md)）。
+  - **本番で比べる。** agent 入力を変える比較 PR（prompt 本文、契約節、Lab setup）は、同じ選定帯で旧版と新版を交互に回し、Trial 数をそろえて比べる。campaign ID に版を入れ、台帳の `discovery-run-started` の prompt 版で分ける。mirror を探索入力にしたときと同じやり方である（[2026-10-25 の報告](reviews/2026-10-25-wordfence-mirror-as-exploration-input.md)）。所有者が 2026-11-05 に採用を決めた v26-wide の主経路化は交互比較の対象外とする（ADR 0051 追記）。先行 Trial の数字は運転診断として示し、旧版に対する優位性とは扱わない。
   - **開発セットに戻す条件。** 本番で対象範囲内の Finding は出ているのに、人間の観測（`review observe`）の `match` が 1 週間 0 件のとき。このときだけ、答えの分かっている開発セット 6 case を回し、探索と検証のどちらが壊れたかを切り分ける。Finding が 0 件のときは探索の問題なので、本番の停止理由と `incomplete` の理由から直す。
   - **止まったら直す。** 本番の runner が止まった理由と、Finding の保留率・`incomplete` の理由の偏りは、[production-monitoring](agents/production-monitoring.md) で拾い、バグとして直す。
   - **探索 Lab の採否も本番で。** 開発セットの Lab arm（2026-10-26 の l14、6 Trial）は記録だけ残し、採否は本番で 1 arm 回して決める。
@@ -53,7 +53,7 @@
   5. 本番の当たり: 採用後の本番の最初の 30 Trial で、Finding が 1 件以上出た Trial が 0 なら戻す。
   6. 精度: 人間が観測した Finding のうち `match` の割合（M4）。閾値は最初の 20 件の観測で決める。
 
-  配線・runtime・選定の PR は runner が流した異なる slug の初回 3 Trial の completed・wall・停止理由で足りる。同じ slug の反復で件数を埋めない。未 merge branch で本番 runner を回すときは campaign ID に branch 名を含め、本番の分母に混ぜない。数字のない探索変更は merge されない。数字は M1〜M6（docs/reviews/2026-10-26-system-history-and-metrics.md 第 4 節）の名前で出し、版をまたいで同じ問い合わせで比べられるようにする。
+  配線・runtime・選定の PR は runner が流した異なる slug の初回 3 Trial の completed・wall・停止理由で足りる。同じ slug の反復で件数を埋めない。未 merge branch で本番 runner を回すときは campaign ID に branch 名を含め、本番の分母に混ぜない。数字のない探索変更は merge されないが、v26-wide の主経路化は所有者の決定により旧版との交互比較を要しない（ADR 0051 追記）。数字は M1〜M6（docs/reviews/2026-10-26-system-history-and-metrics.md 第 4 節）の名前で出し、版をまたいで同じ問い合わせで比べられるようにする。
 - 実験軸（分担、継続、prompt 変種など）は opt-in の設定ブロック 1 つと profile の file 1 つに閉じ、台帳の run 記録に軸を残す。消し方を PR に書く。
 - agent に渡る文章（`src/profiles/wordpress/prompts/` の本文、`.claude/skills/` の本文、Harness が生成して渡す節の雛形: 出力契約、Run parameters、Prior research、Lab・Programme Boundary の節）を変える PR は、変更後の全文と日本語訳を PR 本文か `docs/reviews/` の文書に貼る。2026-10-13 に所有者は、出典対照表の採否と `owner-approved` の付与を AI に委任した（「採用するかどうかはあなたの方で決めてもらって構いません」「よしなにやってください」）。AI はラベルを付けるとき、委任を明記した PR comment を残す。出典に無い要素を足さない規則は変わらない。2026-10-18 に所有者は読了ゲートも外した（「owner-approved のラベルはいらないかも。結局、脆弱性を発見できるかどうかだからそっちで実験して結果がある程度わかるはず」、ADR 0032 の 2026-10-18 節）。所有者の全文読了は merge の条件ではなく、採否は探索の数字で決める。AI は出典付きで採った要素だけを書き、要素を足さない。
 - 1 PR は追加差分 500 行以内を目安にする（削除行は数えない）。超えるなら問いを分ける。
