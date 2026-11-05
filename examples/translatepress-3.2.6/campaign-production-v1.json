@@ -14,9 +14,6 @@
   "lab": {
     "siteTitle": "Harness Lab",
     "initialPosts": ["Welcome", "Sample page for translation"],
-    "customerRole": false,
-    "translatePress": {
-      "administratorSecondaryLocale": "fr_FR"
-    }
+    "customerRole": false
   }
 }

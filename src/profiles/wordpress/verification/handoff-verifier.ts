@@ -235,9 +235,6 @@ export class HandoffVerifier implements WordPressVerifierTransport {
             },
             /** Setup only; revoked at `setup-done`, then the attacker position alone (ADR 0035). */
             administrator,
-            ...(input.lab.secondaryLocale === undefined
-              ? {}
-              : { secondaryLocale: input.lab.secondaryLocale }),
             reviewExport,
             files: {
               setupDone: join(directory, "setup-done"),

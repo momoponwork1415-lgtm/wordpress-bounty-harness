@@ -78,7 +78,6 @@ export class WordPressLabSession {
     subscriber?: Account;
     customer?: Account;
   }>;
-  readonly administratorSecondaryLocale?: string;
   readonly images: LabImages;
   readonly docker: RunDocker;
   readonly requireDocker: RequireDocker;
@@ -100,7 +99,6 @@ export class WordPressLabSession {
     readonly customerRole: boolean;
     readonly forVerification: boolean;
     readonly forExploration?: boolean;
-    readonly secondaryLocale?: string;
   }) {
     const id = randomUUID();
     const prefix = `wbh-${id}`;
@@ -147,8 +145,6 @@ export class WordPressLabSession {
         : { subscriber: victimSubscriber }),
       ...(victimCustomer === undefined ? {} : { customer: victimCustomer }),
     };
-    if (input.secondaryLocale !== undefined)
-      this.administratorSecondaryLocale = input.secondaryLocale;
     this.images = input.images;
     this.docker = input.docker.run;
     this.requireDocker = input.docker.require;

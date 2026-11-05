@@ -175,14 +175,8 @@ const commonCampaignFields = {
   lab: z.strictObject({
     siteTitle: z.string().min(1).max(120),
     initialPosts: z.array(z.string().min(1).max(120)).max(20),
-    initialApprovedComment: z.boolean().optional(),
     customerRole: z.boolean(),
     databaseAccess: z.enum(["read-only", "none"]).default("read-only"),
-    translatePress: z
-      .strictObject({
-        administratorSecondaryLocale: z.string().regex(/^[a-z]{2}_[A-Z]{2}$/),
-      })
-      .optional(),
   }),
 };
 export const wordpressCampaignConfigSchema = z
@@ -237,15 +231,6 @@ export const wordpressCampaignConfigSchema = z
           });
       }
     }
-    if (
-      config.lab.initialApprovedComment === true &&
-      config.lab.initialPosts.length === 0
-    )
-      context.addIssue({
-        code: "custom",
-        path: ["lab", "initialApprovedComment"],
-        message: "An approved comment requires an initial post",
-      });
   })
   .transform((config) => ({
     ...config,

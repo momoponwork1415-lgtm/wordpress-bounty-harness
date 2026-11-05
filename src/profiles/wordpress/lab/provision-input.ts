@@ -26,14 +26,8 @@ export const setupSchema = z
     snapshotDigest: digest,
     siteTitle: z.string().min(1).max(120),
     initialPosts: z.array(z.string().min(1).max(120)).max(20),
-    initialApprovedComment: z.boolean().optional(),
     customerRole: z.boolean(),
     databaseAccess: z.enum(["read-only", "none"]).default("none"),
-    translatePress: z
-      .strictObject({
-        administratorSecondaryLocale: z.string().regex(/^[a-z]{2}_[A-Z]{2}$/),
-      })
-      .optional(),
     /**
      * #699: the versioned base environment a verification or review Lab is
      * built with, by id and digest. Discovery setups carry none.
@@ -46,15 +40,7 @@ export const setupSchema = z
       .optional(),
     /** Read only: past setups name a scenario removed in #353; no Lab is built from one. */
     scenario: z.strictObject({ id: z.string(), digest }).optional(),
-  })
-  .refine(
-    (setup) =>
-      setup.initialApprovedComment !== true || setup.initialPosts.length > 0,
-    {
-      path: ["initialApprovedComment"],
-      message: "An approved comment requires an initial post",
-    },
-  );
+  });
 export type WordPressLabSetup = z.input<typeof setupSchema>;
 export type ParsedWordPressLabSetup = z.output<typeof setupSchema>;
 export const WORDPRESS_CORE_IDENTITY = "wordpress-core";
@@ -170,11 +156,6 @@ export async function prepareWordPressLab(
     throw new Error("Customer role needs WooCommerce");
   if (resolved.target.kind !== "plugin")
     throw new Error("The target must be a plugin");
-  if (
-    setup.translatePress !== undefined &&
-    resolved.target.pluginSlug !== "translatepress-multilingual"
-  )
-    throw new Error("TranslatePress Lab setup requires its plugin");
   const directory = await verifySource(
     resolved.target,
     snapshot.target.sourceDigest,

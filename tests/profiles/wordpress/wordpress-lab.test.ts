@@ -434,8 +434,6 @@ async function fixture(
             stdout: `${database.administratorId}\n`,
             stderr: "",
           };
-        if (request.args.includes("--porcelain"))
-          return { exitCode: 0, stdout: "7", stderr: "" };
         return { exitCode: 0, stdout: "ok", stderr: "" };
       },
     },
@@ -1162,60 +1160,12 @@ describe("WordPress gVisor Lab", () => {
     expect(commands.some((command) => command.args[0] === "run")).toBe(false);
   });
 
-  it("configures the TranslatePress secondary locale the Lab setup names", async () => {
-    const { lab, snapshot, setup, commands } = await fixture(
-      "ready",
-      undefined,
-      "translatepress-multilingual",
-    );
-    const provisioned = await lab.provision(snapshot, {
-      ...setup,
-      translatePress: { administratorSecondaryLocale: "fr_FR" },
-    });
-    expect(provisioned.status).toBe("ready");
-    if (provisioned.status !== "ready") return;
-    expect(provisioned.handle.secondaryLocale).toBe("fr_FR");
-    expect(
-      commands.some((command) =>
-        command.args.some(
-          (arg) => arg.includes("trp_settings") && arg.includes('"fr_FR"'),
-        ),
-      ),
-    ).toBe(true);
-    await lab.teardown(provisioned.handle);
-  });
-
-  it("seeds an ordinary approved comment on the first published post when requested", async () => {
-    const { lab, snapshot, setup, commands } = await fixture();
-    const provisioned = await lab.provision(snapshot, {
-      ...setup,
-      initialApprovedComment: true,
-    });
-    expect(provisioned.status).toBe("ready");
-    if (provisioned.status !== "ready") return;
-    const post = commands.find((command) =>
-      command.args.includes("--post_title=Welcome"),
-    );
-    const comment = commands.find((command) =>
-      command.args.includes("--comment_content=Thanks for the useful post."),
-    );
-    expect(post?.args).toContain("--porcelain");
-    expect(comment?.args).toContain("--comment_post_ID=7");
-    expect(comment?.args).toContain("--comment_approved=1");
-    expect(comment).toBeDefined();
-    expect(post).toBeDefined();
-    if (comment !== undefined && post !== undefined)
-      expect(commands.indexOf(comment)).toBeGreaterThan(commands.indexOf(post));
-    await lab.teardown(provisioned.handle);
-  });
-
   it("seeds every initial post as the Lab administrator (#718)", async () => {
     const { lab, snapshot, setup, commands, database } = await fixture();
     database.administratorId = "3";
     const provisioned = await lab.provision(snapshot, {
       ...setup,
       initialPosts: ["Welcome", "Second"],
-      initialApprovedComment: true,
     });
     expect(provisioned.status).toBe("ready");
     if (provisioned.status !== "ready") return;

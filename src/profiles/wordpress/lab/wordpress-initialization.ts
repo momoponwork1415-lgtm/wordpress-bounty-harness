@@ -11,11 +11,6 @@ import {
   WordPressLabBaselineMismatch,
 } from "./baseline.js";
 
-/** Profile-owned TranslatePress locale setup (`lab.translatePress`). Lab setup data, never discovery input. */
-function translatePressLocaleSetupScript(locale: string): string {
-  return `$settings=get_option("trp_settings"); if(!is_array($settings)) exit(1); $base=$settings["default-language"] ?? "en_US"; $secondary="${locale}"; $settings["translation-languages"]=array_values(array_unique([$base,$secondary])); $settings["publish-languages"]=array_values(array_unique([$base,$secondary])); $settings["url-slugs"][$secondary]=strtolower(substr($secondary,0,2)); update_option("trp_settings",$settings); TRP_Translate_Press::get_trp_instance()->get_component("query")->check_table($base,$secondary); $admin=get_user_by("login","harness-admin"); if(!$admin) exit(2); update_user_meta($admin->ID,"locale",$secondary); if(get_user_locale($admin->ID)!==$secondary) exit(3);`;
-}
-
 interface WordPressInitialization {
   readonly lab: WordPressLabSession;
   readonly prepared: PreparedWordPressLab;
@@ -74,14 +69,6 @@ async function installPlugins({
   }
 }
 
-async function configureSecondaryLocale({
-  lab,
-}: WordPressInitialization): Promise<void> {
-  const locale = lab.administratorSecondaryLocale;
-  if (locale !== undefined)
-    await lab.wp(["eval", translatePressLocaleSetupScript(locale)]);
-}
-
 async function createAccounts({ lab }: WordPressInitialization): Promise<void> {
   const { subscriber, customer } = lab.attackerAccounts;
   const { subscriber: victimSubscriber, customer: victimCustomer } =
@@ -135,32 +122,14 @@ async function seedInitialPosts({
   ).stdout.trim();
   if (!/^[1-9][0-9]*$/.test(authorId))
     throw new Error("Lab administrator ID is unavailable for seed posts");
-  for (const [index, title] of setup.initialPosts.entries()) {
-    const approvedComment =
-      index === 0 && setup.initialApprovedComment === true;
-    const created = await lab.wp([
+  for (const title of setup.initialPosts)
+    await lab.wp([
       "post",
       "create",
       "--post_status=publish",
       `--post_title=${title}`,
       `--post_author=${authorId}`,
-      ...(approvedComment ? ["--porcelain"] : []),
     ]);
-    if (!approvedComment) continue;
-    const postId = created.stdout.trim();
-    if (!/^[1-9][0-9]*$/.test(postId))
-      throw new Error("Seed post ID is unavailable");
-    await lab.wp([
-      "comment",
-      "create",
-      `--comment_post_ID=${postId}`,
-      "--comment_content=Thanks for the useful post.",
-      "--comment_author=Lab Reader",
-      "--comment_author_email=lab-reader@example.invalid",
-      "--comment_type=comment",
-      "--comment_approved=1",
-    ]);
-  }
 }
 
 /** Any failure while applying or reading back the baseline is the Lab's seed stage. */
@@ -198,7 +167,6 @@ export async function initializeWordPress(
         prepared.target.slug,
       ]);
     });
-  await configureSecondaryLocale(input);
   await createAccounts(input);
   await seedInitialPosts(input);
 }

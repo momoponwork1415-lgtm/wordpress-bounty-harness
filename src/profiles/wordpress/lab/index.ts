@@ -333,9 +333,6 @@ function issueHandle(input: {
       : {
           baseline: { id: setup.baseline.id, digest: setup.baseline.digest },
         }),
-    ...(lab.administratorSecondaryLocale === undefined
-      ? {}
-      : { secondaryLocale: lab.administratorSecondaryLocale }),
     endpoint: "http://wordpress",
     networkName: lab.network,
     internalIp,
@@ -542,15 +539,12 @@ export function openWordPressLab(options: {
         );
         const { setup, phpVersion } = prepared;
         await preflight();
-        const secondaryLocale =
-          setup.translatePress?.administratorSecondaryLocale;
         lab = new WordPressLabSession({
           docker,
           images: options.images,
           customerRole: setup.customerRole,
           forVerification: context?.purpose === "verification",
           forExploration: context?.purpose === "discovery",
-          ...(secondaryLocale === undefined ? {} : { secondaryLocale }),
         });
         // Any number of Labs may run at once; this only keeps broad cleanups off this one.
         owner = await recordLabOwner({

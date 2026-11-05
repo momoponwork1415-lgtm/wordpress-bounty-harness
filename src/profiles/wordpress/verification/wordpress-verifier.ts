@@ -43,7 +43,6 @@ export type WordPressVerifierLab = Readonly<{
   networkName: string;
   internalIp: string;
   recorderIp: string;
-  secondaryLocale?: string;
   database?: WordPressLabHandle["database"];
   attackerAccounts: WordPressLowPrivilegeAccounts;
 }>;
@@ -298,9 +297,6 @@ function verifierLabView(
     networkName: lab.networkName,
     internalIp: lab.internalIp,
     recorderIp: lab.recorderIp,
-    ...(lab.secondaryLocale === undefined
-      ? {}
-      : { secondaryLocale: lab.secondaryLocale }),
     ...(database === undefined ? {} : { database }),
     attackerAccounts: lowPrivilegeAccounts(lab),
   };
