@@ -4,7 +4,7 @@ v14-wide から替える断片は 2 つ（`objective/task-v10` → `task-v15`、
 
 ## 問い
 
-wide の Trial に探索 Lab を付けても、Root も子も Lab に要求を送らない（#599、[Lab arm の記録](../evaluation/2026-10-26-exploration-lab-arm-v14.md)）。Root が Harness の `## Lab` 節を子に写せば、本番の Lab arm で Trial ごとの Lab 要求数が 0 でなくなるか。
+wide の Trial に探索 Lab を付けても、Root も子も Lab に要求を送らない（#599、[Lab arm の記録](../../history/evaluation/2026-10-26-exploration-lab-arm-v14.md)）。Root が Harness の `## Lab` 節を子に写せば、本番の Lab arm で Trial ごとの Lab 要求数が 0 でなくなるか。
 
 ## 出典対照表
 

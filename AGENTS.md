@@ -7,8 +7,10 @@
 1. [docs/SPEC.md](docs/SPEC.md) — 目的、不変条件、モジュール境界、受け渡し契約。
 2. [docs/adr/](docs/adr/) — 番号順に読む。設計の理由と、採らなかった選択肢。索引は [docs/adr/README.md](docs/adr/README.md)。
 3. [docs/SYSTEM.md](docs/SYSTEM.md) — 選定から提出までの 6 段を、Harness・AI・人間の受け持ちで追う。規則は増やさない。
-4. [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — 運用規則、PR の規則、止めてある案。[docs/LESSONS.md](docs/LESSONS.md) — 過去 4 世代の教訓。新しい設計案は、この 2 つに反していないかを先に見る。過去 4 世代の実験記録と原本は [docs/knowledge/](docs/knowledge/) にある。新しい問いを立てる前に、同じ問いが無いかを見る。
+4. [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — 運用規則、PR の規則、止めてある案。[docs/LESSONS.md](docs/LESSONS.md) — 過去 4 世代の教訓。新しい設計案は、この 2 つに反していないかを先に見る。
 5. [docs/OPERATIONS.md](docs/OPERATIONS.md) — 実際に打つコマンド。
+
+[history/](history/) は使わなくなった目的文・スキル・実験記録・過去 4 世代の知識を見返すための保管庫である。読む順には入れない。
 
 ## 不変条件（SPEC.md 第 2 節）
 
@@ -34,7 +36,7 @@
 ## いまの運用（2026-11-05）
 
 - **凍結 5 項目**（ADR 0045）: 不変条件、Harness と AI の責務、単一協調 Trial、人間の観測による確定、本番をベンチにすること。設計の変更は月 1 回までで、目的文の新版を言い換えで増やさない。7 月 30 日方式の版付き目的文は所有者が決めた限定例外である（ADR 0051）。
-- **探索**: campaign 設定の `discovery.mode` は `wide` だけを受ける（ADR 0039。`deep` と `wp2shell-bounty-v11` は 2026-11-05 に退役し、v11 は過去 Trial の照合用に残す）。リポジトリの既定の目的文は `wp2shell-bounty-v26-wide`。v26 は 7 月 30 日方式の単一目的文で、探索の順序と子の使い方は Root が決める。Cloudflare 派生の六段階探索方式（v23 / v24 / v25-wide、`wbh-audit-v1/v2`、`checked/v1`）は 2026-11-05 に削除した。v22-wide も比較・過去 Trial の照合用に残す。対象ごとに Root と子が協調する Trial を既定で 1 回行い、子の上限は `discovery.maxChildren`（基底の既定 4、1〜8。リポジトリの wide 方針も 4）、制限時間の上限は 120 分。`minimumActiveMinutes` の基底の既定は 0 で、リポジトリの wide 方針も 0（最低時間なし。いつ閉じるかは目的文が決める。所有者決定 2026-11-05 夜）。時間と子の上限は Harness が生成する `## Run parameters` 節で Root に伝える。別 Snapshot の研究記録はリポジトリの wide 方針で `priorResearch: same-target` として渡す。同一 Snapshot の第 2 Trial（`discovery.followUp`、`discovery.priorLeads`）は 2026-11-05 に削除した（ADR 0044、0049 追記 7）。稼働中のランナーが使う Git 外の設定は別に確認する（ADR 0043、0048、0051）。
+- **探索**: campaign 設定の `discovery.mode` は `wide` だけを受ける（ADR 0039。`deep` と `wp2shell-bounty-v11` は 2026-11-05 に退役した）。リポジトリの既定の目的文は `wp2shell-bounty-v26-wide`。v26 は 7 月 30 日方式の単一目的文で、探索の順序と子の使い方は Root が決める。Cloudflare 派生の六段階探索方式（v23 / v24 / v25-wide、`wbh-audit-v1/v2`、`checked/v1`）は 2026-11-05 に削除した。v26 以外の目的文は 2026-11-05 に `history/prompts/` へ移し、登録簿から外した。それらで記録した Trial は再開できない（`prompt-version-differs`）。対象ごとに Root と子が協調する Trial を既定で 1 回行い、子の上限は `discovery.maxChildren`（基底の既定 4、1〜8。リポジトリの wide 方針も 4）、制限時間の上限は 120 分。`minimumActiveMinutes` の基底の既定は 0 で、リポジトリの wide 方針も 0（最低時間なし。いつ閉じるかは目的文が決める。所有者決定 2026-11-05 夜）。時間と子の上限は Harness が生成する `## Run parameters` 節で Root に伝える。別 Snapshot の研究記録はリポジトリの wide 方針で `priorResearch: same-target` として渡す。同一 Snapshot の第 2 Trial（`discovery.followUp`、`discovery.priorLeads`）は 2026-11-05 に削除した（ADR 0044、0049 追記 7）。稼働中のランナーが使う Git 外の設定は別に確認する（ADR 0043、0048、0051）。
 - **探索スキル**: sandbox へのスキルの staging（`discovery.skills`）と探索スキル 9 本は 2026-11-05 に削除した。`discovery.skills` を書いた設定は parse で止まる。台帳の `configuration.skills` は読み続ける（ADR 0043 追記 10）。段 5 の `.claude/skills/wbh-*` は別物で残る。
 - **止まった Trial**: 制限時間・provider・broker・スキーマの失敗は理由付き `incomplete` にし、正常な候補 0 件に数えない（ADR 0033）。Codex の `provider-limited` と持ち主の死んだ `interrupted` はランナーが自動で再開し、それ以外は操作者が `campaign resume --run <runId>` で名指しして再開する。再開は新しいサンドボックス、同じ Snapshot、残りの制限時間で行い、同じ Trial の再開区間として数える。プロンプトの言い換えはしない（ADR 0036）。
 - **選定**: WordPress.org の人気順から、インストール数 5,000 以上、180 日以内更新の対象を 1 バッチ 10 件選ぶ。順序は `install-band-then-published`（帯 100 万 / 10 万 / 1 万の高い帯を先に、帯の中は stable 版の公開日が新しい順。ADR 0037 追記 4）。同じ版の Trial は 1 回で、版が上がれば戻す。探索の方法を変えて再開したときは、方針の `revisitPolicy.countTrialsFrom` に再開時刻を入れ、それより前の Trial を探索済みに数えない（追記 6）。凍結が `deferred` で止まった版は 7 日で再試行する（追記 5）。
@@ -46,7 +48,7 @@
 ## エージェントに渡る文章の規則
 
 - プロンプト本文、スキル本文、Harness が生成する節の雛形は、`owner-approved` ラベルが付くまでマージしない。所有者は採否とラベル付与を AI に委任している（2026-10-13、2026-10-18）。AI は委任を明記した PR コメントを残し、REST API でラベルを付ける（DEVELOPMENT.md 第 5 節）。ADR・SPEC・方針のパスも同じ。
-- プロンプト本文を変えたら版を上げ、旧版を残して、固定した digest を更新する。台帳にある旧イベントは読み続け、消さない。
+- プロンプト本文を変えたら版を上げ、固定した digest を更新する。使わなくなった旧版は `history/prompts/` へ移す。台帳にある旧イベントは読み続け、消さない。
 - Finding / Lead の出力契約は目的文に書かず、Harness がスキーマから生成する節として渡す（ADR 0019）。候補は出力境界で棄却せず、正規化して受理するか保留する（ADR 0018）。
 - プロンプトとスキルに、対象固有の関数名、オプション名、URL、画面名を入れない。固定した攻撃経路は与えない。7 月 30 日方式の版付き目的文に限り、「少なくとも 1 件ある」を探索努力の作業仮定として与える（ADR 0051）。候補の成立や件数の根拠にはならず、根拠なしの Finding / Lead を作らない。他の目的文の存在前提は変えない。contributor 以上と、管理者が意図して付与する権限は、trust 境界の内側に置く。
 

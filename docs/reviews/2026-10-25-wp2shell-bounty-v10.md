@@ -8,7 +8,7 @@
 - digest: `sha256:fd4e395ecb50923487c9bab6dbae81f0aff4e67342abecedda3f53cd9ff5f8b3`
 - 出力契約: Harness 生成の v4 節（v8 と同じ、ADR 0019）
 
-出典: v8 の本文（v7 の出典は [2026-10-18-wp2shell-bounty-v7.md](2026-10-18-wp2shell-bounty-v7.md)、v8 の改版は [ADR 0033](../adr/0033-minimum-exploration-and-pinned-dependency-sources.md)）、Wordfence mirror の集計 `docs/reviews/2026-10-25-wordfence-mirror-as-exploration-input.md`（表 1・表 2）、[出典対照表](2026-10-13-prompt-source-comparison.md) 第 2 節の W1（所有者改良の wp2shell 雛形、[取り込んだ原本](../knowledge/imported/wp2shell/PROMPT.template.txt)）と P1（whitebox v1.7）の列。所有者は 2026-10-25 に、mirror 文書 §5 の使い方 A を「それでいこう」で決めた。同じ日の所有者決定 2026-10-25 で、`wide` mode の 3 要素（子のツール呼び出し 80 回の上限と引き継ぎ、`/workspace/research/<family>.md` と `REGISTRY.md` への書き出し、2 hop の成功条件）を v10 にも入れた。これで `deep`（v10）と `wide` の違いは「早く終えるか、粘って探すか」だけになる（#518、ADR 0039）。
+出典: v8 の本文（v7 の出典は [2026-10-18-wp2shell-bounty-v7.md](2026-10-18-wp2shell-bounty-v7.md)、v8 の改版は [ADR 0033](../adr/0033-minimum-exploration-and-pinned-dependency-sources.md)）、Wordfence mirror の集計 `docs/reviews/2026-10-25-wordfence-mirror-as-exploration-input.md`（表 1・表 2）、[出典対照表](2026-10-13-prompt-source-comparison.md) 第 2 節の W1（所有者改良の wp2shell 雛形、[取り込んだ原本](../../history/knowledge/imported/wp2shell/PROMPT.template.txt)）と P1（whitebox v1.7）の列。所有者は 2026-10-25 に、mirror 文書 §5 の使い方 A を「それでいこう」で決めた。同じ日の所有者決定 2026-10-25 で、`wide` mode の 3 要素（子のツール呼び出し 80 回の上限と引き継ぎ、`/workspace/research/<family>.md` と `REGISTRY.md` への書き出し、2 hop の成功条件）を v10 にも入れた。これで `deep`（v10）と `wide` の違いは「早く終えるか、粘って探すか」だけになる（#518、ADR 0039）。
 
 ## 0. v8 との差分
 
@@ -150,7 +150,7 @@ Before giving up, use at least one hour for active exploration. The Harness will
 - provider 時間当たりの候補数
 - Programme 外（parked）の比率
 
-本番の数字は、まとまった時点で [docs/knowledge/experiments.md](../knowledge/experiments.md) へ行を足す。この PR では足さない。
+本番の数字は、まとまった時点で [docs/knowledge/experiments.md](../../history/knowledge/experiments.md) へ行を足す。この PR では足さない。
 
 ## 5. 戻し方
 

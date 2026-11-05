@@ -2,9 +2,9 @@
 
 ## 問いと位置づけ
 
-`wide` mode の `wp2shell-bounty-v14-wide` に探索 Lab を付けると（`discovery.lab: "attached"`）、開発セット 6 case で何が出るか。所有者決定 2026-10-26（[ADR 0032 追記 4](../adr/0032-owner-decisions-on-constraints-2026-10-13.md) の「記録だけ」の行）で 1 arm を回すことになっていた。
+`wide` mode の `wp2shell-bounty-v14-wide` に探索 Lab を付けると（`discovery.lab: "attached"`）、開発セット 6 case で何が出るか。所有者決定 2026-10-26（[ADR 0032 追記 4](../../docs/adr/0032-owner-decisions-on-constraints-2026-10-13.md) の「記録だけ」の行）で 1 arm を回すことになっていた。
 
-**この記録は開発セットの参照値である。** [DEVELOPMENT §5](../DEVELOPMENT.md)（2026-10-26、PR #597）により、探索 Lab の採否は本番で 1 arm を回して決める。この文書の数字では採否を決めない。
+**この記録は開発セットの参照値である。** [DEVELOPMENT §5](../../docs/DEVELOPMENT.md)（2026-10-26、PR #597）により、探索 Lab の採否は本番で 1 arm を回して決める。この文書の数字では採否を決めない。
 
 ## 条件
 

@@ -1,0 +1,53 @@
+---
+name: wbh-falsify
+description: Use after the map exists, when an agent takes one subsystem of the plugin's pinned source to read in depth, and for each prior lead when the Trial states a Prior leads section. Writes, for that unit, a table of what its code assumes about who reaches it, what the values it reads are, who writes each store it reads back, what each rewrite or parse of text preserves and what each signature or token covers, with the file and line where the source enforces each assumption or "not found"; then reads every "not found" row hop by hop, backward to every writer and forward to every reader, under /workspace/research/traces, and leaves the file, function and line rows a Finding or Lead draft needs for its sourceTrace.
+---
+
+# wbh-falsify v1
+
+A reader who looks for the place where a value is used finds the places that have a name: a query, a file operation, an output call. A plugin also fails in places that have no such name, where its code relies on something it never checks: that only one role writes a store another screen renders; that a signature covers every field the handler later trusts; that a rewrite of the finished page keeps the boundaries of the markup it rewrites; that a value comes back from storage in the shape it went in. This skill describes how to write those assumptions down for one unit of the plugin, how to find where the source enforces each one, and how to read the rows it does not enforce through to the rows a Finding or Lead draft needs. It does not say which assumptions matter, which routes to report, or what is in scope. The objective, the trust boundary and the output contract say that.
+
+## Inputs
+
+The pinned plugin source is at /workspace/main. Pinned WordPress core source, when supplied, is at /workspace/wordpress; other supplied plugin and library source is under /workspace/dependencies/<slug>. Read the supplied source instead of recalling what core, a framework or a library does. The research directory /workspace/research is writable and shared by every agent in the Trial. The map is /workspace/research/recon-map.md, with its Entries tables, Wrappers table, shared gate functions, shared helpers, stores and effects, JavaScript boundary and Corrections section. When the listings from wbh-tools exist, /workspace/research/tools/hooks.tsv and /workspace/research/tools/sinks.tsv are there too; when the Trial has a Lab, /workspace/research/lab-setup.md records what was built in it. Assumption tables go under /workspace/research/assumptions, one file per unit; traces go under /workspace/research/traces, one file per row read.
+
+## Step 1: the unit
+
+A unit is one subsystem of the map with its entries, gate, shared helpers, stores, read-backs and JavaScript boundary, as Step 8 of wbh-recon hands it over. Read the map's section for the unit, the Wrappers table, the shared gate functions and the Corrections section before opening the source. When the Trial states a `## Prior leads` section, each prior lead is a unit of its own, made of the subsystem that holds its entry place and the subsystem that holds its effect place; take those units first, and start their tables from the two places the lead names and the sentence it stated. A place the map lacks goes into the Corrections section first, so the next agent finds it.
+
+## Step 2: write the assumptions
+
+Create /workspace/research/assumptions/<subsystem>.md and write one row per assumption the unit's code relies on, reading the bodies of the functions rather than their names, comments or option names. Write rows of these kinds:
+
+- Reach: who the code assumes reaches each entry, and by what: a role or capability, a login, a nonce or token, a referer or origin, a request address, a secret carried in the request, or nothing.
+- Value: what a handler assumes about each value it reads from the request: its type and shape, that it is one of a listed set, that it names an object the caller owns or may see, that it is a path, a URL or an identifier of a particular form.
+- Store: for each store the unit writes or reads (an option, post or user meta, a custom table, a transient, a file, data held by another service), who the code assumes can write it and in what form; and at each place it is read back, what the reader assumes about the content: already escaped, already validated, the same shape and type as written, written by the same role that reads it.
+- Transformation: for each place the code rewrites, parses, splits, decodes, re-encodes, serializes or unserializes text or data (a filter on the output buffer, a minifier, a placeholder scheme that reserves and restores blocks, a regular expression over markup or over a query, a serializer, a template engine), what it assumes the input looks like and what it assumes the output preserves: attribute and tag boundaries, quoting, the match between a placeholder and the block it stood for, the length and type of fields, the meaning of a delimiter.
+- Proof: for each signature, hash, token, nonce, key or password comparison, which fields of the request it covers and which it leaves out, how the comparison is made, what it assumes about who holds the secret, and whether a value can be presented twice.
+- State: what the code assumes about the site or the order of steps: a setting enabled, another plugin or a service present, a licence or mode, a step completed before this one runs, a file or record already present.
+
+Each row has the assumption in one sentence, the file and line where the code relies on it, and a column named enforced at: the file and line of the check or construction that makes the assumption hold, or the words not found. Not found is not a conclusion. It is the row to read in Step 3. A check in a shared registration wrapper enforces a row for every entry behind the wrapper; a check inside one handler enforces it for that handler only; a check that the handler is left to make enforces nothing until the handler is read. A helper that sanitizes, escapes or prepares enforces a row only for the form it handles, as its pinned source shows; name the function and the line, not the word sanitize.
+
+## Step 3: read the rows not found
+
+For each row whose enforcement was not found, create /workspace/research/traces/<subsystem>-<short-name>.md and follow the value in both directions, one hop at a time, each hop with its file, function and line, what the value is at that point and what the code does to it there. A line in a listing or in the map is a place to read, not a hop, until it has been read.
+
+- Backward to every producer. From the place that relies on the assumption, list every writer of the store or every caller that supplies the argument, using the map's stores and effects and shared helpers sections and, when present, the matching lines of sinks.tsv and hooks.tsv; for each writer or caller, follow it back to the entry that reaches it and record who reaches that entry as the map's gate column records it, and what that path does to the value on the way. A store written in one subsystem and read in another crosses units: read the other side instead of stopping at the boundary, and add what the map lacked to its Corrections section. A producer that is a visitor's header, a form a visitor submits, a comment, a profile field or data another service delivers counts as a producer like any other.
+- Forward to every consumer. From a write or a transformation, follow the result to every place it is rendered into a page, placed by JavaScript, written to a file, used in a query, passed to the file system, included, unserialized or compared, as the map's read-back rows record and as the source shows.
+- For a Transformation row, read the code with an input that contains the delimiter it handles: the quote, bracket or tag boundary a regular expression matches, the prefix a placeholder scheme reserves, the separator a serializer counts; record, line by line, what the output becomes.
+- For a Proof row, list the fields of the request the handler trusts after the comparison and mark each as covered or not covered by what was signed, hashed or compared; record how the secret is obtained and whether the same value is accepted again.
+- For a State row, record the setting, mode or presence the route depends on as the source shows it, with the file and line that reads it. The output contract has a place for a setting a route depends on; a row is not dropped for depending on one.
+
+When the Trial has a Lab and the unit's setup is recorded in /workspace/research/lab-setup.md, a row not found may also be exercised there from the position the row names, after setup is done; record the request sent and what was observed in the trace file beside the hops. An observation shows reach; the row still needs its hops.
+
+## Step 4: settle each row
+
+Under each row, write its state when the read ends, one of three: enforced, with the file and line of the check found while reading; not enforced, with the hop sequence from an entry the map records to the place that relies on the assumption, and who reaches that entry; or open, with the hop not yet read and the reason. Mark any hop inferred rather than read as inferred. A row without a file and a line is not settled.
+
+## Step 5: from a row to a draft
+
+The hops of a row not enforced, entry first and the place that relies on the assumption last, with store, read-back and transformation hops between them, are the sourceTrace of a draft: each carries the file, function and line the output contract asks for. A row with no open hop gives a Finding draft its route; a row with an open hop gives a Lead draft its route, with the missing hop named in the reporting agent's own words. Whether to report it, and as which, is decided under the objective and the output contract. Write the row and its hops either way: a route that exists only in an agent's context is lost.
+
+## Step 6: hand-over and closing
+
+The assumptions file and the trace files are the hand-over surface. An agent that continues a unit, or re-reads a row another agent wrote as the closing step of wbh-recon asks, starts from the row and its trace file, reads the map's section and the Corrections section before the source, and appends under the row instead of rewriting it; a note on another agent's row goes under it, dated. An agent that finishes a unit appends a Counts section to the assumptions file: rows by kind, and rows by state as enforced, not enforced and open. The agent that coordinates the Trial reads these counts when it decides whether the work is finished: a unit whose rows not found have not been read is open, however many entries it has classified.

@@ -1,6 +1,6 @@
 # 探索 prompt の A/B 事前登録: `wp2shell-bounty-v3` 対 whitebox `bounded-wp2shell/v1.7` 系（2026-10-13）
 
-事前登録。結果はまだ無い。正本ではなく、食い違えば [SPEC.md](../SPEC.md) 第 10 節と [ADR 0029](../adr/0029-single-wp2shell-cooperative-trial.md) が勝つ。所有者の言葉（2026-10-13）: 「bounded-wp2shell/v1.7 は結構いいと思う。ベンチマークをやれば解決する」。
+事前登録。結果はまだ無い。正本ではなく、食い違えば [SPEC.md](../../docs/SPEC.md) 第 10 節と [ADR 0029](../../docs/adr/0029-single-wp2shell-cooperative-trial.md) が勝つ。所有者の言葉（2026-10-13）: 「bounded-wp2shell/v1.7 は結構いいと思う。ベンチマークをやれば解決する」。
 
 ## 1. 問い
 
@@ -13,7 +13,7 @@
 | arm | promptId | 本文 | 後ろに付く節 |
 | --- | --- | --- | --- |
 | A | `wp2shell-bounty-v3` | 現行既定（2,892 B） | Harness 生成の出力契約 v2、trust-boundary-v1、Programme Boundary、Lab、入口索引 |
-| B | `wp2shell-whitebox-v1.7`（新規、比較 arm） | 所有者の P1 本文（[原文](../knowledge/imported/08-whitebox/bounded-wp2shell-v1.7-PROMPT.md)、[訳](../reviews/2026-10-13-source-prompts-ja.md) 第 3 節）から `leads.json` の節を外し、placeholder を第 5 節のとおり埋めたもの | A と同じ |
+| B | `wp2shell-whitebox-v1.7`（新規、比較 arm） | 所有者の P1 本文（[原文](../knowledge/imported/08-whitebox/bounded-wp2shell-v1.7-PROMPT.md)、[訳](../../docs/reviews/2026-10-13-source-prompts-ja.md) 第 3 節）から `leads.json` の節を外し、placeholder を第 5 節のとおり埋めたもの | A と同じ |
 
 B の本文は所有者が書いた文章であり、AI は要素を足さない。外すのは出力契約の節だけ（ADR 0019: 出力契約は Harness が schema から生成する）。B は `src/profiles/wordpress/prompts/` に置き、`WORDPRESS_DISCOVERY_PROMPT_IDS` と `WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS` に登録して digest を pin する。gated path なので所有者が全文を読んで `owner-approved` を付ける。既定 promptId は変えない。
 

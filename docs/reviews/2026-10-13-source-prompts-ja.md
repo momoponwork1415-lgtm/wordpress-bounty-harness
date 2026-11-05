@@ -1,10 +1,10 @@
 # 2026-10-13 出典 prompt の日本語訳（WP2Shell 記事原文、wordpress-harness v9、whitebox bounded-wp2shell/v1.7）
 
-記録。正本は [docs/knowledge/imported/](../knowledge/imported/) の英語原文。訳は意味を変えないことを優先し、語順は日本語に直した。現行 `wp2shell-bounty-v3` の訳は [2026-10-13-prompts-in-use-ja.md](2026-10-13-prompts-in-use-ja.md)、出典の対照表は [2026-10-13-prompt-source-comparison.md](2026-10-13-prompt-source-comparison.md)。
+記録。正本は [docs/knowledge/imported/](../../history/knowledge/imported/) の英語原文。訳は意味を変えないことを優先し、語順は日本語に直した。現行 `wp2shell-bounty-v3` の訳は [2026-10-13-prompts-in-use-ja.md](2026-10-13-prompts-in-use-ja.md)、出典の対照表は [2026-10-13-prompt-source-comparison.md](2026-10-13-prompt-source-comparison.md)。
 
 ## 1. WP2Shell 記事原文（W0、`PROMPT.article.template.txt`、3,161 B）
 
-原文: [imported/wp2shell/PROMPT.article.template.txt](../knowledge/imported/wp2shell/PROMPT.article.template.txt)。`@@DISPLAY@@` と `@@VERSION@@` は対象 plugin の表示名と版に置換される。この prompt は「脆弱性がある」ことを前提に置き、成功条件を `/flag` の読み取りに固定した **試験用** のもので、本リポの不変条件（脆弱性の前提を与えない、固定経路を与えない）とは前提が異なる。
+原文: [imported/wp2shell/PROMPT.article.template.txt](../../history/knowledge/imported/wp2shell/PROMPT.article.template.txt)。`@@DISPLAY@@` と `@@VERSION@@` は対象 plugin の表示名と版に置換される。この prompt は「脆弱性がある」ことを前提に置き、成功条件を `/flag` の読み取りに固定した **試験用** のもので、本リポの不変条件（脆弱性の前提を与えない、固定経路を与えない）とは前提が異なる。
 
 > 現在のタスク:
 >
@@ -32,7 +32,7 @@
 
 ## 2. wordpress-harness v9（H9、`wordpress-plugin-research-v9.md`、7,588 B）
 
-原文: [imported/09-wordpress-harness/prompts/wordpress-plugin-research-v9.md](../knowledge/imported/09-wordpress-harness/prompts/wordpress-plugin-research-v9.md)。2026-10-08 時点の最終版。v7（2026-09-19、既知 CVE 再発見評価に使用）との差は、Candidate の攻撃者位置を `candidateAdmission` の ID で明示的に要求する節、Candidate 成立後の「最も価値の高い frontier に残り労力を使う」節、継続 run の checkpoint 節が足され、v7 の「経路ごとに下位信頼 principal と開始 capability を特定する」段落と「対象範囲が曖昧なら人間の判断に残す」行が外れたこと。本文の heuristics 7 項目は同じ。この世代（v1〜v9）で有償の発見は 0 件。
+原文: [imported/09-wordpress-harness/prompts/wordpress-plugin-research-v9.md](../../history/knowledge/imported/09-wordpress-harness/prompts/wordpress-plugin-research-v9.md)。2026-10-08 時点の最終版。v7（2026-09-19、既知 CVE 再発見評価に使用）との差は、Candidate の攻撃者位置を `candidateAdmission` の ID で明示的に要求する節、Candidate 成立後の「最も価値の高い frontier に残り労力を使う」節、継続 run の checkpoint 節が足され、v7 の「経路ごとに下位信頼 principal と開始 capability を特定する」段落と「対象範囲が曖昧なら人間の判断に残す」行が外れたこと。本文の heuristics 7 項目は同じ。この世代（v1〜v9）で有償の発見は 0 件。
 
 > **WordPress Plugin Research v9**
 >
@@ -85,7 +85,7 @@
 
 ## 3. whitebox `bounded-wp2shell/v1.7`（P1、12,321 B、2026-08-31）
 
-原文: [imported/08-whitebox/bounded-wp2shell-v1.7-PROMPT.md](../knowledge/imported/08-whitebox/bounded-wp2shell-v1.7-PROMPT.md)。所有者の有償発見のうち直近 1 件の発見時点の prompt で、2026-07-25〜08-11 の 9 件に最も近い committed 形。`{{PLUGIN_NAME}}`、`{{VERSION}}`、`{{GOAL}}`、`{{AGENT_CAP}}`、`{{DEPENDENCY_NOTE}}`、`{{EFFORT_FLOOR}}`、`{{PROMPT_SET_VERSION}}` は run ごとに置換される。source-only の探索で Lab は無く、出力は `leads.json`（最大 5 件）。
+原文: [imported/08-whitebox/bounded-wp2shell-v1.7-PROMPT.md](../../history/knowledge/imported/08-whitebox/bounded-wp2shell-v1.7-PROMPT.md)。所有者の有償発見のうち直近 1 件の発見時点の prompt で、2026-07-25〜08-11 の 9 件に最も近い committed 形。`{{PLUGIN_NAME}}`、`{{VERSION}}`、`{{GOAL}}`、`{{AGENT_CAP}}`、`{{DEPENDENCY_NOTE}}`、`{{EFFORT_FLOOR}}`、`{{PROMPT_SET_VERSION}}` は run ごとに置換される。source-only の探索で Lab は無く、出力は `leads.json`（最大 5 件）。
 
 > Prompt Set / Search Policy: {{PROMPT_SET_VERSION}}
 >

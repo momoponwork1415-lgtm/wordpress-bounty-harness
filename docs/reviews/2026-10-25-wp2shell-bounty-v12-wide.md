@@ -89,7 +89,7 @@ Harness が生成して渡す節（出力契約 v4、trust 境界、Programme Bo
 
 所有者決定 2026-10-25（#521 のコメント）により、`wide` は本番の対象で試し、所有者が結果の手応えで採否を決める。開発セットの Trial は回さない。分母は mode ごと、版ごとに分け、v10-wide、v11-wide、v12-wide を混ぜない。読む数字は v11-wide の文書 第 4 節と同じである（quota 1 時間あたりの Finding・Lead・確定、到達先の組ごとの候補数、parked の比率、入口を終えて止まった Trial と wall で止まった Trial の比）。
 
-参考: v10-wide の本番 1 回分（`prod-20261025-1`〜`-3`、24 対象、run 185、completed 172、provider-limited 8、schema 5）は Finding 0、Lead 17、`discovery-concluded` はすべて `no-new-finding` で、1 対象あたりの経過はおよそ 6 分だった。v11-wide と v12-wide はまだ走っていない。数字がまとまった時点で [docs/knowledge/experiments.md](../knowledge/experiments.md) へ行を足す。この PR では足さない。
+参考: v10-wide の本番 1 回分（`prod-20261025-1`〜`-3`、24 対象、run 185、completed 172、provider-limited 8、schema 5）は Finding 0、Lead 17、`discovery-concluded` はすべて `no-new-finding` で、1 対象あたりの経過はおよそ 6 分だった。v11-wide と v12-wide はまだ走っていない。数字がまとまった時点で [docs/knowledge/experiments.md](../../history/knowledge/experiments.md) へ行を足す。この PR では足さない。
 
 ## 5. 戻し方
 

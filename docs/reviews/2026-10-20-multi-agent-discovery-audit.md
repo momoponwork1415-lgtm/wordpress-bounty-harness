@@ -29,7 +29,7 @@ flowchart TB
   J --> H[人間レビューと外部行動承認]
 ```
 
-現行 Trial は対象 Snapshot ごとに一つ、v8 の Root と最大4体の同時 Child、最低60分の能動探索と120分の wall 上限を持つ。Child 数は累積4体ではなく同時数である。両 runtime とも探索の分担は Root が選び、Harness は人数・時間・隔離・保存・正規化を扱う。[SPEC.md:78–96](../SPEC.md#L78)、[wp2shell-bounty-v8.md:7–27](../../src/profiles/wordpress/prompts/wp2shell-bounty-v8.md#L7)、[claude-runner.ts:17–53](../../src/discovery/claude-runner.ts#L17)、[codex-native-agent-runtime.ts:1967–1999](../../src/discovery/codex-native-agent-runtime.ts#L1967)、[ADR 0034:11–15,35–37](../adr/0034-harness-control-only-deletions.md#L11)
+現行 Trial は対象 Snapshot ごとに一つ、v8 の Root と最大4体の同時 Child、最低60分の能動探索と120分の wall 上限を持つ。Child 数は累積4体ではなく同時数である。両 runtime とも探索の分担は Root が選び、Harness は人数・時間・隔離・保存・正規化を扱う。[SPEC.md:78–96](../SPEC.md#L78)、[wp2shell-bounty-v8.md:7–27](../../history/prompts/objectives/wp2shell-bounty-v8.md#L7)、[claude-runner.ts:17–53](../../src/discovery/claude-runner.ts#L17)、[codex-native-agent-runtime.ts:1967–1999](../../src/discovery/codex-native-agent-runtime.ts#L1967)、[ADR 0034:11–15,35–37](../adr/0034-harness-control-only-deletions.md#L11)
 
 図の後段は探索から独立している。対象は `runsc` 内だけで動き、外向き通信は認証 Broker 経由の provider API に限定される。範囲外の Finding は出口で park し、判定は Snapshot digest 一致と Harness 所有の決定論的な nonce canary 観測に限る。未公開の候補・payload・HTTP 記録・認証情報を Git に置かない。[SPEC.md:12–20,78–96](../SPEC.md#L12)、[claude-gvisor-sandbox.ts:212–225,317–353](../../src/discovery/claude-gvisor-sandbox.ts#L212)、[codex-gvisor-sandbox.ts:759–773](../../src/discovery/codex-gvisor-sandbox.ts#L759)
 
@@ -68,7 +68,7 @@ Codex の層化した Child 30件では、Root の初回 `spawn_agent` と Child
 
 Codex の上記「同一 Child 継続」は**一つの segment 内**で確認した。既存 segment の Child rollout は復元されるが、次 segment の回収器はその thread ID を既観測として除外する。旧 Child が次 segment でさらに働けるなら更新分の証拠回収が欠ける可能性があり、ここは再開機能の実機確認項目である。現時点で停止をまたぐ Child 継続の成功例として数えない。[ADR 0036:29–32](../adr/0036-operator-resume-after-provider-refusal.md#L29)、[codex-native-agent-runtime.ts:1839–1861,1950–1961](../../src/discovery/codex-native-agent-runtime.ts#L1839)
 
-探索成果の基準値として、v8 の既知5対象はすべて Root / Child が Sol で、4 Trial が `completed`、1 Trial は schema error だった。TranslatePress では3件が後段の判定器で `runtime-confirmed` になったが、公開 CVE との厳密な同一性と未知の発見率は未評価である。過去の別 prompt の配線 Trial では、Root の wall 到達後にも Child 由来 Finding が判定器まで届いた。Child 自身の推論品質が成果に効く可能性がある。[v8 既知5対象:9–35](../evaluation/2026-10-19-v8-five-target-rediscovery.md#L9)、[配線 Trial:18–27](../evaluation/2026-10-16-wiring-gate-measurement.md#L18)
+探索成果の基準値として、v8 の既知5対象はすべて Root / Child が Sol で、4 Trial が `completed`、1 Trial は schema error だった。TranslatePress では3件が後段の判定器で `runtime-confirmed` になったが、公開 CVE との厳密な同一性と未知の発見率は未評価である。過去の別 prompt の配線 Trial では、Root の wall 到達後にも Child 由来 Finding が判定器まで届いた。Child 自身の推論品質が成果に効く可能性がある。[v8 既知5対象:9–35](../../history/evaluation/2026-10-19-v8-five-target-rediscovery.md#L9)、[配線 Trial:18–27](../../history/evaluation/2026-10-16-wiring-gate-measurement.md#L18)
 
 ## 3. 原因分析：Claude の短命 Child と Codex の長命 Child
 
@@ -82,7 +82,7 @@ Claude Child が「調査を完了して返した」か「途中で Root に返�
 
 短命 Child は独立仮説と新鮮な文脈に向き、長命 Child は WordPress / PHP / 依存プラグインをまたぐ経路の追跡に向く、というのは**検証すべき仮説**である。長い履歴は圧縮や同一路線への固着で重要な前提を落とし得る。実際、Codex Child 151件中122件に `compacted` があり、合計269イベントだった。Claude Child 432件の診断には compact / summary 型イベントは0件だった。これは圧縮が起きた証拠であって品質低下の証拠ではない。圧縮前後の新規経路と Finding の根拠品質を測る。Claude Child の transcript は Root と独立して残り、Child 自身の圧縮イベントを記録できる。[Claude Code: transcript と compaction](https://code.claude.com/docs/en/sub-agents#auto-compaction)、[Codex rollout の保存:1939–1999](../../src/discovery/codex-native-agent-runtime.ts#L1939)、[Cloudflare の長文脈上の経験](https://blog.cloudflare.com/build-your-own-vulnerability-harness/)、[LESSONS.md:7](../LESSONS.md#L7)
 
-現時点では短命・長命のどちらが重大脆弱性に有利か決められない。Claude の Child を機械的に長くする案も、Codex の Child を機械的に短くする案も採用せず、Child の追依頼前後で新しい source-grounded 経路が生まれたかを評価する。[v8:15–25](../../src/profiles/wordpress/prompts/wp2shell-bounty-v8.md#L15)、[LESSONS.md:7,18](../LESSONS.md#L7)
+現時点では短命・長命のどちらが重大脆弱性に有利か決められない。Claude の Child を機械的に長くする案も、Codex の Child を機械的に短くする案も採用せず、Child の追依頼前後で新しい source-grounded 経路が生まれたかを評価する。[v8:15–25](../../history/prompts/objectives/wp2shell-bounty-v8.md#L15)、[LESSONS.md:7,18](../LESSONS.md#L7)
 
 ## 4. モデル性能評価と探索方針の分担
 
@@ -98,11 +98,11 @@ Claude Child が「調査を完了して返した」か「途中で Root に返�
 
 これは速度・価格の順位表ではない。現行 profile は Claude Root / Child を Opus に固定し、Codex は協調 admission で Sol と Root / Child のモデル・effort 一致を要求する。[agent-runtime-profile.ts:50–75,198–215](../../src/discovery/agent-runtime-profile.ts#L50)。OpenAI と Anthropic のモデル選定資料は、Luna / Haiku を範囲の明確な作業、Sol / Opus を複雑な推論の出発点とするが、未知の WordPress 脆弱性の Recall は測っていない。[OpenAI model selection](https://developers.openai.com/api/docs/guides/model-selection)、[Anthropic model choice](https://platform.claude.com/docs/en/about-claude/models/choosing-a-model)
 
-Codex は現在サブスクリプション認証なので、Luna Child への変更をそのまま API 料金削減と換算しない。比較するのは provider quota 下で完走する対象数と、対象当たりの有効な成果である。混在により Root と Child の誤りが分散する可能性はあるが、全 Child を軽量化すれば Child 側の独立発見を同時に失う可能性もある。異なる source-grounded 経路の和集合と重複、判定器の結果で確かめる。[SPEC.md:265–276](../SPEC.md#L265)、[Cloudflare の異モデル観測](https://blog.cloudflare.com/build-your-own-vulnerability-harness/)、[v8:7–21](../../src/profiles/wordpress/prompts/wp2shell-bounty-v8.md#L7)
+Codex は現在サブスクリプション認証なので、Luna Child への変更をそのまま API 料金削減と換算しない。比較するのは provider quota 下で完走する対象数と、対象当たりの有効な成果である。混在により Root と Child の誤りが分散する可能性はあるが、全 Child を軽量化すれば Child 側の独立発見を同時に失う可能性もある。異なる source-grounded 経路の和集合と重複、判定器の結果で確かめる。[SPEC.md:265–276](../SPEC.md#L265)、[Cloudflare の異モデル観測](https://blog.cloudflare.com/build-your-own-vulnerability-harness/)、[v8:7–21](../../history/prompts/objectives/wp2shell-bounty-v8.md#L7)
 
-Root が強くても Child の能力は不要にならない。v8 は Child に独立した着眼点と経路の反証を期待し、Child の有効な Finding / Lead は Root の最終報告と独立に保存する。新しい仮説を作る、別コンポーネントへ因果をつなぐ、既存仮説を壊す仕事は高い能力を要する可能性がある。限定されたコード経路の事実確認は軽量モデルでも成り立つ可能性がある。ただし「軽量モデルに限定確認だけを割り当てる」自動 dispatch は作らず、Root がその都度決める。[wp2shell-bounty-v8.md:7–25](../../src/profiles/wordpress/prompts/wp2shell-bounty-v8.md#L7)、[ADR 0029:12,37](../adr/0029-single-wp2shell-cooperative-trial.md#L12)、[ADR 0034:11–15](../adr/0034-harness-control-only-deletions.md#L11)
+Root が強くても Child の能力は不要にならない。v8 は Child に独立した着眼点と経路の反証を期待し、Child の有効な Finding / Lead は Root の最終報告と独立に保存する。新しい仮説を作る、別コンポーネントへ因果をつなぐ、既存仮説を壊す仕事は高い能力を要する可能性がある。限定されたコード経路の事実確認は軽量モデルでも成り立つ可能性がある。ただし「軽量モデルに限定確認だけを割り当てる」自動 dispatch は作らず、Root がその都度決める。[wp2shell-bounty-v8.md:7–25](../../history/prompts/objectives/wp2shell-bounty-v8.md#L7)、[ADR 0029:12,37](../adr/0029-single-wp2shell-cooperative-trial.md#L12)、[ADR 0034:11–15](../adr/0034-harness-control-only-deletions.md#L11)
 
-軽量 Child の想定上の取りこぼしは次のとおりで、**現行モデルの実測差ではない**。ここを source-grounded Finding と独立判定で比べる。[SPEC.md:62–73](../SPEC.md#L62)、[v8:3,23–25](../../src/profiles/wordpress/prompts/wp2shell-bounty-v8.md#L3)
+軽量 Child の想定上の取りこぼしは次のとおりで、**現行モデルの実測差ではない**。ここを source-grounded Finding と独立判定で比べる。[SPEC.md:62–73](../SPEC.md#L62)、[v8:3,23–25](../../history/prompts/objectives/wp2shell-bounty-v8.md#L3)
 
 | 重大経路 | 失いやすいかもしれない推論上のつながり |
 | --- | --- |
@@ -126,7 +126,7 @@ Anthropic Research の Opus 4 lead + Sonnet 4 Child は単独 Opus 4 を内部 w
 | B 探索領域分担 | 別の攻撃面やコンポーネントを Child が読み、各自が仮説を立てる。 | 領域の境界で chain が切れ、引き継ぎが足りない。 | 個別の手として利用可能。固定の SQLi / XSS 担当を常設しない。 |
 | C 動的ハイブリッド | 独立探索、仮説検証、対抗監査を Root が結果に応じて切り替える。 | Root の統合不足や重複した探索を観測する必要がある。 | **v8 が既に要求している動き**。今回同じ指示を追加しない。 |
 
-v8 は多様な方法の開始、approach family の登録、重複時の再配分、行き詰まりの印付け、独立経路、対抗監査、複数ラウンドを明記する。したがって C を「新方式」として Harness に実装したり、prompt に重複追加したりする提案はしない。実記録で Root / Child の仮説生成、Child 間の重複、再配分後の新規経路を人が分類し、文面と実際の乖離を先に測る。[wp2shell-bounty-v8.md:7–25](../../src/profiles/wordpress/prompts/wp2shell-bounty-v8.md#L7)、[ADR 0034:11–15,35–37](../adr/0034-harness-control-only-deletions.md#L11)
+v8 は多様な方法の開始、approach family の登録、重複時の再配分、行き詰まりの印付け、独立経路、対抗監査、複数ラウンドを明記する。したがって C を「新方式」として Harness に実装したり、prompt に重複追加したりする提案はしない。実記録で Root / Child の仮説生成、Child 間の重複、再配分後の新規経路を人が分類し、文面と実際の乖離を先に測る。[wp2shell-bounty-v8.md:7–25](../../history/prompts/objectives/wp2shell-bounty-v8.md#L7)、[ADR 0034:11–15,35–37](../adr/0034-harness-control-only-deletions.md#L11)
 
 ## 5. To-Be アーキテクチャ図（将来、モデル混在に効果が出た場合のみ）
 
@@ -158,7 +158,7 @@ Claude では現 sandbox が `ANTHROPIC_MODEL`、Haiku 系 fallback、`CLAUDE_CO
 
 | 優先 | 候補と条件 | 期待する効果 | 主なリスク・変更範囲 |
 | --- | --- | --- | --- |
-| 0 | **現行構成の継続と読み取り専用監査**。観測できる Child の追依頼、compaction、後段の確認を集計し、平文を安全に読める範囲で委任種類・独立仮説・重複・最終報告を人が分類する。 | v8 の動的分担と短命 Child の引き継ぎを確かめる。 | Codex 初回委任文は現記録では暗号化され判定不能。Private Evidence の機密を Git に出さず、欠測を明示する。Harness の探索判断コードは不要。[v8:7–25](../../src/profiles/wordpress/prompts/wp2shell-bounty-v8.md#L7)、[Codex 回収項目:641–725](../../src/discovery/codex-native-agent-runtime.ts#L641)、[SPEC.md:12–20](../SPEC.md#L12) |
+| 0 | **現行構成の継続と読み取り専用監査**。観測できる Child の追依頼、compaction、後段の確認を集計し、平文を安全に読める範囲で委任種類・独立仮説・重複・最終報告を人が分類する。 | v8 の動的分担と短命 Child の引き継ぎを確かめる。 | Codex 初回委任文は現記録では暗号化され判定不能。Private Evidence の機密を Git に出さず、欠測を明示する。Harness の探索判断コードは不要。[v8:7–25](../../history/prompts/objectives/wp2shell-bounty-v8.md#L7)、[Codex 回収項目:641–725](../../src/discovery/codex-native-agent-runtime.ts#L641)、[SPEC.md:12–20](../SPEC.md#L12) |
 | 1 | Step 1 後、**Codex A 対 B**を子モデルだけ変えて試す。profile / Broker / CLI / receipt の preflight が前提。 | 子の発見品質を保ったまま provider 制限を減らし、対象当たりの確認済み成果を増やせるか分かる。 | Sol Child が担っていた独立仮説・chain を Luna が見落とす可能性。認証と model 境界の修正は慎重に行う。[profile:198–215](../../src/discovery/agent-runtime-profile.ts#L198)、[OpenAI model selection](https://developers.openai.com/api/docs/guides/model-selection) |
 | 2 | 同じく **Claude A 対 B**。Codex 比較とは別の問いにする。 | Opus Root / Sonnet Child が候補品質を保つか測れる。 | Broker と SDK Child 設定の追加検証が必要。旧モデルの他課題の数値を流用しない。[profile:50–75](../../src/discovery/agent-runtime-profile.ts#L50)、[Anthropic cost / intelligence](https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence#orchestrator-strategy-delegate-bulk-work) |
 | 3 | Claude の**同一 Child 再開**を別実験で試す。現行 Child の未完了な chain と引き継ぎ損失が実証された場合だけ。 | 長い WordPress / PHP / 依存プラグイン chain の追跡を継続できる可能性。 | compaction と同一路線への固着、別 agent の独立性喪失。Agent ID / session の寿命を実機確認し、v8 の委任判断は Root に残す。[Agent SDK resume](https://code.claude.com/docs/en/agent-sdk/subagents#resume-subagents)、[claude-runner.ts:100–144](../../src/discovery/claude-runner.ts#L100) |
@@ -176,7 +176,7 @@ Claude では現 sandbox が `ANTHROPIC_MODEL`、Haiku 系 fallback、`CLAUDE_CO
 
 **段階3：未知対象で前向き追跡。** 一つの本番対象に新規 Trial を重ねず、同時期の対象を版・規模・依存数・選定層で分け、その層の中で乱数により構成を割り付ける。割付は別 campaign 設定とオフラインの層化記録で行い、Harness に比較 arm mode・assignment・dispatch を戻さない。公開済み7件の再発見率は配線の補助指標に限定する。未知脆弱性の真の Recall は全バグ集合が不明なので測れない。実運用では、対象当たりの独立確認済みの重大経路、最終受理と報奨、試行終了後の追跡期間、provider 上限下で完走できた対象数を主指標とする。[SPEC.md:5–9,23–25](../SPEC.md#L5)、[ADR 0027:11–24](../adr/0027-contributor-out-of-scope-and-rediscovery-as-wiring-proof.md#L11)、[ADR 0034:61–69](../adr/0034-harness-control-only-deletions.md#L61)、[Cloudflare: false-negative の限界](https://blog.cloudflare.com/build-your-own-vulnerability-harness/)
 
-共通の記録表は次を使う。raw Finding の増加だけで採用しない。[SPEC.md:62–73](../SPEC.md#L62)、[v8 評価:24–35](../evaluation/2026-10-19-v8-five-target-rediscovery.md#L24)
+共通の記録表は次を使う。raw Finding の増加だけで採用しない。[SPEC.md:62–73](../SPEC.md#L62)、[v8 評価:24–35](../../history/evaluation/2026-10-19-v8-five-target-rediscovery.md#L24)
 
 | 段階 | 指標と読み方 |
 | --- | --- |
@@ -187,4 +187,4 @@ Claude では現 sandbox が `ANTHROPIC_MODEL`、Haiku 系 fallback、`CLAUDE_CO
 
 **採用条件**は、配線と安全境界の preflight に合格したうえで、対応する対象で重大経路の source 根拠・既知再発見・独立 `runtime-confirmed` の低下が観測されず、前向き本番で対象当たりの受理・報奨、または quota 内の独立確認済み重大経路が改善することである。非劣性の許容幅と追跡期間は段階0で測る基準構成の run 間変動を見て、比較開始前に固定する。差の区間推定がその幅内と判定できるまで「同等」としない。単回の既知事例や候補数だけでは採らない。**撤回条件**は、基準構成が繰り返し見つける重大経路を試験構成が見落とす、Child 由来の有効な chain が明らかに減る、`incomplete` や provider 停止が増える、または Broker / gVisor / Snapshot / 判定境界を守れないこと。差が曖昧なら現行を維持し、対象数と追跡期間を増やして再評価する。[SPEC.md:12–20](../SPEC.md#L12)、[DEVELOPMENT.md:51–63](../DEVELOPMENT.md#L51)、[LESSONS.md:13–18](../LESSONS.md#L13)
 
-探索方針 A/B/C と Child 寿命はモデル比較へ混ぜない。段階0で C の実践不足が確認された場合だけ、Step 1 後に Root が選ぶ委任文の差を別の一軸実験として提案する。v8 本文を変えるなら旧版と digest を残し、出典対照、`owner-approved` の委任手続き、開発 Trial の数字を満たす。[wp2shell-bounty-v8.md:7–27](../../src/profiles/wordpress/prompts/wp2shell-bounty-v8.md#L7)、[DEVELOPMENT.md:51–56](../DEVELOPMENT.md#L51)、[ADR 0032 の委任改訂](../adr/0032-owner-decisions-on-constraints-2026-10-13.md)
+探索方針 A/B/C と Child 寿命はモデル比較へ混ぜない。段階0で C の実践不足が確認された場合だけ、Step 1 後に Root が選ぶ委任文の差を別の一軸実験として提案する。v8 本文を変えるなら旧版と digest を残し、出典対照、`owner-approved` の委任手続き、開発 Trial の数字を満たす。[wp2shell-bounty-v8.md:7–27](../../history/prompts/objectives/wp2shell-bounty-v8.md#L7)、[DEVELOPMENT.md:51–56](../DEVELOPMENT.md#L51)、[ADR 0032 の委任改訂](../adr/0032-owner-decisions-on-constraints-2026-10-13.md)

@@ -14,7 +14,7 @@
 
 | 項目 | 7 月 30 日の元 run（TranslatePress 3.2.6、provenance 文書 §2.1） | いまのリポジトリ方針 `src/profiles/wordpress/policy/campaign.json` | pilot 7 本の観測（11-05、別 state） | 差 |
 | --- | --- | --- | --- | --- |
-| 目的文 | `DISCOVERY.md`、SHA-256 `2b794ada…`（[原本](../knowledge/imported/08-whitebox/DISCOVERY-2026-07-30-translatepress-original-run.md)） | `wp2shell-bounty-v26-wide`、8,834 B、SHA-256 `55248033…`（[訳と差分](2026-11-05-july30-single-prompt-ja.md)） | 同 | 現行 Harness に合わせた改変版。固定の対象はこの版 |
+| 目的文 | `DISCOVERY.md`、SHA-256 `2b794ada…`（[原本](../../history/knowledge/imported/08-whitebox/DISCOVERY-2026-07-30-translatepress-original-run.md)） | `wp2shell-bounty-v26-wide`、8,834 B、SHA-256 `55248033…`（[訳と差分](2026-11-05-july30-single-prompt-ja.md)） | 同 | 現行 Harness に合わせた改変版。固定の対象はこの版 |
 | model / effort | Codex `gpt-5.6-sol` / `ultra` | host 設定による。pilot は `gpt-6-sol` / `high` | `gpt-6-sol` / `high` | **effort が 2 段低い** |
 | 制限時間 | 上限 21,600 秒（6 時間）、最低時間なし。1:36:34 で自分から閉じた | 上限 120 分、最低 60 分 | 6 本とも 61〜65 分で最初の最終報告、その後の候補 0 | **最低時間が終了時刻になっている** |
 | 子 | 同時 4、合計 9 体（深さ 1 が 5、深さ 2 が 4） | 同時 3 | 合計 1〜3 体 | 元 run の 1/3 |

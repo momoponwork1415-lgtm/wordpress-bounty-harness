@@ -291,18 +291,18 @@ M1〜M3 は探索の比較、M4〜M6 は報酬までの道のりの比較に使�
 リポジトリの文書（origin/main `32e7489`）:
 
 - [L1] [docs/LESSONS.md](../LESSONS.md)、[docs/reviews/2026-10-13-past-repos-lessons.md](2026-10-13-past-repos-lessons.md)
-- [K1] [docs/knowledge/README.md](../knowledge/README.md)、[docs/knowledge/experiments.md](../knowledge/experiments.md)
+- [K1] [docs/knowledge/README.md](../../history/knowledge/README.md)、[docs/knowledge/experiments.md](../../history/knowledge/experiments.md)
 - [S1] [docs/reviews/2026-10-13-prompt-source-comparison.md](2026-10-13-prompt-source-comparison.md) 第 6 節（所有者の Wordfence 履歴の期間・分類ごとの合計）
 - [R1] [docs/reviews/2026-10-11-harness-completeness-review.md](2026-10-11-harness-completeness-review.md) 第 2 節
-- [E1] [docs/evaluation/2026-10-12-production-v3-cycle-01.md](../evaluation/2026-10-12-production-v3-cycle-01.md)、[…-cycle-03.md](../evaluation/2026-10-12-production-v3-cycle-03.md)
-- [E2] [docs/evaluation/2026-10-16-wiring-gate-measurement.md](../evaluation/2026-10-16-wiring-gate-measurement.md)
-- [E3] [docs/evaluation/2026-10-16-prompt-v5-comparison.md](../evaluation/2026-10-16-prompt-v5-comparison.md)（arm ごとの集計の節）
-- [E4] [docs/evaluation/2026-10-18-v7-dev-set.md](../evaluation/2026-10-18-v7-dev-set.md)
-- [E5] [docs/evaluation/2026-10-18-index-baseline.md](../evaluation/2026-10-18-index-baseline.md) 補足
-- [E6] [docs/evaluation/2026-10-20-child-agent-shape-by-runtime.md](../evaluation/2026-10-20-child-agent-shape-by-runtime.md)
-- [E7] [docs/evaluation/2026-10-12-rediscovery-benchmark.md](../evaluation/2026-10-12-rediscovery-benchmark.md)
-- [E8] [docs/evaluation/2026-10-19-v8-five-target-rediscovery.md](../evaluation/2026-10-19-v8-five-target-rediscovery.md)
-- その他の参照: [docs/evaluation/2026-10-21-child-model-experiment.md](../evaluation/2026-10-21-child-model-experiment.md)、[docs/evaluation/2026-10-24-verify-handoff-acceptance.md](../evaluation/2026-10-24-verify-handoff-acceptance.md)、[docs/reviews/2026-10-20-design-issues-from-production-results.md](2026-10-20-design-issues-from-production-results.md)、[docs/reviews/2026-10-23-verification-status.md](2026-10-23-verification-status.md)、[docs/reviews/2026-10-25-exploration-architecture-redesign.md](2026-10-25-exploration-architecture-redesign.md)、`docs/reviews/2026-10-26-discovery-prompts-japanese.md`（作業ツリーにだけある）
+- [E1] [docs/evaluation/2026-10-12-production-v3-cycle-01.md](../../history/evaluation/2026-10-12-production-v3-cycle-01.md)、[…-cycle-03.md](../../history/evaluation/2026-10-12-production-v3-cycle-03.md)
+- [E2] [docs/evaluation/2026-10-16-wiring-gate-measurement.md](../../history/evaluation/2026-10-16-wiring-gate-measurement.md)
+- [E3] [docs/evaluation/2026-10-16-prompt-v5-comparison.md](../../history/evaluation/2026-10-16-prompt-v5-comparison.md)（arm ごとの集計の節）
+- [E4] [docs/evaluation/2026-10-18-v7-dev-set.md](../../history/evaluation/2026-10-18-v7-dev-set.md)
+- [E5] [docs/evaluation/2026-10-18-index-baseline.md](../../history/evaluation/2026-10-18-index-baseline.md) 補足
+- [E6] [docs/evaluation/2026-10-20-child-agent-shape-by-runtime.md](../../history/evaluation/2026-10-20-child-agent-shape-by-runtime.md)
+- [E7] [docs/evaluation/2026-10-12-rediscovery-benchmark.md](../../history/evaluation/2026-10-12-rediscovery-benchmark.md)
+- [E8] [docs/evaluation/2026-10-19-v8-five-target-rediscovery.md](../../history/evaluation/2026-10-19-v8-five-target-rediscovery.md)
+- その他の参照: [docs/evaluation/2026-10-21-child-model-experiment.md](../../history/evaluation/2026-10-21-child-model-experiment.md)、[docs/evaluation/2026-10-24-verify-handoff-acceptance.md](../../history/evaluation/2026-10-24-verify-handoff-acceptance.md)、[docs/reviews/2026-10-20-design-issues-from-production-results.md](2026-10-20-design-issues-from-production-results.md)、[docs/reviews/2026-10-23-verification-status.md](2026-10-23-verification-status.md)、[docs/reviews/2026-10-25-exploration-architecture-redesign.md](2026-10-25-exploration-architecture-redesign.md)、`docs/reviews/2026-10-26-discovery-prompts-japanese.md`（作業ツリーにだけある）
 - ADR: [0029](../adr/0029-single-wp2shell-cooperative-trial.md)、[0032](../adr/0032-owner-decisions-on-constraints-2026-10-13.md)、[0033](../adr/0033-minimum-exploration-and-pinned-dependency-sources.md)、[0034](../adr/0034-harness-control-only-deletions.md)、[0035](../adr/0035-verification-as-a-skill.md)、[0036](../adr/0036-operator-resume-after-provider-refusal.md)、[0038](../adr/0038-verification-phases-and-submission-flow.md)、[0039](../adr/0039-discovery-launch-modes.md)、[0040](../adr/0040-human-lab-observation-replaces-judges.md)
 - prompt の一覧と digest: `src/profiles/wordpress/prompts/index.ts`。各版の追加日は `git log origin/main --diff-filter=A -- <file>` で見た（merge の日付なので、branch 上で作った日とは 1 日ずれることがある）。
 

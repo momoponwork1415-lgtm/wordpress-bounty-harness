@@ -148,7 +148,7 @@ for (const { event_json } of rows) {
 
 ## 6. 記録先
 
-- 再発見 case: `docs/evaluation/<日付>-<用途>.md` に表と注記、Issue #127 に comment。
+- 再発見 case: `docs/reviews/<日付>-<用途>.md` に表と注記、Issue #127 に comment。2026-11-05 までの記録は `history/evaluation/` にある。
 - 配線の初回 3 Trial: 対象 PR の本文に表を貼り、merge の comment に campaign ID を残す。
 - 進行中の状態は Git に置かず、Issue の comment に書く。
 
@@ -189,4 +189,4 @@ for (const { event_json } of rows) {
 | （回さない） | lifterlms 9.2.1 | CVE-2026-5207 | SQLi / Custom+ | 信頼境界の内側 |
 | （回さない） | location-weather 3.0.2 | CVE-2026-7249 | missing-authz / Contributor+ | 信頼境界の内側 |
 
-実例は `docs/evaluation/2026-10-16-wiring-gate-measurement.md`。
+実例は `history/evaluation/2026-10-16-wiring-gate-measurement.md`。

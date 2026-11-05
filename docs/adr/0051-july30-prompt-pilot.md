@@ -16,7 +16,7 @@ amends: 0045（目的文の凍結の限定例外）、0050（探索方式の主�
 
 同一 Snapshot の条件付き 2・3 回目、4 回目以降の手動起動、同一 Snapshot と版をまたぐ研究・Finding・Lead の構造化再利用は、今回の Trial の結果を見て受け渡し契約を別に定める。新しい保存基盤を先に作らない。
 
-採否は同じ選定帯で旧版と新版を Lab 条件を揃えて交互に走らせ、DEVELOPMENT.md 第 5 節の本番計測で決める。[agent に渡る全文と日本語訳](../reviews/2026-11-05-july30-single-prompt-ja.md)、[元の `DISCOVERY.md`](../knowledge/imported/08-whitebox/DISCOVERY-2026-07-30-translatepress-original-run.md) と digest、今回の差分を残す。戻すときは新規 Trial の prompt ID を旧版へ戻し、記録済みの Trial と Private Evidence は読み続ける。
+採否は同じ選定帯で旧版と新版を Lab 条件を揃えて交互に走らせ、DEVELOPMENT.md 第 5 節の本番計測で決める。[agent に渡る全文と日本語訳](../reviews/2026-11-05-july30-single-prompt-ja.md)、[元の `DISCOVERY.md`](../../history/knowledge/imported/08-whitebox/DISCOVERY-2026-07-30-translatepress-original-run.md) と digest、今回の差分を残す。戻すときは新規 Trial の prompt ID を旧版へ戻し、記録済みの Trial と Private Evidence は読み続ける。
 
 ## 2026-11-05 追記: リポジトリの探索方式
 

@@ -152,33 +152,6 @@ it("rejects discovery.skills at parse time", () => {
   ).toBe("Exploration skills were removed in the v26 cleanup");
 });
 
-it("parses the historical 20-minute v22-wide example with the current selection policy (ADR 0039)", async () => {
-  const config = wordpressCampaignConfigSchema.parse(
-    JSON.parse(
-      await readFile(
-        join(
-          import.meta.dirname,
-          "..",
-          "..",
-          "examples",
-          "campaign-wide-20.json",
-        ),
-        "utf8",
-      ),
-    ) as unknown,
-  );
-  // The example keeps its explicit 20-minute wall; without it, wide gets 120 (ADR 0039 addendum 3).
-  expect(config).toMatchObject({
-    discovery: {
-      lab: { mode: "none" },
-      mode: "wide",
-      minimumActiveMinutes: 0,
-    },
-    promptId: "wp2shell-bounty-v22-wide",
-    runWallTimeMinutes: 20,
-  });
-});
-
 it("runs the v26 wide example with an attached Lab for at least 60 active minutes", async () => {
   const source = JSON.parse(
     await readFile(

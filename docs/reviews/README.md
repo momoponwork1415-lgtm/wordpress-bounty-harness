@@ -6,7 +6,7 @@ AI に「調べて報告」を頼んだときの成果物を、日付付きで�
 
 ## この階にある報告
 
-正本と運用文書（AGENTS、SPEC、ADR、`docs/` 直下、`docs/agents/`、`docs/evaluation/`、`docs/knowledge/`、skill、コード）から参照されている報告と、それらの報告が参照している報告だけを置く。
+正本と運用文書（AGENTS、SPEC、ADR、`docs/` 直下、`docs/agents/`、`history/`、skill、コード）から参照されている報告と、それらの報告が参照している報告だけを置く。
 
 設計と方針の出典:
 - [2026-11-05-july30-single-prompt-ja.md](2026-11-05-july30-single-prompt-ja.md): 7 月 30 日方式から作った v26-wide の全文、日本語訳、原本との対応。比較候補として作った時点の記録で、2026-11-05 にリポジトリの既定にした判断は ADR 0051 追記。
@@ -88,8 +88,8 @@ AI に「調べて報告」を頼んだときの成果物を、日付付きで�
 - [2026-10-25-wp2shell-bounty-v10.md](2026-10-25-wp2shell-bounty-v10.md): prompt v10 の本文、日本語訳、v8 との差分と出典対照。
 - [2026-10-31-exploration-prompts-japanese.html](2026-10-31-exploration-prompts-japanese.html): 2026-10-31 時点の探索プロンプトとスキル本文の日本語訳（読むための訳。エージェントには渡さない）。
 - [2026-10-30-enumeration-recall-cve-bench.md](2026-10-30-enumeration-recall-cve-bench.md): 区画分配型の列挙 script の再現率を既存 CVE ベンチで測った報告（2026-10-30）。区画分配型は ADR 0042 で廃止。
-- [2026-11-01-bench30-v1-trial-records.md](2026-11-01-bench30-v1-trial-records.md): bench30 v1（v19-wide、48 Trial）の記録から見た探索の改善点。bench30 の定義は [docs/evaluation/bench30-2026-11.md](../evaluation/bench30-2026-11.md)。
-- [../evaluation/bench30-2026-11.md](../evaluation/bench30-2026-11.md): bench30（Issue #726）の定義と記録。v1 → v2 → v3（密な版）。答えの鍵と source は Git 外。`docs/evaluation/README.md` は 2026-11-01 の文書整理（#774）で消えたので、案内はここに置く。
+- [2026-11-01-bench30-v1-trial-records.md](2026-11-01-bench30-v1-trial-records.md): bench30 v1（v19-wide、48 Trial）の記録から見た探索の改善点。bench30 の定義は [history/evaluation/bench30-2026-11.md](../../history/evaluation/bench30-2026-11.md)。
+- [history/evaluation/bench30-2026-11.md](../../history/evaluation/bench30-2026-11.md): bench30（Issue #726）の定義と記録。v1 → v2 → v3（密な版）。答えの鍵と source は Git 外。`docs/evaluation/README.md` は 2026-11-01 の文書整理（#774）で消えたので、案内はここに置く。
 
 Codex への依頼文:
 

@@ -57,7 +57,7 @@ Hytale の server source と C# protocol files は「公開 GitHub のオープ�
 | 判定と証拠 | 許可済み操作の正の対照、許可されない操作の負の対照を同条件で実行し、管理者 API や agent 自己申告から独立した世界・権限・保存状態の差、または nonce 付き canary を観測する。起動失敗、接続失敗、証拠不足は `incomplete` とする。crash だけでセキュリティ影響と判定しない。 |
 | 記録と提出 | packet trace、ログ、認証情報、未公開の候補は Private Evidence に置き、台帳には digest 参照だけを残す。報告は人間が影響と再現性を確認した後に Bugcrowd へ提出する。[Hytale Security](https://hytale.com/security) |
 
-クライアントを攻撃対象にする「悪意あるサーバー → C# クライアント」は別の信頼境界で、上の最初の縦断実験には混ぜない。網羅的な protocol fuzzer や独自 QUIC 実装は、正常接続と 1 件の判定可能な実験が通ってから評価する。旧世代の[方法論](../knowledge/imported/07-satoki/methodology.md)と[証拠境界の監査](../knowledge/imported/07-satoki/codexidea-thin-harness-risk-audit-2026-07-24.md)も、探索候補と独立した実行証拠を分ける必要を記録している。
+クライアントを攻撃対象にする「悪意あるサーバー → C# クライアント」は別の信頼境界で、上の最初の縦断実験には混ぜない。網羅的な protocol fuzzer や独自 QUIC 実装は、正常接続と 1 件の判定可能な実験が通ってから評価する。旧世代の[方法論](../../history/knowledge/imported/07-satoki/methodology.md)と[証拠境界の監査](../../history/knowledge/imported/07-satoki/codexidea-thin-harness-risk-audit-2026-07-24.md)も、探索候補と独立した実行証拠を分ける必要を記録している。
 
 ## 現行 WordPress ランナーへの適用条件
 
@@ -77,4 +77,4 @@ Hytale の server source と C# protocol files は「公開 GitHub のオープ�
 
 - Bugcrowd の [Hytale engagement](https://bugcrowd.com/engagements/hypixel-studios-mbb-og) はブラウザから全文を取得できず、この調査では Hytale 運営の [Security ページ](https://hytale.com/security)を詳細ルールの正本として読んだ。着手直前に Bugcrowd ログイン後の brief、更新履歴、試験上限を再確認する。
 - Riot、Epic、Scopely の HackerOne 詳細 scope は JavaScript またはログインを要し、この調査では個別 asset の報奨適格性まで確認していない。上の比較は運営側が公開した記述の範囲に限る。[Riot](https://www.riotgames.com/en/reporting-a-security-vulnerability)、[Epic](https://www.epicgames.com/site/security?lang=en-US)、[Scopely](https://hackerone.com/scopely/updates?type=team)
-- このリポジトリには過去の Hytale 専用世代の [Satoki-derived 方法論](../knowledge/imported/07-satoki/methodology.md) と [thin harness risk audit](../knowledge/imported/07-satoki/codexidea-thin-harness-risk-audit-2026-07-24.md) が保存されている。新しいゲーム用ハーネスを設計する前に、当時の試行数・失敗と証拠の境界を読み直す必要がある。この文書は新ハーネスの仕様を決めない。
+- このリポジトリには過去の Hytale 専用世代の [Satoki-derived 方法論](../../history/knowledge/imported/07-satoki/methodology.md) と [thin harness risk audit](../../history/knowledge/imported/07-satoki/codexidea-thin-harness-risk-audit-2026-07-24.md) が保存されている。新しいゲーム用ハーネスを設計する前に、当時の試行数・失敗と証拠の境界を読み直す必要がある。この文書は新ハーネスの仕様を決めない。

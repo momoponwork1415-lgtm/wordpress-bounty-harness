@@ -3,8 +3,10 @@ import { readFile } from "node:fs/promises";
 
 /**
  * One row per agent-facing text under this directory. The `.md` file is
- * `${id}.md`; the digest pins its exact bytes so past Trials can be matched.
- * Old versions stay here for digest matching only (ADR 0029).
+ * `${id}.md`; the digest pins its exact bytes. Only the texts a new Trial
+ * receives stay here. Earlier versions were moved to `history/prompts/` on
+ * 2026-11-05; the Harness does not read them, and a Trial that recorded one is
+ * refused on resume as `prompt-version-differs`.
  */
 interface WordPressPromptRecord {
   readonly id: string;
@@ -12,10 +14,9 @@ interface WordPressPromptRecord {
   /**
    * Exactly one row per table (per mode for discovery) is `current`. A
    * discovery `candidate` is the new version of a production comparison
-   * (DEVELOPMENT §5): a campaign launches it only by naming it. Everything
-   * else is archived.
+   * (DEVELOPMENT §5): a campaign launches it only by naming it.
    */
-  readonly status: "current" | "candidate" | "archived";
+  readonly status: "current" | "candidate";
 }
 
 /**
@@ -26,25 +27,7 @@ export type WordPressDiscoveryMode = "wide";
 export const WORDPRESS_DISCOVERY_MODES = ["wide"] as const;
 
 /** Generated Finding / Lead contract versions the Harness appends (ADR 0019). */
-export type WordPressOutputContractVersion = "v1" | "v2" | "v4" | "v5";
-
-/**
- * The human-written parts of a discovery objective (redesign 2026-10-25 §5).
- * Run parameters and the output contract are generated, so they are not here.
- */
-export const WORDPRESS_PROMPT_SECTIONS = [
-  "objective",
-  "strategy",
-  "coordination",
-  "persistence",
-] as const;
-export type WordPressPromptSection = (typeof WORDPRESS_PROMPT_SECTIONS)[number];
-
-/** One file under `sections/<section>/`; a file holds whole paragraphs only. */
-export interface WordPressPromptFragment {
-  readonly section: WordPressPromptSection;
-  readonly file: string;
-}
+export type WordPressOutputContractVersion = "v4";
 
 export interface WordPressDiscoveryPromptRecord extends WordPressPromptRecord {
   /**
@@ -52,455 +35,11 @@ export interface WordPressDiscoveryPromptRecord extends WordPressPromptRecord {
    * Otherwise the body is objective-only and receives this generated version.
    */
   readonly outputContract: WordPressOutputContractVersion | null;
-  /** Required on a `current` or `candidate` row: the campaign mode that launches it. */
-  readonly mode?: WordPressDiscoveryMode;
-  /**
-   * The body is composed from these files in order. The composition is
-   * byte-identical to `${id}.md`, which stays as the reference copy, so
-   * `digest` is the same either way.
-   */
-  readonly fragments?: readonly WordPressPromptFragment[];
+  /** The campaign mode that launches it. */
+  readonly mode: WordPressDiscoveryMode;
 }
 
-// Paragraphs the archived deep and wide objectives share unchanged.
-const TASK = { section: "objective", file: "task-v10" } as const;
-const SOURCES = { section: "objective", file: "sources-v8" } as const;
-// Only the archived v10 and v12-wide carry it; v11, v13-wide and v14-wide drop it
-// (owner decision 2026-10-25, redesign §12 Q7).
-const LIFETIME = { section: "coordination", file: "lifetime-v10" } as const;
-
 export const WORDPRESS_DISCOVERY_PROMPTS = [
-  {
-    id: "wp2shell-derived-v1",
-    digest:
-      "sha256:99ce948c3985b054306f1e7ccda8a76db89d8b9a5c9e92f453cb0c852dcda96a",
-    outputContract: null,
-    status: "archived",
-  },
-  {
-    id: "short-objective-v1",
-    digest:
-      "sha256:66c14c0334c5e70e546e1ed8c10f760b4005f56fe626b02e3de78f09f69af7c0",
-    outputContract: null,
-    status: "archived",
-  },
-  {
-    id: "wp2shell-derived-v2",
-    digest:
-      "sha256:f9d90b8ad1dd955527756bf9ad9869624cff999dd7fab3908a7f050b1cd422be",
-    outputContract: null,
-    status: "archived",
-  },
-  {
-    id: "short-objective-v2",
-    digest:
-      "sha256:e6a7a1650f2af3c1e34d73a42c2d378497f4553818967cb804227cbd01436809",
-    outputContract: null,
-    status: "archived",
-  },
-  {
-    id: "short-objective-managed-v1",
-    digest:
-      "sha256:58460c592c424fe752c8e9fdf0b53b686302ee1e11d72a48a06dc9109a496215",
-    outputContract: null,
-    status: "archived",
-  },
-  {
-    id: "short-objective-managed-v2",
-    digest:
-      "sha256:05331cbdf24b49b6352020ce6faf84f5d005e275d0665f88287c9ae7c4d54825",
-    outputContract: null,
-    status: "archived",
-  },
-  {
-    id: "short-objective-managed-v3",
-    digest:
-      "sha256:989cec70830ff7d145e3c72fd9a984cacd253d181c253851e070f3bff50e6bab",
-    outputContract: null,
-    status: "archived",
-  },
-  {
-    id: "short-objective-managed-v4",
-    digest:
-      "sha256:7aa340bdab52d28f0830f38b43703e958d44e163b3ac937ff7be7896ccd73040",
-    outputContract: null,
-    status: "archived",
-  },
-  {
-    id: "short-objective-managed-v5",
-    digest:
-      "sha256:972ebe7d10a0173fef24a7603e01defcb17fd81e87810795f705737114f584b4",
-    outputContract: "v1",
-    status: "archived",
-  },
-  {
-    id: "screening-v1",
-    digest:
-      "sha256:effeb9e343601157e2da76eb65b99d4de91a9618daf7379efce13491a1d6aba6",
-    outputContract: "v1",
-    status: "archived",
-  },
-  {
-    id: "wp2shell-single-http-v2",
-    digest:
-      "sha256:a466aa5d5abba7ff18b70135d3ae7730880674652c87fd65feaa3534765904fe",
-    outputContract: null,
-    status: "archived",
-  },
-  {
-    id: "wp2shell-bounty-v1",
-    digest:
-      "sha256:5b334f59d315d6cee721b7dc698353ed5a9f44553474dd87c7aac7192d832a98",
-    outputContract: null,
-    status: "archived",
-  },
-  {
-    id: "wp2shell-bounty-v2",
-    digest:
-      "sha256:efeaefbd1775e2a4fd3984e19672e7e5cf8cfdbe0b16b84cededa23587b239c5",
-    outputContract: null,
-    status: "archived",
-  },
-  {
-    id: "wp2shell-bounty-v3",
-    digest:
-      "sha256:a97b4b3c1101470cec743dd51af1d2169f15d4d5ee1a2797997be05edef72c9b",
-    outputContract: "v2",
-    status: "archived",
-  },
-  {
-    id: "wp2shell-bounty-v4",
-    digest:
-      "sha256:6c823fe2ddb8a9af27ea743927f5d4a8203ec29ef4bca7dbadf3135c1739ab62",
-    outputContract: "v2",
-    status: "archived",
-  },
-  {
-    id: "wp2shell-bounty-v5",
-    digest:
-      "sha256:59c6bd1bb5fd5ef7618ce180de7f2d90af68fa4bcba26f90aa31aa3679d80cda",
-    outputContract: "v2",
-    status: "archived",
-  },
-  {
-    id: "wp2shell-bounty-v6",
-    digest:
-      "sha256:3b85b6bdacd3181da779fd6cc1eec5c45c9e01d4f16e80163fdab4e62dff3503",
-    outputContract: "v2",
-    status: "archived",
-  },
-  {
-    id: "wp2shell-bounty-v7",
-    digest:
-      "sha256:bb41592c57ce664a90b8b429d9d3d0c86da7c5547aeae9048a18440af9b1893e",
-    outputContract: "v2",
-    status: "archived",
-  },
-  {
-    id: "wp2shell-bounty-v8",
-    digest:
-      "sha256:d44532a985d1ef6b74f7117ea8bafbb60b25a7ae191d17ee362b2da58f3c639d",
-    outputContract: "v4",
-    status: "archived",
-  },
-  {
-    id: "wp2shell-bounty-v10",
-    digest:
-      "sha256:fd4e395ecb50923487c9bab6dbae81f0aff4e67342abecedda3f53cd9ff5f8b3",
-    outputContract: "v4",
-    status: "archived",
-    fragments: [
-      TASK,
-      { section: "objective", file: "first-principles-v7" },
-      { section: "coordination", file: "dynamic-v7" },
-      { section: "strategy", file: "portfolio-v10" },
-      { section: "coordination", file: "registry-v7" },
-      LIFETIME,
-      { section: "persistence", file: "research-v10" },
-      SOURCES,
-      { section: "coordination", file: "persist-deep-v7" },
-      { section: "coordination", file: "stop-deep-v8" },
-    ],
-  },
-  {
-    id: "wp2shell-bounty-v11",
-    digest:
-      "sha256:0ce13a617484c0e0b7ff3af6a55b4b821ea106189a897ed573040e9d5ad16ae9",
-    outputContract: "v4",
-    // The deep objective until deep was retired (ADR 0039 addendum 2026-11-05).
-    status: "archived",
-    // v10 without the lifetime paragraph, the child count and the minutes;
-    // the Run parameters section states the enforced values (ADR 0039 追記 4).
-    // The hand-over paragraph follows the research paragraph (owner
-    // 2026-10-26, ADR 0039 追記 4).
-    fragments: [
-      TASK,
-      { section: "objective", file: "first-principles-v7" },
-      { section: "coordination", file: "dynamic-v11" },
-      { section: "strategy", file: "portfolio-v10" },
-      { section: "coordination", file: "registry-v7" },
-      { section: "persistence", file: "research-v10" },
-      { section: "coordination", file: "handover-v11" },
-      SOURCES,
-      { section: "coordination", file: "persist-deep-v7" },
-      { section: "coordination", file: "stop-deep-v11" },
-    ],
-  },
-  {
-    id: "wp2shell-bounty-v10-wide",
-    digest:
-      "sha256:b886625bc576196e38879b3dd85bd25bc5d75e5e960c79b4d8aaec8c1e494a18",
-    outputContract: "v4",
-    status: "archived",
-  },
-  {
-    id: "wp2shell-bounty-v11-wide",
-    digest:
-      "sha256:e7c46f4b5289731f7d780640f009b58a305f99099e2ba10148fb2c1b6b4f676b",
-    outputContract: "v4",
-    status: "archived",
-  },
-  {
-    id: "wp2shell-bounty-v12-wide",
-    digest:
-      "sha256:9a79a3b20fdba7af54f32464d868ab00806335c526781aba026e76ce9290c3c3",
-    outputContract: "v4",
-    status: "archived",
-    fragments: [
-      TASK,
-      { section: "objective", file: "first-principles-v11" },
-      { section: "strategy", file: "sinks-v12" },
-      { section: "strategy", file: "shapes-v12" },
-      LIFETIME,
-      { section: "persistence", file: "research-v11" },
-      SOURCES,
-      { section: "coordination", file: "fixed-v11" },
-      { section: "coordination", file: "stop-wide-v11" },
-    ],
-  },
-  {
-    id: "wp2shell-bounty-v13-wide",
-    digest:
-      "sha256:0dd2072b4c6a544d47ebb6df94c7981f2fbb758b4dee82e063896ff91f892bb8",
-    outputContract: "v4",
-    status: "archived",
-    // v12-wide without the lifetime paragraph and the specialist count, with
-    // the hand-over paragraph and the registry-based stop rule (owner
-    // 2026-10-26, ADR 0039 追記 4).
-    fragments: [
-      TASK,
-      { section: "objective", file: "first-principles-v11" },
-      { section: "strategy", file: "sinks-v13" },
-      { section: "strategy", file: "shapes-v12" },
-      { section: "persistence", file: "research-v11" },
-      { section: "coordination", file: "handover-v11" },
-      SOURCES,
-      { section: "coordination", file: "fixed-v13" },
-      { section: "coordination", file: "stop-wide-v13" },
-    ],
-  },
-  {
-    id: "wp2shell-bounty-v14-wide",
-    digest:
-      "sha256:42ec734364d93492bf9b936e415b94796da21fb154d3b29033cafbd58596229d",
-    outputContract: "v4",
-    status: "archived",
-    // v13-wide with only the sink strategy and fixed coordination fragments
-    // replaced (owner guidance 2026-10-26, ADR 0039 addendum). Restored as the
-    // wide current on 2026-10-27 (ADR 0039 addendum 12): v16-wide's vendor
-    // sentence, or the 8-child cap it ran under, cut Findings per Codex Trial
-    // from 3.6 to 0.3. Back on the v4 contract since 2026-10-27 (ADR 0038
-    // addendum 15): under v5 the same text gave 8 Findings in 22 Codex Trials
-    // against 76 in 21 under v4. The objective text and digest are unchanged.
-    fragments: [
-      TASK,
-      { section: "objective", file: "first-principles-v11" },
-      { section: "strategy", file: "sinks-v14" },
-      { section: "strategy", file: "shapes-v12" },
-      { section: "persistence", file: "research-v11" },
-      { section: "coordination", file: "handover-v11" },
-      SOURCES,
-      { section: "coordination", file: "fixed-v14" },
-      { section: "coordination", file: "stop-wide-v13" },
-    ],
-  },
-  {
-    id: "wp2shell-bounty-v15-wide",
-    digest:
-      "sha256:3e82116ebdd32e4e863d7daacf7a87d90c43f6c4e73efe49333668883fcf680d",
-    outputContract: "v4",
-    status: "archived",
-    // v14-wide plus one sentence: the root agent copies the Harness `## Lab`
-    // section to every agent it starts (Issue #599). Both judge sentences now
-    // name the human's recorded observation in a review Lab (#555, ADR 0040).
-    // Compared with v14-wide in production before either is current.
-    fragments: [
-      { section: "objective", file: "task-v15" },
-      { section: "objective", file: "first-principles-v11" },
-      { section: "strategy", file: "sinks-v14" },
-      { section: "strategy", file: "shapes-v12" },
-      { section: "persistence", file: "research-v11" },
-      { section: "coordination", file: "handover-v11" },
-      SOURCES,
-      { section: "coordination", file: "fixed-v15" },
-      { section: "coordination", file: "stop-wide-v13" },
-    ],
-  },
-  {
-    id: "wp2shell-bounty-v16-wide",
-    digest:
-      "sha256:1ffb15f4f3f7ad6de70e330e10fd24c31513e41d250c8e0d6885b760a0a5c1f3",
-    outputContract: "v5",
-    status: "archived",
-    // v14-wide with one sentence of the sink strategy replaced (owner
-    // instruction 2026-10-26: content only the vendor can place is not
-    // attacker input): third-party content is attacker-placeable only when
-    // someone other than the service's vendor can place it. Restored as the
-    // wide current on 2026-10-27 (ADR 0039 addendum 11), then archived the
-    // same day (addendum 12): 42 Codex Trials gave 0.3 Findings per Trial.
-    fragments: [
-      TASK,
-      { section: "objective", file: "first-principles-v11" },
-      { section: "strategy", file: "sinks-v16" },
-      { section: "strategy", file: "shapes-v12" },
-      { section: "persistence", file: "research-v11" },
-      { section: "coordination", file: "handover-v11" },
-      SOURCES,
-      { section: "coordination", file: "fixed-v14" },
-      { section: "coordination", file: "stop-wide-v13" },
-    ],
-  },
-  {
-    id: "wp2shell-bounty-v17-wide",
-    digest:
-      "sha256:9a32ddcf2083c8e82952907742823bfaa29f8068d346132206b87cf412165bc9",
-    outputContract: "v5",
-    status: "archived",
-    // v16-wide with three sentences replaced (owner decision 2026-10-27:
-    // when in doubt, report a Lead, not a Finding): sinks-v17 says a field,
-    // column, query condition, template, snippet or setting an administrator
-    // would have to create unsafely is not a plausible configuration, and
-    // fixed-v17 reports every chain as a Finding or a Lead, a Finding only
-    // when the source shows both attacker placement and typical-site reach.
-    fragments: [
-      TASK,
-      { section: "objective", file: "first-principles-v11" },
-      { section: "strategy", file: "sinks-v17" },
-      { section: "strategy", file: "shapes-v12" },
-      { section: "persistence", file: "research-v11" },
-      { section: "coordination", file: "handover-v11" },
-      SOURCES,
-      { section: "coordination", file: "fixed-v17" },
-      { section: "coordination", file: "stop-wide-v13" },
-    ],
-  },
-  {
-    id: "wp2shell-bounty-v18-wide",
-    digest:
-      "sha256:1ffb15f4f3f7ad6de70e330e10fd24c31513e41d250c8e0d6885b760a0a5c1f3",
-    outputContract: "v4",
-    status: "archived",
-    // The v16-wide body, byte for byte (same fragments, same digest), on the
-    // v4 contract (Issue #639, ADR 0039 addendum 13). v16-wide only ever ran
-    // under v5, which cut Findings on its own (ADR 0038 addendum 15), so the
-    // owner's vendor sentence (2026-10-26) was never measured by itself. A
-    // separate id keeps the v5 Trials of v16-wide out of this comparison.
-    // Measured 2026-10-28 over 20 Codex Trials against 21 v14-wide/v4 Trials:
-    // 0.20 vs 0.76 Findings per Trial, 4.5 vs 3.0 Leads per Trial, vendor-feed
-    // Findings 0/4 vs 13/16 (ADR 0039 addendum 14); archived then.
-    // Candidate again on 2026-10-31 (ADR 0039 addendum 15): the first 14
-    // v14-wide Trials with the exploration skills gave 15 Findings, and stage 1
-    // screened out all 15 as vendor-supplied content. Runs only when named;
-    // compared on Findings that pass stage 1 and Leads per Trial.
-    fragments: [
-      TASK,
-      { section: "objective", file: "first-principles-v11" },
-      { section: "strategy", file: "sinks-v16" },
-      { section: "strategy", file: "shapes-v12" },
-      { section: "persistence", file: "research-v11" },
-      { section: "coordination", file: "handover-v11" },
-      SOURCES,
-      { section: "coordination", file: "fixed-v14" },
-      { section: "coordination", file: "stop-wide-v13" },
-    ],
-  },
-  {
-    id: "wp2shell-bounty-v19-wide",
-    digest:
-      "sha256:a8a73ba7ed5def43d6a0abd0a6f8ff9738ac9b2b84d1b7fa00cbeee06cb5e119",
-    outputContract: "v4",
-    status: "archived",
-    // v18-wide with only the stop fragment replaced (Issue #714, ADR 0039
-    // addendum 16): the registry counts, per sink class, the rows of the
-    // wbh-tools hook listing read and remaining, and the Root does not close
-    // while rows remain; the Trial wall still ends the Trial normally. Root
-    // closures at a median of about 16 of 120 minutes have not changed since
-    // v14-wide. Runs only when named, and the campaign config must name both
-    // wbh-recon-v1 and wbh-tools-v1 in discovery.skills; alternated with
-    // v18-wide, 20 Trials each.
-    fragments: [
-      TASK,
-      { section: "objective", file: "first-principles-v11" },
-      { section: "strategy", file: "sinks-v16" },
-      { section: "strategy", file: "shapes-v12" },
-      { section: "persistence", file: "research-v11" },
-      { section: "coordination", file: "handover-v11" },
-      SOURCES,
-      { section: "coordination", file: "fixed-v14" },
-      { section: "coordination", file: "stop-wide-v14" },
-    ],
-  },
-  {
-    id: "wp2shell-bounty-v20-wide",
-    digest:
-      "sha256:4674ab42d8e64b2349045ef6b3622363dcf409d3782db1dae2fdd7d0b7b3356b",
-    outputContract: "v4",
-    status: "archived",
-    // One file, no fragments (owner decision 2026-11-01, ADR 0039 addendum 18,
-    // ADR 0045 addendum 1): the v19-wide paragraphs unchanged, plus one
-    // paragraph before the registry-count paragraph that says when the Root
-    // reads each installed exploration skill (wbh-recon, wbh-tools,
-    // wbh-setup). The fragment files stay for the digests of past Trials;
-    // versions from v20 on are kept as whole files. The v19 20-Trial
-    // measurement was dropped with the same decision; v14-wide, v15-wide,
-    // v18-wide and v19-wide are archived without a comparison. Archived the
-    // same day, before any Trial ran it, when v21-wide removed the two stale
-    // judge and canary sentences (addendum 19).
-  },
-  {
-    id: "wp2shell-bounty-v21-wide",
-    digest:
-      "sha256:211c22a613c5440946944d4590c3bde27bfe8e8665fb755b4ae8e7623d4d1398",
-    outputContract: "v4",
-    status: "archived",
-    // v20-wide with two sentences removed and nothing added (owner decision
-    // 2026-11-01 "すべて推奨で", ADR 0039 addendum 19; ADR 0045 allows deletions
-    // only): the end of the first paragraph that named the Harness-owned
-    // deterministic judge and the nonce canary, and the end of the Root
-    // paragraph that said the Harness judge decides runtime confirmation. The
-    // judge and canary were deleted in ADR 0040; the sentences described a
-    // Harness that no longer exists. Archived on 2026-11-02 when v22-wide
-    // removed the row-count closing rule (addendum 21); kept for the digests
-    // of the production Trials it ran.
-  },
-  {
-    id: "wp2shell-bounty-v22-wide",
-    digest:
-      "sha256:678595d377ce7b238b82ad5201e57eed35c2a66b75dc10049b15df36615a4d7c",
-    outputContract: "v4",
-    status: "candidate",
-    mode: "wide",
-    // v21-wide with four deletions and nothing added (ADR 0049 decision E,
-    // ADR 0039 addendum 21; ADR 0045 allows deletions only): the whole
-    // registry paragraph that counted the rows of the hook listing per sink
-    // class and forbade closing while rows remained, the clause of the skill
-    // paragraph that pointed at that listing, the row-count half of the
-    // stop paragraph, which now reads "Stop when the Trial wall is reached.",
-    // and the words "with those counts" that referred to the deleted counts.
-    // Production v21-wide Roots satisfied the row rule by classifying rows and
-    // closed at 11 to 47 minutes; the closing condition lives in the skills
-    // (wbh-recon step 9) and the Trial wall.
-  },
   {
     id: "wp2shell-bounty-v26-wide",
     digest:
@@ -513,55 +52,25 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     // adversarial review and on-demand Lab questions. The historical source
     // and this current-Harness adaptation have distinct digests.
   },
-  {
-    id: "wp2shell-whitebox-v1.7",
-    digest:
-      "sha256:3318ae6a06290ffbf306533f66357eb41401c1c48ccc7de7cc4e991ac3e07afb",
-    outputContract: "v2",
-    status: "archived",
-  },
 ] as const satisfies readonly WordPressDiscoveryPromptRecord[];
 
-/** Human-written trust declarations; current v26 uses v2. */
+/** Human-written trust declarations; v26 receives v2. */
 export const WORDPRESS_TRUST_BOUNDARIES = [
-  {
-    id: "trust-boundary-v1",
-    digest:
-      "sha256:962eee77bb9a0e98c8f0ce53129ea842801714ad4cf3226f1d151dbdca0040fd",
-    status: "current",
-  },
   {
     id: "trust-boundary-v2",
     digest:
       "sha256:23d5e9ebe487751f93fdf7b290ed30c898d20f4d8443d778125e5a4dde1dfb2e",
-    status: "candidate",
-  },
-] as const satisfies readonly WordPressPromptRecord[];
-
-/** Fixed Verifier instructions; the caller records this exact byte digest. */
-export const WORDPRESS_VERIFIER_PROMPTS = [
-  {
-    id: "verifier-v6",
-    digest:
-      "sha256:f548a5a3121fc8eb1d761042577944c3fbf5899bd481884ed690753cf3400d58",
-    status: "archived",
-  },
-  {
-    id: "verifier-v7",
-    digest:
-      "sha256:df5ed497912146fd4ceaeacbf923d3cee3337c477afad8645044fca460bd3b18",
-    status: "archived",
-  },
-  {
-    id: "verifier-v8",
-    digest:
-      "sha256:798b881faa52504e68fde9a9129dee4bfe471798fe3f9bc21b38635caa12e830",
     status: "current",
   },
 ] as const satisfies readonly WordPressPromptRecord[];
 
+/**
+ * The version a run without `--handoff` records for the retired automatic
+ * Verifier (ADR 0035). Its text is kept under `history/prompts/objectives/`.
+ */
+export const WORDPRESS_VERIFIER_PROMPT_ID = "verifier-v8";
+
 type DiscoveryPromptRow = (typeof WORDPRESS_DISCOVERY_PROMPTS)[number];
-type VerifierPromptRow = (typeof WORDPRESS_VERIFIER_PROMPTS)[number];
 type CurrentOf<Row extends WordPressPromptRecord> = Extract<
   Row,
   { status: "current" }
@@ -581,29 +90,17 @@ function currentOf<const Row extends WordPressPromptRecord>(
   return current[0]!;
 }
 
-/** The existing default declaration for production Trials. */
+/** The declaration every new Trial receives. */
 export const WORDPRESS_TRUST_BOUNDARY = currentOf(WORDPRESS_TRUST_BOUNDARIES);
 
-/** Current v26 receives the corrected declaration. */
-export function wordPressTrustBoundaryForObjective(
-  objectiveId: WordPressDiscoveryPromptId,
-): (typeof WORDPRESS_TRUST_BOUNDARIES)[number]["id"] {
-  return objectiveId === "wp2shell-bounty-v26-wide"
-    ? "trust-boundary-v2"
-    : WORDPRESS_TRUST_BOUNDARY.id;
-}
-
+/** The declaration a Trial recorded, if the registry still has it. */
 export function wordPressTrustBoundaryId(
   id: string | undefined,
 ): (typeof WORDPRESS_TRUST_BOUNDARIES)[number]["id"] | undefined {
-  // Before the version field was recorded, every Trial used v1.
-  return WORDPRESS_TRUST_BOUNDARIES.find(
-    (row) => row.id === (id ?? "trust-boundary-v1"),
-  )?.id;
+  return WORDPRESS_TRUST_BOUNDARIES.find((row) => row.id === id)?.id;
 }
 
 export type WordPressDiscoveryPromptId = DiscoveryPromptRow["id"];
-export type WordPressVerifierPromptId = VerifierPromptRow["id"];
 export type WordPressDiscoveryAssetId =
   | WordPressDiscoveryPromptId
   | (typeof WORDPRESS_TRUST_BOUNDARIES)[number]["id"];
@@ -621,19 +118,17 @@ export const WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS = {
  * any `candidate` under comparison with it (DEVELOPMENT §5).
  */
 export const WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS =
-  WORDPRESS_DISCOVERY_PROMPTS.flatMap((row) =>
-    row.status === "archived" ? [] : [row.id],
-  );
+  WORDPRESS_DISCOVERY_PROMPTS.map((row) => row.id);
 
 /** The current objective of the only launch mode, `wide`. */
 export const WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID =
   WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS.wide;
 
-/** The mode a current or candidate objective launches under; archived objectives have none. */
+/** The mode a registered objective launches under; other ids have none. */
 export function wordPressDiscoveryModeOf(
   id: string,
 ): WordPressDiscoveryMode | undefined {
-  return wordPressDiscoveryPrompt(id).mode;
+  return WORDPRESS_DISCOVERY_PROMPTS.find((prompt) => prompt.id === id)?.mode;
 }
 
 /** These objectives receive the current Harness-generated output contract. */
@@ -647,10 +142,6 @@ export const WORDPRESS_DISCOVERY_ASSET_IDS: readonly WordPressDiscoveryAssetId[]
     ...WORDPRESS_DISCOVERY_PROMPT_IDS,
     ...WORDPRESS_TRUST_BOUNDARIES.map((row) => row.id),
   ];
-
-export const WORDPRESS_VERIFIER_PROMPT_ID = currentOf(
-  WORDPRESS_VERIFIER_PROMPTS,
-).id;
 
 /** Looks a discovery prompt version up by id; unknown ids are a caller bug. */
 export function wordPressDiscoveryPrompt(
@@ -667,112 +158,27 @@ export interface WordPressDiscoveryAsset {
   readonly sourceUrl: URL;
   readonly text: string;
   readonly digest: `sha256:${string}`;
-  /**
-   * Set only for an objective composed from fragments: sha256 of each
-   * section's fragments composed alone, in the order the row lists them.
-   */
-  readonly sectionDigests?: Partial<
-    Record<WordPressPromptSection, `sha256:${string}`>
-  >;
-}
-
-const sha256 = (bytes: Uint8Array | string): `sha256:${string}` =>
-  `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
-
-async function readPromptFile<Id extends string>(
-  id: Id,
-): Promise<{
-  readonly id: Id;
-  readonly sourceUrl: URL;
-  readonly text: string;
-  readonly digest: `sha256:${string}`;
-}> {
-  const sourceUrl = new URL(`./${id}.md`, import.meta.url);
-  const bytes = await readFile(sourceUrl);
-  return {
-    id,
-    sourceUrl,
-    text: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
-    digest: sha256(bytes),
-  };
 }
 
 const DISCOVERY_ASSET_IDS: ReadonlySet<string> = new Set(
   WORDPRESS_DISCOVERY_ASSET_IDS,
 );
-const VERIFIER_PROMPT_IDS: ReadonlySet<string> = new Set(
-  WORDPRESS_VERIFIER_PROMPTS.map((prompt) => prompt.id),
-);
-
-/**
- * Fragments are whole paragraphs, each file ending in one newline. Joining
- * them with the blank line that separates paragraphs gives the `.md` bytes.
- */
-function composeFragments(texts: readonly string[]): string {
-  return `${texts.map((text) => text.slice(0, -1)).join("\n\n")}\n`;
-}
-
-async function readFragment(fragment: WordPressPromptFragment) {
-  const text = await readFile(
-    new URL(
-      `./sections/${fragment.section}/${fragment.file}.md`,
-      import.meta.url,
-    ),
-    "utf8",
-  );
-  if (!/^\S[\s\S]*\S\n$/.test(text) || text.endsWith("\n\n"))
-    throw new Error("A prompt fragment must hold whole paragraphs");
-  return text;
-}
 
 export async function loadWordPressDiscoveryAsset(
   id: WordPressDiscoveryAssetId,
 ): Promise<WordPressDiscoveryAsset> {
   if (!DISCOVERY_ASSET_IDS.has(id))
     throw new Error("Unknown WordPress discovery asset");
-  const trustBoundary = WORDPRESS_TRUST_BOUNDARIES.find((row) => row.id === id);
-  if (trustBoundary !== undefined) {
-    const asset = await readPromptFile(trustBoundary.id);
-    if (asset.digest !== trustBoundary.digest)
-      throw new Error(
-        "WordPress trust boundary differs from its pinned digest",
-      );
-    return asset;
-  }
-  const record = wordPressDiscoveryPrompt(id);
-  if (record.fragments === undefined) return readPromptFile(id);
-  const texts = await Promise.all(record.fragments.map(readFragment));
-  const text = composeFragments(texts);
-  const digest = sha256(text);
-  if (digest !== record.digest)
-    throw new Error("Composed prompt differs from its pinned digest");
-  const sectionDigests: Partial<
-    Record<WordPressPromptSection, `sha256:${string}`>
-  > = {};
-  for (const section of WORDPRESS_PROMPT_SECTIONS) {
-    const own = texts.filter(
-      (_, index) => record.fragments![index]!.section === section,
-    );
-    if (own.length > 0) sectionDigests[section] = sha256(composeFragments(own));
-  }
-  return {
+  const sourceUrl = new URL(`./${id}.md`, import.meta.url);
+  const bytes = await readFile(sourceUrl);
+  const asset = {
     id,
-    sourceUrl: new URL(`./${id}.md`, import.meta.url),
-    text,
-    digest,
-    sectionDigests,
-  };
-}
-
-export async function loadWordPressVerifierPrompt(
-  id: WordPressVerifierPromptId = WORDPRESS_VERIFIER_PROMPT_ID,
-): Promise<{
-  readonly id: WordPressVerifierPromptId;
-  readonly text: string;
-  readonly digest: `sha256:${string}`;
-}> {
-  if (!VERIFIER_PROMPT_IDS.has(id))
-    throw new Error("Unknown WordPress Verifier prompt");
-  const { text, digest } = await readPromptFile(id);
-  return { id, text, digest };
+    sourceUrl,
+    text: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+    digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+  } as const;
+  const trustBoundary = WORDPRESS_TRUST_BOUNDARIES.find((row) => row.id === id);
+  if (trustBoundary !== undefined && asset.digest !== trustBoundary.digest)
+    throw new Error("WordPress trust boundary differs from its pinned digest");
+  return asset;
 }

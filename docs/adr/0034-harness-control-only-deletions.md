@@ -43,7 +43,7 @@ Verifier 指示の連鎖（`wordpress-verifier.ts` の nextStep）、`scenarios.
 
 ## 理由
 
-- 索引は「どこを読むか」を Harness が決めて agent に渡す舵取りであり、所有者決定の境界の外側にある。v5 比較（[2026-10-16](../evaluation/2026-10-16-prompt-v5-comparison.md)）で索引あり・なしに差は出ず、v7 以降は渡していない。
+- 索引は「どこを読むか」を Harness が決めて agent に渡す舵取りであり、所有者決定の境界の外側にある。v5 比較（[2026-10-16](../../history/evaluation/2026-10-16-prompt-v5-comparison.md)）で索引あり・なしに差は出ず、v7 以降は渡していない。
 - coverage と `incomplete(depth)` は agent の自己申告（coverage record）を Harness が根拠にする code で、「移す合図」に該当する。深さは Harness が観測する読取 file、wall、token、子の活動で事後に見る（ADR 0033）。
 - 公開履歴 catalog は ADR 0013 の history 軸 ablation でしか使われず、本番の `wp2shell` mode は常に `none` を渡していた。不変条件 1 は catalog を「渡してよい」と書くだけで、渡すことを求めていない。
 

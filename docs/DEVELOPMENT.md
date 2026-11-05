@@ -25,7 +25,7 @@
 - 1 週間に答える問いを 1 つ決め、GitHub Issue に「問い」と「答えが分かる数字」を書く。例: 「`gpt-6-luna` は 90 分のうち何分使うか。prompt を変えると変わるか」「答えは台帳の run wall 中央値と `observed.filesRead`」。
 - PR はその Issue を参照する。問いに関係ない変更は別の問いにする。
 - 問いが決まっていない間は、PR を作らない。報告（第4節）だけを依頼する。
-- 問いを決める前に [docs/knowledge/experiments.md](knowledge/experiments.md) を見る。過去の世代が同じ問いに答えていれば、その答えから始め、実験を繰り返さない。答えが出たら 1 行足す。
+- 問いを決める前に [history/knowledge/experiments.md](../history/knowledge/experiments.md) を見る。過去の世代が同じ問いに答えていれば、その答えから始め、実験を繰り返さない。答えが出たら 1 行足す。
 
 ## 4. AI への依頼は 2 種類
 
@@ -52,7 +52,7 @@
 - agent に渡る文章（`src/profiles/wordpress/prompts/` の本文、`.claude/skills/` の本文、Harness が生成して渡す節の雛形: 出力契約、Run parameters、Prior research、Lab・Programme Boundary の節）を変える PR は、変更後の全文と日本語訳を PR 本文か `docs/reviews/` の文書に貼る。2026-10-13 に所有者は、出典対照表の採否と `owner-approved` の付与を AI に委任した（「採用するかどうかはあなたの方で決めてもらって構いません」「よしなにやってください」）。AI はラベルを付けるとき、委任を明記した PR comment を残す。出典に無い要素を足さない規則は変わらない。2026-10-18 に所有者は読了ゲートも外した（「owner-approved のラベルはいらないかも。結局、脆弱性を発見できるかどうかだからそっちで実験して結果がある程度わかるはず」、ADR 0032 の 2026-10-18 節）。所有者の全文読了は merge の条件ではない。AI は出典付きで採った要素だけを書き、要素を足さない。
 - 1 PR は追加差分 500 行以内を目安にする（削除行は数えない）。超えるなら問いを分ける。
 - open の PR（Draft を含む）が 3 本を超えている間は、新しい実装 PR を出さない。先に既存 PR を merge するか閉じる。所有者の読む量が生産速度の上限で、agent の数ではない。
-- `owner-approved` ラベルは、2026-10-18 以降は次の path も含めて委任済みの AI が差分を確認し、委任 comment を付けて付ける: `docs/adr/`、`docs/SPEC.md`、`src/profiles/wordpress/prompts/trust-boundary-v1.md`、`src/profiles/wordpress/policy/campaign.json`、`src/profiles/wordpress/policy/programme-scope.md`、`src/profiles/wordpress/discovery/programme-impacts.ts`、`src/profiles/wordpress/verification/judges.ts`、prompt の目的文、`policy/selection.json`、`.claude/skills/`、出力契約の雛形、Verifier の victim 契約。所有者本人だけが付けるものは残っていない（外部行動の承認は不変条件 7 のとおり所有者）。adr-guard の仕組みと、どの path が対象かの一覧は変えない。所有者が読了ゲートを戻すときは ADR 0032 に 1 行足してこの項を戻す。
+- `owner-approved` ラベルは、2026-10-18 以降は次の path も含めて委任済みの AI が差分を確認し、委任 comment を付けて付ける: `docs/adr/`、`docs/SPEC.md`、`src/profiles/wordpress/prompts/trust-boundary-v2.md`、`src/profiles/wordpress/policy/campaign.json`、`src/profiles/wordpress/policy/programme-scope.md`、`src/profiles/wordpress/discovery/programme-impacts.ts`、`src/profiles/wordpress/verification/judges.ts`、prompt の目的文、`policy/selection.json`、`.claude/skills/`、出力契約の雛形、Verifier の victim 契約。所有者本人だけが付けるものは残っていない（外部行動の承認は不変条件 7 のとおり所有者）。adr-guard の仕組みと、どの path が対象かの一覧は変えない。所有者が読了ゲートを戻すときは ADR 0032 に 1 行足してこの項を戻す。
 - CI の `pnpm check` と `pnpm build` が通る。`private-guard`（Private Evidence・提出 package の構成物・記録や画像・512 KiB 超のファイルを止め、文書に貼られた canary token・HTTP 捕捉・秘密鍵・session cookie も見る）と `adr-guard` も通る。
 
 ## 6. 正本の改訂

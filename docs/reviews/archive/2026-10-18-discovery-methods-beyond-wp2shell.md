@@ -6,7 +6,7 @@
 
 **結論（推論）:** 最初に比較する価値が高いのは **GitHub Security Lab の Web 監査 Taskflow**。PHP の WooCommerce で認可ロジックの未知の問題を発見した一次資料があり、探索の手順と中間記録も公開されている。次点は **Mandiant AVDH の「入口ごとに access control と data flow の仮説を別に作る」方式**。ただし AVDH の内部実装と対象別の費用・見逃し数は公開されていない。どちらも現行の固定 Snapshot、scope、Lab、判定器で優位と示されたわけではない。今は方式を切り替えず、Step 1 の既定方式の実測分母を先に作る。[GitHub Security Lab の方法と WooCommerce 事例](https://github.blog/security/how-to-scan-for-vulnerabilities-with-github-security-labs-open-source-ai-powered-framework/)、[Mandiant AVDH](https://cloud.google.com/blog/topics/threat-intelligence/staying-ahead-of-adversarial-ai-through-agentic-source-code-review)、[DEVELOPMENT 第2節](../../DEVELOPMENT.md)、[PARKING](../../PARKING.md)。
 
-この報告は探索方法の調査であり、prompt、Trial、判定器、正本は変更しない。既存の[公開ハーネス比較](2026-10-13-anthropic-mantis-cloudflare-source-notes.md)と[参考方式の観測点](../../knowledge/imported/09-wordpress-harness/knowledge/reference-harness-observability.md)は構成・隔離・検証を扱った。ここでは **何を次の調査対象とするか**、すなわち探索の frontier と比較可能性に焦点を当てる。
+この報告は探索方法の調査であり、prompt、Trial、判定器、正本は変更しない。既存の[公開ハーネス比較](2026-10-13-anthropic-mantis-cloudflare-source-notes.md)と[参考方式の観測点](../../../history/knowledge/imported/09-wordpress-harness/knowledge/reference-harness-observability.md)は構成・隔離・検証を扱った。ここでは **何を次の調査対象とするか**、すなわち探索の frontier と比較可能性に焦点を当てる。
 
 ## 手法の地図
 
@@ -21,7 +21,7 @@ Big Sleep              過去の修正 → 同類の未修正箇所
 Code-Augur             安全という仮定 → 実行で反証
 ```
 
-現行方式は、対象ごとに Root＋最大3子の協調 Trial を1回、既定上限60分で回し、固定 source 由来の入口索引をカタログとして渡す。Root が分担と仮説を決め、全入口の処理や最低実行時間は終了条件ではない。`wp2shell-bounty-v2` などは別 arm であり、過去の二段構え・索引なし Trial を同一分母に混ぜない。[SPEC 第6節](../../SPEC.md)、[ADR 0029](../../adr/0029-single-wp2shell-cooperative-trial.md)。元の wp2shell は WordPress Core の一つの成功例で、途中の人間による確認・追加の問いを含む。多数の未知プラグインを無人で回した比較実験ではない。[発見者の記録](https://www.slcyber.io/research/exploit-brokers-pay-500000-for-a-wordpress-rce-i-found-one-with-gpt5-6#the-story-of-wp2shell)、[既存の出典照合](../../knowledge/imported/09-wordpress-harness/knowledge/wp2shell-current-research-gap.md)。
+現行方式は、対象ごとに Root＋最大3子の協調 Trial を1回、既定上限60分で回し、固定 source 由来の入口索引をカタログとして渡す。Root が分担と仮説を決め、全入口の処理や最低実行時間は終了条件ではない。`wp2shell-bounty-v2` などは別 arm であり、過去の二段構え・索引なし Trial を同一分母に混ぜない。[SPEC 第6節](../../SPEC.md)、[ADR 0029](../../adr/0029-single-wp2shell-cooperative-trial.md)。元の wp2shell は WordPress Core の一つの成功例で、途中の人間による確認・追加の問いを含む。多数の未知プラグインを無人で回した比較実験ではない。[発見者の記録](https://www.slcyber.io/research/exploit-brokers-pay-500000-for-a-wordpress-rce-i-found-one-with-gpt5-6#the-story-of-wp2shell)、[既存の出典照合](../../../history/knowledge/imported/09-wordpress-harness/knowledge/wp2shell-current-research-gap.md)。
 
 ## 1. GitHub Security Lab Web 監査 Taskflow — 最も近い比較候補
 

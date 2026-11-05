@@ -61,7 +61,7 @@ Human Gate
 ```
 
 Current executable architecture is documented in
-[`architecture.md`](./architecture.md). The implementation is primarily
+[`architecture.md`](architecture.md). The implementation is primarily
 [`agent_runtime_lib.py`](../harness/scripts/agent_runtime_lib.py),
 [`agent_lab_lib.py`](../harness/scripts/agent_lab_lib.py), and
 [`thin_campaign_lib.py`](../harness/scripts/thin_campaign_lib.py).
@@ -355,10 +355,10 @@ human-review
 
 ### P1-8. 現行Architectureと旧設計文書が矛盾する
 
-[`system-overview.md`](./system-overview.md)と
-[`accepted-system-design.md`](./accepted-system-design.md)はfull AST、Typed Trial、
+[`system-overview.md`](system-overview.md)と
+[`accepted-system-design.md`](accepted-system-design.md)はfull AST、Typed Trial、
 actor separation、3+3 promotion等を「Implemented」と記載する。一方、現行
-[`architecture.md`](./architecture.md)はv0.2でそれらを削除したと明記する。
+[`architecture.md`](architecture.md)はv0.2でそれらを削除したと明記する。
 
 この差は、操作者やreviewerが実際より強い検証を通っていると誤認する原因になる。
 

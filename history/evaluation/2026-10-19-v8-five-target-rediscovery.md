@@ -25,7 +25,7 @@ WP2Shell 記事に寄せた唯一の新規探索 prompt `wp2shell-bounty-v8` は
 
 ## 比較上の扱い
 
-- [r2 の公開記録照合](../reviews/2026-10-18-v8-r2-public-record-comparison.md)では、Brizy r2 に CVE-2026-5324 と同系統の source 候補を確認した。ただし同 Trial は provider 拒否で `incomplete`、候補の重複と実行時未確認を含む。SSA r2 は基準の公開 SQLi と一致せず、Relevanssi r2 は既知経路の一部に触れた Lead にとどまった。
+- [r2 の公開記録照合](../../docs/reviews/2026-10-18-v8-r2-public-record-comparison.md)では、Brizy r2 に CVE-2026-5324 と同系統の source 候補を確認した。ただし同 Trial は provider 拒否で `incomplete`、候補の重複と実行時未確認を含む。SSA r2 は基準の公開 SQLi と一致せず、Relevanssi r2 は既知経路の一部に触れた Lead にとどまった。
 - 新しい r3 の Finding は公開記録との厳密な経路一致、実行時の成立、修正版での負の対照をまだ確認していない。TranslatePress の `runtime-confirmed` 3件も、公開 CVE ごとの同一性は `unassessed`。Unlimited Elements r2 は基準の公開 SQLi を Finding として再発見しなかった。
 - 旧 Brizy・SSA の r2 はそれぞれ58分10秒、49分09秒で `provider-cyber-policy` により `incomplete`。旧 Brizy・SSA・Relevanssi・Unlimited Elements の r1 は provider 429 で `incomplete`。誤起動して操作者が止めた SSA sup3 は除外した。いずれも候補0件の正常 Trial として扱わない。
 - 最終 r3 と Unlimited r2 の4件同時実行では429の再発を観測しなかった。ただし一度の同時実行から安定した並列上限は決められない。r2 と r3 は Lab の有無や effort なども異なるため、結果の差を確率的な揺らぎや一つの設定変更だけに帰属できない。

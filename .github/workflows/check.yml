@@ -35,7 +35,7 @@ jobs:
       - name: Smoke the built CLI
         run: |
           set -eu
-          test -f dist/profiles/wordpress/prompts/wp2shell-bounty-v10.md
+          test -f dist/profiles/wordpress/prompts/wp2shell-bounty-v26-wide.md
           test -f dist/profiles/wordpress/policy/campaign.json
           test -f dist/profiles/wordpress/policy/selection.json
           node dist/cli/main.js 2>&1 | grep -q "host configuration is required"
@@ -78,7 +78,7 @@ jobs:
           # 委任済みの AI が確認してラベルを付ける方針の path（docs/DEVELOPMENT.md 第 5 節、2026-10-18）
           adr=$(git diff --name-only "$BASE" "$HEAD" -- \
             docs/adr/ docs/SPEC.md \
-            src/profiles/wordpress/prompts/trust-boundary-v1.md \
+            src/profiles/wordpress/prompts/trust-boundary-v2.md \
             src/profiles/wordpress/policy/campaign.json \
             src/profiles/wordpress/policy/programme-scope.md \
             src/profiles/wordpress/discovery/programme-impacts.ts \

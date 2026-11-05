@@ -2,7 +2,7 @@
 
 状態: 所有者の追加指示に基づく改訂案。新規の探索 Trial で実行可能にする prompt はこの v8 だけとし、過去の版と実験結果は履歴・digest 照合用に残す。120 分は上限、最低60分は能動的な探索に使う。実装と開発Trialの計測は進行中。
 
-出典: [Searchlight Cyber の WP2Shell 記事](https://www.slcyber.io/research/exploit-brokers-pay-500000-for-a-wordpress-rce-i-found-one-with-gpt5-6/#the-story-of-wp2shell)、[取り込んだ記事系原文](../../knowledge/imported/wp2shell/PROMPT.article.template.txt)。出力契約、trust 境界、Programme Boundary、Lab は Harness が別節として渡す。記事にない入口索引と公開履歴カタログは v8 の探索には渡さない。v7からの変更は最低時間と提供する依存sourceの位置だけ。
+出典: [Searchlight Cyber の WP2Shell 記事](https://www.slcyber.io/research/exploit-brokers-pay-500000-for-a-wordpress-rce-i-found-one-with-gpt5-6/#the-story-of-wp2shell)、[取り込んだ記事系原文](../../../history/knowledge/imported/wp2shell/PROMPT.article.template.txt)。出力契約、trust 境界、Programme Boundary、Lab は Harness が別節として渡す。記事にない入口索引と公開履歴カタログは v8 の探索には渡さない。v7からの変更は最低時間と提供する依存sourceの位置だけ。
 
 ## 1. 実行する英文の全文
 

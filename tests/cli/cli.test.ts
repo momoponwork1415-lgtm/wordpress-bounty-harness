@@ -1826,23 +1826,17 @@ describe("harness CLI vertical slice", () => {
     expect(stderr.join("\n")).toContain("cannot import research");
   });
 
-  it("keeps old objective bytes readable but rejects them for new campaigns", async () => {
-    const archived = await loadWordPressDiscoveryAsset("wp2shell-bounty-v2");
-    expect(archived.digest).toBe(
-      "sha256:efeaefbd1775e2a4fd3984e19672e7e5cf8cfdbe0b16b84cededa23587b239c5",
-    );
+  it("rejects objectives that moved to history/ for new campaigns", () => {
     const base = {
       schemaVersion: 1 as const,
       programmeBoundary: { version: "v1", text: "Synthetic" },
       wordpressVersion: "6.8",
       lab: { siteTitle: "Synthetic", initialPosts: [], customerRole: false },
     };
-    expect(
-      wordpressCampaignConfigSchema.safeParse({
-        ...base,
-        promptId: "wp2shell-bounty-v2",
-      }).success,
-    ).toBe(false);
+    for (const promptId of ["wp2shell-bounty-v2", "wp2shell-bounty-v22-wide"])
+      expect(
+        wordpressCampaignConfigSchema.safeParse({ ...base, promptId }).success,
+      ).toBe(false);
   });
 
   it("includes the frozen core path in the discovery Lab context", async () => {
@@ -3042,7 +3036,7 @@ describe("harness CLI vertical slice", () => {
       promptId: "wp2shell-bounty-v26-wide",
       runWallTimeMinutes: 120,
     });
-    // Deep was retired on 2026-11-05 (ADR 0039 addendum); v11 stays archived.
+    // Deep was retired on 2026-11-05 (ADR 0039 addendum).
     const retired = wordpressCampaignConfigSchema.safeParse({
       ...base,
       discovery: deep,
@@ -3057,15 +3051,14 @@ describe("harness CLI vertical slice", () => {
       wordpressCampaignConfigSchema.parse({
         ...base,
         discovery: wide,
-        promptId: "wp2shell-bounty-v22-wide",
         runWallTimeMinutes: 20,
       }).runWallTimeMinutes,
     ).toBe(20);
-    // An archived version cannot be named (ADR 0039 addendum 21:
-    // v21-wide retired on 2026-11-02).
+    // A version moved to history/ cannot be named (2026-11-05).
     for (const archived of [
       "wp2shell-bounty-v15-wide",
       "wp2shell-bounty-v21-wide",
+      "wp2shell-bounty-v22-wide",
     ])
       expect(() =>
         wordpressCampaignConfigSchema.parse({
@@ -4112,7 +4105,7 @@ describe("harness CLI vertical slice", () => {
         refusalSession: true,
         zeroFindings: true,
         config: {
-          promptId: "wp2shell-bounty-v22-wide",
+          promptId: "wp2shell-bounty-v26-wide",
           discovery: { lab: "none", mode: "wide" },
         },
       });
@@ -4217,19 +4210,13 @@ describe("harness CLI vertical slice", () => {
         );
         expect(transportRuns).toHaveLength(1);
       } else {
-        expect(resumed.code).toBe(0);
-        expect(transportRuns).toHaveLength(2);
-        expect(transportRuns[1]!.prompt).toBe(transportRuns[0]!.prompt);
-        expect(transportRuns[1]!.prompt).toContain(
-          "The independent judge decides runtime confirmation.",
+        // Trials that recorded no version used trust-boundary-v1, which moved
+        // to history/ on 2026-11-05.
+        expect(resumed.code).toBe(3);
+        expect(resumed.stderr).toBe(
+          "not resumable: prompt-version-differs (trust-boundary-v1 is not in the trust-boundary registry)",
         );
-        const starts = ledger()
-          .read({ campaignId: campaign, type: "discovery-run-started" })
-          .map(({ event }) => event);
-        expect(starts.at(-1)).toMatchObject({
-          resumesRun: historicalRunId,
-          configuration: { trustBoundaryVersion: "trust-boundary-v1" },
-        });
+        expect(transportRuns).toHaveLength(1);
       }
     },
   );
@@ -4317,13 +4304,13 @@ describe("harness CLI vertical slice", () => {
     expect(transportRuns).toHaveLength(2);
   });
 
-  it("resumes with the objective the Trial recorded after the campaign moves to another prompt version, and refuses one the registry lacks (#548)", async () => {
+  it("resumes with the objective the Trial recorded after the campaign configuration changes, and refuses one the registry lacks (#548)", async () => {
     const { run, configPath, transportRuns, ledger } = await harness({
       refuseOnCalls: [1],
       refusalSession: true,
       zeroFindings: true,
       config: {
-        promptId: "wp2shell-bounty-v22-wide",
+        promptId: "wp2shell-bounty-v26-wide",
         discovery: { lab: "none", mode: "wide", maxChildren: 3 },
       },
     });
@@ -4331,9 +4318,8 @@ describe("harness CLI vertical slice", () => {
     const command = ["--campaign", campaign, "--config", configPath];
     expect((await run("campaign", "run", "--all", ...command)).code).toBe(0);
     const first = transportRuns[0]!;
-    // Between the segments the campaign moves to the current objective and 6 children.
+    // Between the segments the campaign moves to 6 children.
     const written = JSON.parse(await readFile(configPath, "utf8"));
-    written.promptId = "wp2shell-bounty-v26-wide";
     written.discovery = { lab: "none", mode: "wide", maxChildren: 6 };
     await writeFile(configPath, JSON.stringify(written));
 
@@ -4355,16 +4341,16 @@ describe("harness CLI vertical slice", () => {
     const original = starts[0];
     if (original?.type !== "discovery-run-started")
       throw new Error("Missing recorded run");
-    const v22 = await loadWordPressDiscoveryAsset("wp2shell-bounty-v22-wide");
+    const v26 = await loadWordPressDiscoveryAsset("wp2shell-bounty-v26-wide");
     expect(original.configuration).toMatchObject({
-      promptVariant: "wp2shell-bounty-v22-wide",
-      promptDigest: v22.digest,
+      promptVariant: "wp2shell-bounty-v26-wide",
+      promptDigest: v26.digest,
     });
     expect(starts[1]).toMatchObject({
       resumesRun: first.runId,
       configuration: {
-        promptVariant: "wp2shell-bounty-v22-wide",
-        promptDigest: v22.digest,
+        promptVariant: "wp2shell-bounty-v26-wide",
+        promptDigest: v26.digest,
         maxChildren: 3,
       },
     });

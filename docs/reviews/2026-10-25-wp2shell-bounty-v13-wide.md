@@ -92,7 +92,7 @@ Stop when the registry shows that the entry points of every sink have been worke
 - 子の数とツール呼び出しの分布（80 回の段落を外し、交代の段落を足した影響）、runtime（Codex / Claude）ごとに分ける
 - 同じ子への追依頼の数（交代の段落の影響。PR #535 の読取器で数える）
 
-本文の数値文を外しても、Harness が強制する値は変わらない。子の上限、最低時間、wall は C1（ADR 0039 追記 3）から設定値で、同じ値を生成節 `## Run parameters` が Root に伝える。台帳の `configuration` には `sectionDigests` と `inputDigest` が残るので、v12-wide と同じ設定で走った Trial は、節の digest の違いだけで分けられる。数字がまとまった時点で [docs/knowledge/experiments.md](../knowledge/experiments.md) へ行を足す。この PR では足さない。
+本文の数値文を外しても、Harness が強制する値は変わらない。子の上限、最低時間、wall は C1（ADR 0039 追記 3）から設定値で、同じ値を生成節 `## Run parameters` が Root に伝える。台帳の `configuration` には `sectionDigests` と `inputDigest` が残るので、v12-wide と同じ設定で走った Trial は、節の digest の違いだけで分けられる。数字がまとまった時点で [docs/knowledge/experiments.md](../../history/knowledge/experiments.md) へ行を足す。この PR では足さない。
 
 ## 5. 戻し方
 

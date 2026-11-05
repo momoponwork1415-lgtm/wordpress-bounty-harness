@@ -2,7 +2,7 @@
 
 ## 問いと位置づけ
 
-[DEVELOPMENT §5](../DEVELOPMENT.md)（2026-10-26、PR #597）のとおり、探索 Lab の採否は本番で 1 arm を回して決める。開発セットの arm（[2026-10-26-exploration-lab-arm-v14.md](2026-10-26-exploration-lab-arm-v14.md)）では Lab が一度も使われなかった。原因は、`wide` の子に Lab の節が渡っていなかったことで（Issue #599）、所有者は「wide の目的文に 1 文足す」を選んだ。それが `wp2shell-bounty-v15-wide`（[docs/reviews/2026-10-26-wp2shell-bounty-v15-wide.md](../reviews/2026-10-26-wp2shell-bounty-v15-wide.md)）で、本番で v14（Lab なし）と並べて回した。
+[DEVELOPMENT §5](../../docs/DEVELOPMENT.md)（2026-10-26、PR #597）のとおり、探索 Lab の採否は本番で 1 arm を回して決める。開発セットの arm（[2026-10-26-exploration-lab-arm-v14.md](2026-10-26-exploration-lab-arm-v14.md)）では Lab が一度も使われなかった。原因は、`wide` の子に Lab の節が渡っていなかったことで（Issue #599）、所有者は「wide の目的文に 1 文足す」を選んだ。それが `wp2shell-bounty-v15-wide`（[docs/reviews/2026-10-26-wp2shell-bounty-v15-wide.md](../../docs/reviews/2026-10-26-wp2shell-bounty-v15-wide.md)）で、本番で v14（Lab なし）と並べて回した。
 
 ## 条件
 

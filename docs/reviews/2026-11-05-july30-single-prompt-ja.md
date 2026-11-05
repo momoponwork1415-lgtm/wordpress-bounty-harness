@@ -2,7 +2,7 @@
 
 2026-11-05 に比較候補として作成した記録。後に所有者が v26-wide を主経路に採用した（ADR 0051 の 2026-11-05 追記）。
 
-- [7月30日の実行時原文](../knowledge/imported/08-whitebox/DISCOVERY-2026-07-30-translatepress-original-run.md) は、`/home/dev/bug-bountgy-harness/wordpress-plugin/artifacts/direct-discovery/translatepress-3.2.6-sol-ultra-20260730a/agent-workspace/DISCOVERY.md` をバイト単位で保存したもの。SHA-256: `2b794adadd14aca7b34a26425a5d12de8367c1c14b4538894da7cf19aa4f3a75`。元の artifact は Git 履歴に含まれないため、commit ID ではなく、このパスと digest で原本を特定する。
+- [7月30日の実行時原文](../../history/knowledge/imported/08-whitebox/DISCOVERY-2026-07-30-translatepress-original-run.md) は、`/home/dev/bug-bountgy-harness/wordpress-plugin/artifacts/direct-discovery/translatepress-3.2.6-sol-ultra-20260730a/agent-workspace/DISCOVERY.md` をバイト単位で保存したもの。SHA-256: `2b794adadd14aca7b34a26425a5d12de8367c1c14b4538894da7cf19aa4f3a75`。元の artifact は Git 履歴に含まれないため、commit ID ではなく、このパスと digest で原本を特定する。
 - [現行向け候補](../../src/profiles/wordpress/prompts/wp2shell-bounty-v26-wide.md) は別の版と digest を持つ。以下はその全文の日本語訳である。
 - 原文の「少なくとも1件ある」は探索努力のための作業仮定として残した。証拠ではなく、候補の捏造を禁じる文も残した。
 - 原文のクラス中立の探索、Root の動的な担当変更、各ラウンドの独立反証、失敗した経路の記録、次のラウンドへの投入を残した。最初の候補で止めない指示は、同じ実行の途中で加えられた人間の続行指示を反映した。
