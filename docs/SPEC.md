@@ -96,7 +96,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 - 以前の調査（ADR 0048）: リポジトリの wide 方針は `discovery.priorResearch: same-target` を指定する。この設定のとき、同じ plugin の別 Snapshot の最新 Trial が封じた `recon-map.md` と `lab-setup.md` を `/workspace/research/prior/` に置く。tsv と route file は渡さない。2026-11-02（ADR 0049 決定 D）から、あれば `REGISTRY.md`、`assumptions/*.md`、`walks/*.md` と、その Trial の `lookupLog` から写した `stores.json` も置き、全部で 2 MiB・64 file までとし、`research import --from <state dir>` で別の台帳の終了 Trial（`research-imported`）も同じ候補にする。
 - 同時実行: `resources.maxConcurrentTargets`（1〜10）と runtime 別の上限、`memoryBudgetMiB` で Harness が決める。live の上書きは `continuous concurrency`。provider の上限は backoff して同じ campaign で再開する。
 - 記録する項目（run ごと）: trialId / trialOrdinal、Root と子の役割、要求 model ID と effort、CLI の版と同梱カタログの digest、認証方式、各 agent の usage（provider が返さない項目は `unavailable`）、読んだ file と command の件数の下限、prompt と source の digest、wall と停止理由。診断 artifact は Private Evidence に置く。
-- 本番 model: Daybreak Blue 対応の `gpt-6-sol` 系、effort は元 run と同じ `ultra`（Root と子）。Claude の Root は `claude-opus-5-5` の `max`。暗黙に別 model へ切り替えない（所有者決定 2026-11-05 夜、ADR 0051 追記）。
+- 本番 model: Daybreak Blue 対応の `gpt-6-sol` 系、effort は元 run と同じ `ultra`（Root と子）。Claude は Root `claude-opus-5-5`・子 `claude-sonnet-5-5` の `xhigh`（所有者決定 2026-11-06。Claude runtime は Root と子の effort が同じでないと run を受け付けない）。暗黙に別 model へ切り替えない（所有者決定 2026-11-05 夜、ADR 0051 追記）。
 
 ## 7. Verificationの仕様
 
