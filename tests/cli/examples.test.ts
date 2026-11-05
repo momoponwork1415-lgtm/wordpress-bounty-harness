@@ -44,6 +44,9 @@ it("starts the checked-in wide v26 campaign with one concurrent target on the La
     promptId: "wp2shell-bounty-v26-wide",
     runWallTimeMinutes: 120,
   });
+  expect((await readWordPressCampaignPolicy(config)).promptVariant).toBe(
+    config.promptId,
+  );
   expect(config.resources.maxConcurrentTargets).toBe(1);
   // #741: no pin; select takes the Lab image's version and checks it against the latest stable.
   expect(config.wordpressVersion).toBeUndefined();
@@ -130,7 +133,7 @@ it("rejects every removed partitioned campaign setting at parse time", () => {
   }
 });
 
-it("runs the wide example as a 20-minute v22-wide Trial on the production selection policy (ADR 0039)", async () => {
+it("parses the historical 20-minute v22-wide example with the current selection policy (ADR 0039)", async () => {
   const config = wordpressCampaignConfigSchema.parse(
     JSON.parse(
       await readFile(
@@ -155,10 +158,6 @@ it("runs the wide example as a 20-minute v22-wide Trial on the production select
     promptId: "wp2shell-bounty-v22-wide",
     runWallTimeMinutes: 20,
   });
-  // The production selection policy names the deep objective; both modes select from it.
-  expect((await readWordPressCampaignPolicy(config)).promptVariant).toBe(
-    "wp2shell-bounty-v11",
-  );
 });
 
 it("runs the v26 wide example with an attached Lab for at least 60 active minutes", async () => {
