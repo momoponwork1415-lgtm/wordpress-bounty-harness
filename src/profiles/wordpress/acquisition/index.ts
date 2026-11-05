@@ -22,7 +22,6 @@ export {
   requiredPluginSlugs,
 } from "./plugin-dependency-source.js";
 export {
-  acquirePinnedWordPressOrgSvnSource,
   capturedWordPressOrgSvnPinSchema,
   openCapturedWordPressOrgSvnSource,
 } from "./pinned-svn-source.js";

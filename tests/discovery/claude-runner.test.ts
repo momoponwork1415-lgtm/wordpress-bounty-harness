@@ -7,7 +7,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   CLAUDE_RUNNER_DENIALS,
   CLAUDE_RUNNER_SOURCE,
-  claudeRunnerChildLimitDenial,
 } from "../../src/discovery/claude-runner.js";
 
 const run = promisify(execFile);
@@ -147,11 +146,8 @@ describe("Claude runner", () => {
     expect(result?.decisions).toEqual([
       "allow",
       "allow",
-      claudeRunnerChildLimitDenial(2),
-    ]);
-    expect(claudeRunnerChildLimitDenial(2)).toBe(
       "At most 2 children can run at once in this Trial.",
-    );
+    ]);
   });
 
   it("refuses to start without a positive maxChildren", async () => {

@@ -110,21 +110,6 @@ async function assessCorrection(options: RestoreOptions) {
   };
 }
 
-/** Read-only check against the exact private Finding and the current rule. */
-export async function inspectParkedWordPressFinding(options: RestoreOptions) {
-  const assessed = await assessCorrection(options);
-  return assessed.status === "already-restored"
-    ? { status: "already-restored" as const }
-    : {
-        status: "ready" as const,
-        preconditionClass: assessed.preconditionClass,
-        snapshotDigest: assessed.parked.snapshotDigest,
-        parkedIdentity: assessed.parked.identity,
-        recordedIdentity: assessed.recordedIdentity,
-        partialRecord: assessed.existing !== undefined,
-      };
-}
-
 /**
  * Restore an admission park caused by the retired configuration gate or by
  * the agent's declared precondition (#613). The old event and Private

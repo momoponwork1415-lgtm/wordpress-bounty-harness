@@ -123,11 +123,9 @@ export const wordpressHostConfigSchema = z.strictObject({
     })
     .optional(),
   wordfenceProgrammeTranscriptionPath: absolutePath,
-  scopePolicyPath: absolutePath.optional(),
   wordfenceHistory: z
     .strictObject({ databasePath: absolutePath, statePath: absolutePath })
     .optional(),
-  /** Earlier generations' started / ambiguous slugs (D2); `continuous run` requires it. */
 });
 export type WordPressHostConfig = z.infer<typeof wordpressHostConfigSchema>;
 
@@ -684,9 +682,7 @@ export async function createWordPressHostProfile(options: {
     boundaries,
     selectionBoundaries,
     attachments: new ProviderAttachmentStore(directories.attachments),
-    scopePolicy: await loadWordpressScopePolicy(
-      ...(host.scopePolicyPath === undefined ? [] : [host.scopePolicyPath]),
-    ),
+    scopePolicy: await loadWordpressScopePolicy(),
     ...(host.wordfenceHistory === undefined
       ? {}
       : { wordfenceHistory: host.wordfenceHistory }),

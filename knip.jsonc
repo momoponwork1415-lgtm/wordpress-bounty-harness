@@ -5,6 +5,8 @@
     "src/cli/main.ts!",
     // copy-assets.mjs ships this as a separate executable, not a CLI import.
     "src/lab/recorder/cli.ts!",
+    // container-startup.ts launches the copied control/cli.js inside the Lab.
+    "src/lab/control/cli.ts!",
     // Launched by its compiled filename rather than by an import.
     "src/discovery/provider-credential-proxy-cli.ts!",
     // Operator-invoked utilities are independent entry points.

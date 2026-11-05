@@ -124,18 +124,3 @@ export function wordPressLeadSignature(lead: WordPressLead): string {
     ].sort(),
   });
 }
-
-const storedLeadSchema = wordpressLeadClaimSchema.extend({
-  leadId: digest,
-  discoveryRunId: id,
-  trialId: id,
-  snapshotDigest: digest,
-  recipeRef: z.strictObject({ kind: z.literal("provider-report"), digest }),
-});
-
-export function readWordPressLead(value: unknown): WordPressLead {
-  const { leadId, ...body } = storedLeadSchema.parse(value);
-  if (canonicalDigest(body) !== leadId)
-    throw new Error("Lead identity does not match its content");
-  return { ...body, leadId };
-}
