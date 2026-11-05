@@ -4,7 +4,7 @@ DEVELOPMENT §5 の「探索に触る PR は数字を貼る」（分母は本番
 
 ## いつ使うか
 
-- agent 入力（prompt、skill、Harness 生成の節）を変える PR → 本番の同じ選定帯で旧版と新版を交互に回し、Trial 数をそろえる。採否は DEVELOPMENT §5 の 6 段（本番の読み替え）。
+- agent 入力（prompt、skill、Harness 生成の節）を変える PR → 変更版を本番対象で回し、完了・停止理由、Finding / Lead、Lab の利用、時間と使用量を記録する。旧版・新版の交互比較や旧 6 段の採否基準は求めない（ADR 0051 追記）。
 - 本番で Finding は出るのに人間の `match` が 1 週間 0 件 → 開発セット 6 case を各 3 run（18 Trial）回し、探索と検証を切り分ける。
 - 配線・runtime・選定を変える PR → 異なる slug 3 件の初回 Trial（runner が回すのと同じ経路）。
 - 選定の上限 `maximumActiveInstallations`（ADR 0037 の 2026-11-02 追記 7）→ 上限ありの方針で選んだ 1 万〜100 万帯の Trial の F/Trial（`finding-recorded` / Trial。`finding-parked` は別に数える）、L/Trial（`lead-recorded` / Trial）、Lab 発火 / Codex 時間（ADR 0045）を、2026-11-01→02 の ≥1M 帯の Trial（prod-v21、59 Trial、F 2 / L 122）と並べる。対になっていないので分布として並べ、中央値と範囲を書く。腕は台帳の `selection-batch-bound.policyDigest`（上限の有無で方針 digest が変わる）で分ける。
@@ -32,7 +32,7 @@ case ごとに分ける。1 case = `state/`（台帳と Private Evidence）と `
 
 - `host.json`: `examples/translatepress-3.3.1/host.example.json` を元に、`workDirectory` を case ごとに分け、`images.*` を全部 digest で指定する。WordPress image は `pdo_mysql` 入りのもの（無いと `incomplete(precondition)`）。
 - `selection.json`: manual 形。`candidateSlugs` と `pinnedVersions` で版を固定し、`promptVariant` を既定 prompt にする。
-- `campaign.json`: `promptId` は `wp2shell-bounty-v11`、`runWallTimeMinutes` は 120。`lab.scenarioId` は #353 で削除したので書かない。最低60分の能動的探索を同じTrial内で行う。入口索引は渡さない。
+- `campaign.json`: 現行の手動探索は `promptId: wp2shell-bounty-v26-wide`、`discovery.mode: wide`、`discovery.lab: attached`、`minimumActiveMinutes: 60`、`runWallTimeMinutes: 120` を指定する。`lab.scenarioId` は #353 で削除したので書かない。入口索引は渡さない。
 - 時刻: ホスト（WSL2）の時計は遅れることがある。開始前に `date -u` と外部の時刻を比べる。ずれていれば記録に注記し、wall は台帳の `wallTimeMs` で読む。
 
 ## 3. 実行
@@ -67,11 +67,11 @@ PR の「測った数字」に貼る列は固定する。
 - 子の Finding が Root と独立に保存されたかを 1 行書く（ADR 0029 の配線確認）。
 - `runtime-confirmed` が出ても、公開記録との経路一致は人間の照合。表には `unassessed` と書く。
 
-## 5b. 探索スキルの腕（ADR 0043）
+## 5b. 過去の探索スキルの計測記録（ADR 0043）
 
-`discovery.skills` を書いた campaign は、目的文も契約も変えずに、名指しした `SKILL.md` を sandbox の CLI home に置く。台帳の `discovery-run-started.configuration.skills [{id, digest}]` で腕を分ける。
+以下は当時の実験設計と結果を読むための記録であり、現行 v26-wide の採否手順ではない。`discovery.skills` を書いた campaign は、目的文も契約も変えずに、名指しした `SKILL.md` を sandbox の CLI home に置く。台帳の `discovery-run-started.configuration.skills [{id, digest}]` で実験時の設定を見分ける。
 
-- 比べる相手は同じ mode・同じ選定帯で `discovery.skills` を書かない Trial。campaign を 2 つ用意し、対象を交互に回して Trial 数をそろえる。
+- 当時の比較対象は同じ mode・同じ選定帯で `discovery.skills` を書かない Trial とし、campaign を 2 つ用意して対象を交互に回す計画だった。現行の必須手順にはしない。
 - 数えるものは上の表と同じ（Finding / Trial、Lead / Trial、段 1b の成立、Lab で人間が `match` を記録した数、読んだ file 数、token、時間）。加えて research artifact を開いて `recon-map.md` の有無と大きさ、Corrections 節の行数を書く。`wbh-tools-v1` の腕では `tools/hooks.tsv`、`tools/sinks.tsv`、`tools/README.md` の有無と行数も書く。中身は読まない。
 - スキルは 1 本ずつ足す。`wbh-tools-v1` は `wbh-recon-v1` の上に乗せて測る（腕: recon のみ / recon + tools）。地図が無い Trial で tools だけを測らない。
 - `wbh-recon-v2`（#752）は v1 の手順 8 に「子は親の履歴を引き継がずに始める」の 1 文を足したもの。腕を分けるときは rollout の子の最初の `token_count` の入力（v1 の既定では約 40,000）と、Trial の入力 token、読んだ file / Trial（子が読み直す分）を並べる。
@@ -85,9 +85,11 @@ PR の「測った数字」に貼る列は固定する。
 - bench h33（ADR 0049、#793 の PR 1）は h32 と同じ 6 対象（37 record）を、第 1 Trial から Lab を付けて（`discovery.lab` の既定 `attached`、観測器 `find` / `sql`）1 Trial ずつ回す。合格線は Finding の数が h32 を上回り、Lead 止まりの record が減ること。分母は Lab 発火 / Codex 時間（ADR 0045）。台帳の `labObserved.lookups` / `refusedLookups` と `exploration-lab.json` の `lookupLog` の件数（`find` / `sql` 別、`answered` / `refused` 別）を Trial ごとに書く。答えの中身は読まない。
 - bench h34（ADR 0049 追記 1、#793 の PR 2）は h33 と同じ 6 対象（37 record）を、`trace`（1 リクエストの plugin 内の関数呼び出し列）を足した Lab image で 1 Trial ずつ回す。先に image を再 build して `images.wordpress` を再 pin する（README の手順）。合格線は HTML 書き換え・変換系の record（h31 で未到達だった 6 件の形）への到達が増え、Finding の数が h33 を下回らないこと。分母は Lab 発火 / Codex 時間（ADR 0045）。`lookupLog` の件数は `find` / `sql` / `trace` 別に書き、`trace` は `answered` / `unavailable` / `refused` 別に数える。答えの中身は読まない。
 - `wp2shell-bounty-v22-wide`（ADR 0049 決定 E、ADR 0039 追記 21）は v21-wide から hooks.tsv の行数で閉じる規則を消しただけで、語を足していない。本番の v22-wide の Trial を v21-wide の Trial（2026-11-01〜02）と並べ、Root の wall（Root とその再開区間の `discovery-run-finished.wallTimeMs` の合計）、Trial あたりの lookup 数（`labObserved.lookups` と `refusedLookups`）、Finding / Trial と Lead / Trial（`finding-recorded`、`lead-recorded`。`finding-parked` は別に数える）、Lab 発火 / Codex 時間（ADR 0045）を比べる。対になっていないので、同じ選定帯の分布として並べ、中央値と範囲を書く。bench は組まない。
-- 既定を有りに切り替えるかは DEVELOPMENT 第 5 節の 6 段で決める。形だけの PR（#682 の PR 1）は数字を持たず、所有者が探索の再開を指示した後に測る。
+- 当時は既定を有りに切り替えるかを DEVELOPMENT 第 5 節の 6 段で決める計画だった。形だけの PR（#682 の PR 1）は数字を持たず、所有者が探索の再開を指示した後に測る予定だった。
 
-## 5c. Lead を入力にした第 2 Trial（ADR 0044）
+## 5c. 過去の Lead 後続 Trial の計測記録（ADR 0044）
+
+以下は当時の実験設計と結果を読むための記録である。現行の v26-wide 方針は `followUp: none` で、Lead 件数による自動の第 2 Trial を起動しない。
 
 `discovery.priorLeads.targets` を書いた campaign は、名指しした Snapshot だけを対象にし（選定は回さない）、各 Trial に `## Prior leads` 節と探索 Lab（`discovery.lab: attached` が必須）を付ける。台帳の `discovery-run-started.configuration.priorLeads` の有無で第 2 Trial を見分ける。中身は代表の数 `representatives`、代表の `leadIds`、`representativesDigest`、隙間の文を伏せた数 `gapWithheld`、節の `sectionDigest`。
 
@@ -102,7 +104,7 @@ PR の「測った数字」に貼る列は固定する。
 
 - 分母は Codex 時間。後続 Trial の Root とその再開区間、子の `discovery-run-finished.wallTimeMs` を合計して時間に直す。
 - 分子は後続 Trial の `finding-recorded`（`finding-parked` は別に数える）。加えて段 1b（wbh-source-check）を通った数と、人間の観測で `match` になった数を並べる。
-- 比べる相手は leads2（2026-11-01、名指しの第 2 Trial 14 本で Finding 4）。同じ分母に直し、「Finding / Codex 時間」で上回るかを見る。合格線は Issue #793 の表の 3 行目。
+- 当時は leads2（2026-11-01、名指しの第 2 Trial 14 本で Finding 4）を比較対象にし、同じ分母の「Finding / Codex 時間」で上回るかを Issue #793 の表の 3 行目の合格線にしていた。現行の採否には使わない。
 - 組めなかったものは `follow-up-scheduled` があって `discovery-run-started` の無い Snapshot で、理由は同じ campaign の `target-skipped`（reason `follow-up-refused`、`reasonDetail` に ADR 0044 の拒否 code）にある。`follow-up-scheduled.leadCount` が 8 を超えた Trial は、代表が台帳順の先頭 8 件に切れているので、その件数も書く。
 - 第 1 Trial と後続 Trial はどちらも Lab 付き（`discovery.lab` の既定 `attached`）なので、違いは Lead 入力と前回の研究 file だけである。
 
@@ -125,10 +127,9 @@ for (const { event_json } of rows) {
 `discovery.priorResearch: same-target` の campaign で、同じ plugin の別の版の Trial が封じた研究 file（地図、Lab の通常利用の記録、REGISTRY、仮定の表、歩き、保存先の表 `stores.json`）を受けた Trial は、`discovery-run-started.configuration.priorResearch` に `sourceRunId` があるもので見分ける。`{ none: ... }` のものは有効だったが渡せなかった Trial、項目が無いものは無効の campaign である。`sourceState` があれば、元の Trial は `research import` で別の台帳（bench）から取り込んだものである。
 
 - 分母は 2 つ並べる。Trial 数と Codex 時間（ADR 0045）。Root の wall は、その Trial の Root（`runKind: explore`）とその再開区間の `discovery-run-finished.wallTimeMs` の合計。
-- 主な数字: **Root の wall の中央値**と **F/Trial**（`finding-recorded` の数 / Trial 数。`finding-parked` は別に数える）を、研究ありの Trial と研究なしの Trial で並べる。研究なしは、同じ選定帯で `priorResearch` が `{ none: "no-earlier-trial" }` か項目なしの Trial。加えて段 1b（wbh-source-check）を通った数と、人間の観測で `match` になった数を並べる。
-- 同じ Snapshot に研究あり / なしの対は作らない（所有者 2026-10-31「同じ版は 1 回」）。比べるのは別の plugin・別の版の Trial の分布であり、対でないことを書く。
+- 主な数字: **Root の wall の中央値**と **F/Trial**（`finding-recorded` の数 / Trial 数。`finding-parked` は別に数える）を記録する。研究 file を渡した Trial と渡せなかった Trial の内訳、段 1b（wbh-source-check）を通った数、人間の観測で `match` になった数も記録する。旧記録を並べる場合は、同じ Snapshot の対ではなく、別の plugin・別の版の分布であることを明記する。
 - 渡した file の種類で分けるときは、`configuration.priorResearch.files[].name` を見る（`stores.json` があるのは元 Trial に Lab の記録があったもの）。`withheld` があれば、総量の上限で外した file の名前が入っている。
-- 合格線は Issue #793 の表の 4 行目: Root 時間が短くなり、F/Trial が落ちないこと。
+- Issue #793 の表の 4 行目にある合格線は、当時の比較案の記録であり、現行の採否には使わない。
 
 数え方の例:
 

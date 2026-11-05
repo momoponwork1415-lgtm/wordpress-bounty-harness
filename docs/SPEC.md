@@ -196,9 +196,9 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 
 ## 10. 評価
 
-開発セットの gate と判定器の負の対照は役目を終えた。本番が bench である（所有者決定 2026-10-26）。agent 入力を変える比較 PR は本番の同じ選定帯で旧版と新版を交互に回し、[DEVELOPMENT.md](DEVELOPMENT.md) 第 5 節の 6 段で採否を決める。ただし所有者が採用を決めた v26-wide の主経路化には v22-wide との交互比較を求めない（ADR 0051 の 2026-11-05 追記）。開発セットに戻すのは、本番で対象範囲内の Finding は出るのに人間の観測の `match` が 1 週間 0 件のときだけ。既知の公開事例を再発見する benchmark は、現行の方法が 1 回の Trial で既知の型を外したときに、その型を名指しして回す。手順は [docs/agents/measurement.md](agents/measurement.md)。
+開発セットの gate と判定器の負の対照は役目を終えた。本番が bench である（所有者決定 2026-10-26）。現行の探索方式を本番対象で運転し、完了・停止理由、Finding / Lead、Lab の利用、人間の観測を記録する。旧版・新版を交互に回す比較と、旧 6 段の採否基準は必須にしない（ADR 0051 の 2026-11-05 追記）。開発セットに戻すのは、本番で対象範囲内の Finding は出るのに人間の観測の `match` が 1 週間 0 件のときだけ。既知の公開事例を再発見する benchmark は、現行の方法が 1 回の Trial で既知の型を外したときに、その型を名指しして回す。手順は [docs/agents/measurement.md](agents/measurement.md)。
 
-v25-wide / `checked/v1` は実験用の比較方式であり、採否の本番計測はまだ完了していない。v24-wide は起動前に archived とし、本文と digest を保存する。pending 候補と独立点検の件数は診断値として分け、Finding 数や人間の `match` と同一視しない（ADR 0050 追記）。
+v25-wide / `checked/v1` は実験用の探索・昇格方式であり、本番の既定には採用していない。v24-wide は起動前に archived とし、本文と digest を保存する。pending 候補と独立点検の件数は診断値として分け、Finding 数や人間の `match` と同一視しない（ADR 0050 追記）。
 
 ## 11. 用語
 

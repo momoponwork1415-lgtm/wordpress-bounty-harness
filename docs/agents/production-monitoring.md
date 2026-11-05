@@ -5,60 +5,56 @@
 ## 1. 前提を読む
 
 1. `AGENTS.md` の不変条件と「Harness と AI の責務」。
-2. `docs/OPERATIONS.md` 第 1 節「継続運転」（止まる理由 6 つ、`status` の読み方、停止マーカー）と「対象の自動選定」。
+2. [OPERATIONS.md](../OPERATIONS.md) 第 2 節「ランナー」と第 4 節「1 件の手動 Trial」。
 3. `docs/agents/ledger-reading.md`（台帳の読み方）。
 4. `docs/adr/0036-operator-resume-after-provider-refusal.md`（`campaign resume` の条件）。
 
-## 2. 今回の起動条件（2026-10-19 01:04 JST）
+## 2. 実際の起動条件を確認する
 
-| 項目 | 値 |
-| --- | --- |
-| checkout | `/home/dev/wordpress-bounty-harness-prod7`（origin/main 8e77ea5、build 済み） |
-| state | `~/.local/state/wordpress-bounty-harness` |
-| host 設定 | `~/.config/wordpress-bounty-harness/host-production-v5.json` |
-| campaign 設定 | `~/.config/wordpress-bounty-harness/campaign-production-4x.json`（repo の `campaign.json` と同じ内容で `resources` だけ 4 / 4 / 43008 MiB） |
-| 選定方針 | `~/.config/wordpress-bounty-harness/selection-production-2026-10-19.json`（repo の `selection.json` と同じ内容で `maximumHistoryAgeDays` だけ 14。PR #383） |
-| prompt | `wp2shell-bounty-v10`、Lab なし（`discovery.lab: none`）、wall 120 分、Root ＋ 子最大 4 |
-| 並列 | 対象 4 件まで同時 |
-| mirror | 2026-10-14T01:39Z 時点。更新は cron 19:10 JST（10:10 UTC。crontab はホストの Asia/Tokyo で動く）、鍵は `~/.config/wordfence/env`（中身を読まない、表示しない） |
-| 標準出力 | `~/.local/state/wordpress-bounty-harness/continuous-20261019.out` |
+checkout、`--state`、`--host`、campaign 設定、選定方針、接頭辞、出力ログを、稼働中のプロセスの引数と起動記録から確認する。Git 内の [campaign.json](../../src/profiles/wordpress/policy/campaign.json) は新規設定の基準であり、稼働中の runner が読んでいる Git 外の設定を置き換えない。認証情報ファイルの中身を表示しない。
 
-起動時に、前の方針で凍結した未消費の batch（または memo の campaign の batch）が今の方針 digest と合わなければ、runner は `selection-batch-discarded`（reason `policy-changed`）を台帳に書き、ログに `selection-batch-discarded batch=<id>` を 1 行出して、待たずに新しい選定へ進む（#302）。破棄した batch の対象は Trial を始めていないので、次の選定でまた選ばれうる。
+2026-11-05 時点の引継ぎ情報: 直近の起動記録では checkout が `/home/dev/worktree/prod38`、本番 state が `/home/dev/.local/state/wordpress-bounty-harness`、Git 外 host 設定が `/home/dev/.config/wordpress-bounty-harness/host-production-v12-latest-core-xdebug-20261102.json`、接頭辞が `prod-c22` だった。campaign は `prod-c22-20261104-9`。Git 外 campaign 設定は `campaign-production-claude-opus-wide-3-skills-v22-lab-20261104.json` で、v22-wide、Lab 付き、Claude のみ、探索スキル 4 本、`priorResearch: same-target` である。PID ファイルのプロセスは存在せず、memo の `running` は古い。終了 event のない Trial が 3 件ある。この段落は状態の写しであり、次回の監視では必ず再確認する。リポジトリの新しい wide 方針は v26-wide だが、本番設定は自動的に切り替わらない。
 
 ## 3. 観測する
 
 状態は必ず `--host` 付きで見る。
 
 ```bash
-cd /home/dev/wordpress-bounty-harness-prod7 && node dist/cli/main.js --state ~/.local/state/wordpress-bounty-harness --host ~/.config/wordpress-bounty-harness/host-production-v5.json continuous status
+node dist/cli/main.js --state <確認した state> --host <確認した host 設定> continuous status
 ```
 
-台帳は `~/.local/state/wordpress-bounty-harness/ledger.sqlite` の `ledger_events`（`event_type`、`campaign_id`、`finding_id`、`event_json`）。この host に `sqlite3` CLI は無いので `node -e` と `node:sqlite` の `DatabaseSync` を読み取り専用で使う。
+`continuous status` は PID の生存も照合し、memo が `running` でも PID が死んでいれば `stale` と表示して終了コード 1 を返す。`<state>/continuous-<接頭辞>.json` と `.pid` だけで稼働中と判断しない。台帳の正本は `<state>/ledger.sqlite` の `ledger_events`。`sqlite3` CLI がない host では `node:sqlite` の `DatabaseSync` を `readOnly: true` で開く。
 
-5〜10 分おきに次を見る。
+稼働中は 5〜10 分おきに、止まっているときは状態変化の有無を次の項目で見る。
 
-1. **選定**: 選ばれた slug と版、インストール数、更新日、初回 / 版上昇の理由、除外理由の件数。選定レポートは `target-selected` の artifact digest から Private Evidence を辿る。読むのは slug・版・数字だけ。
-2. **Trial**: `discovery-run-started` に実際に記録された prompt 版と、稼働中のランナーが使う Git 外の campaign 設定を照合する。リポジトリの既定は `deep` が v11、`wide` が v26-wide（2026-11-05、ADR 0051 追記）だが、既存ランナーが自動的に切り替わるわけではない。同時に走る Root の数、Root ごとの子の数、wall、観測値（読んだ file 数、token）も見る。v21-wide と v22-wide への切り替えは 2026-11-01・02 の履歴である。
+1. **選定**: 選ばれた slug と版、インストール数、更新日、初回 / 版上昇の理由、除外理由の件数。選定レポートは `selection-batch-bound` の artifact digest から Private Evidence を辿る。読むのは slug・版・数字だけ。
+2. **Trial**: `discovery-run-started` に実際に記録された prompt 版と、稼働中のランナーが使う Git 外の campaign 設定を照合する。リポジトリの既定は `deep` が v11、`wide` が v26-wide（ADR 0051）だが、既存ランナーが自動的に切り替わるわけではない。同時に走る Root の数、Root ごとの子の数、wall、観測値（読んだ file 数、token）も見る。終了 event がない run は completed や候補 0 件に数えない。
 3. **失敗**: provider 429（`provider-limited`）、`provider-cyber-policy` の拒否、`run-failed`、schema error、停滞（終了 event が無く出力も 30 分以上止まる run。2026-10-17 は websocket 426 の後に無言で止まり wall も発火しなかった）。host の memory（`free -g`）と container 数（`docker ps --format '{{.Names}}'` の `wbh-`）。
 4. **Finding**: 件数だけ。category 別、`finding-parked` か対象範囲内か。本文、payload、path、証拠は読まない・引用しない。
-5. **runner の停止**: `stopped(<理由>)` になったら理由と直前の例外を記録する。再起動はしない。
-6. **開発セットに戻す合図**（週 1 回）: 直近 7 日の対象範囲内 Finding が 1 件以上で、`manual-observation-recorded` の `match` が 0 件なら、開発セット 6 case を回す（DEVELOPMENT 第 5 節）。Finding が 0 件なら探索側の停止理由と `incomplete` の理由を先に直す。
+5. **runner の停止**: `stale`、`stopped`、`stopping`、backoff の理由と直前の例外を記録する。再起動はしない。
+6. **開発セットに戻す合図**（週 1 回）: 直近 7 日の対象範囲内 Finding が 1 件以上で、`manual-observation-recorded` の `match` が 0 件なら、[DEVELOPMENT.md](../DEVELOPMENT.md) 第 5 節の切り分け条件を報告する。Finding が 0 件なら探索側の停止理由と `incomplete` の理由を先に直す。
 7. **検証の列**: 対象範囲内で、検証の無い Finding の group 数と、`incomplete(awaiting-human-observation)` のまま人間の観測が無い件数。滞留しても探索は絞らない（所有者決定 2026-10-26、「数は制限しない」）。数は検証の並列数と確認票の供給を増やす合図として使う。
 
 ## 4. 許す操作は 1 つ
 
-Root が `provider-cyber-policy` で止まったとき、ADR 0036 と OPERATIONS を読み、`continuous run` が同じ host で動いている間に `campaign resume` を打てるか（runner の batch 間の掃除は探索の残骸だけを消し、`campaign resume` が生きている間は `<state>/sweep-holds/<pid>` で止まる。runtime ごとの同時数に収まるか）を確かめる。文書が安全だと言うときだけ 1 回打つ。
+Root が `provider-cyber-policy` で止まったとき、ADR 0036 と OPERATIONS を読み、`continuous run` が同じ host で動いている間に `campaign resume` を打てるか（runner の batch 間の掃除は探索の残骸だけを消し、`campaign resume` が生きている間は `<state>/sweep-holds/<pid>` で止まる。runtime ごとの同時数に収まるか）を確かめる。記録済みの campaign と run を名指しし、互換のある設定を確認できたときだけ 1 回打つ。
 
 ```bash
-cd /home/dev/wordpress-bounty-harness-prod7 && node dist/cli/main.js --state ~/.local/state/wordpress-bounty-harness --host ~/.config/wordpress-bounty-harness/host-production-v5.json campaign resume --campaign <id> --run <runId> --config ~/.config/wordpress-bounty-harness/campaign-production-4x.json
+node dist/cli/main.js --state <確認した state> --host <確認した host 設定> campaign resume --campaign <id> --run <runId> --config <互換を確認した campaign 設定>
 ```
 
 判断が付かなければ打たず、command を報告に書く。
 
+停止した runner の復旧と探索方式の切り替えは監視 session の操作範囲外とし、操作者へ次の順を引き継ぐ。
+
+1. 新しい main を**別の** checkout で build し、旧 Git 外設定を残して v26 の Git 外設定を別ファイルに作る。目的文、Lab、最低時間、子の上限、`followUp`、研究引継ぎが [campaign.json](../../src/profiles/wordpress/policy/campaign.json) と一致するか確認する。
+2. 終了 event のない旧 Trial を台帳から列挙し、runtime と回収可否を確認する。2026-11-05 の `prod-c22-20261104-9` の 3 件は Claude の未終了 run で、[ADR 0036](../adr/0036-operator-resume-after-provider-refusal.md) の規則上 `campaign resume` は `run-unfinished` で拒否する。旧台帳を残して未終了として報告する。同じ接頭辞で runner を再起動すると、その対象は新しい Trial になり得る。
+3. 同時に動く本番 runner がないことと停止マーカーを確認し、同じ選定方針・**同じ接頭辞**で v26 設定の `continuous run --resume` を起動する。旧 Claude run は個別再開されず、同じ対象を v26 の新 Trial としてやり直す。そのとき旧 run は集計上 `superseded` と扱う。別の接頭辞で起動すると旧 campaign の未終了 run が残るため、切り替えの経緯を台帳で追いにくい。runner のログで再開拒否理由と新 Trial を確認し、`continuous status` と次の `discovery-run-started` の prompt ID で実際の切り替えを確かめる。
+
 ## 5. しないこと
 
 - runner、container、sandbox を止めない・殺さない・再起動しない。`docker rm` を打たない。
-- code、prompt、skill、policy、host 設定を変えない。
+- code、prompt、skill、policy、host 設定を変えない。稼働中 checkout で build しない。
 - Finding の本文や証拠を読まない。mirror の鍵を表示しない。
 - 探索の中身（どこを読むか、何を探すか）に口を出さない。
 
