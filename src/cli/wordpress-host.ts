@@ -70,7 +70,6 @@ import {
 import type { CliProfile, CliState } from "./index.js";
 import { createWordPressCliProfile } from "./wordpress.js";
 import {
-  LEGACY_VERIFIER_RETIRED,
   readWordPressCampaignConfig,
   readWordPressSelectionPolicyFile,
   type WordPressCampaignBoundaries,
@@ -689,10 +688,6 @@ export async function createWordPressHostProfile(options: {
   });
   return {
     ...profile,
-    async reverify(state, input) {
-      if (input.handoff === undefined) throw new Error(LEGACY_VERIFIER_RETIRED);
-      return profile.reverify(state, input);
-    },
     /** `lab up --for-review`: a fresh Lab from a sealed package, no discovery. */
     reviewLab: (state, input) =>
       openRecordedWordPressReviewLab({
