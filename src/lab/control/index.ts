@@ -15,7 +15,7 @@ import { join } from "node:path";
  * network, so nothing here may import outside `src/lab/control/`. It decides
  * nothing: every command is written to its state directory, the Harness on
  * the host reads it with `docker exec … next`, acts, and writes the answer
- * back with `docker exec … answer`. The server then returns that answer.
+ * back with `docker exec -i … answer-stdin`. The server then returns it.
  */
 export const CONTROL_STATE_DIRECTORY = "/var/lib/wbh-control";
 /** The commands the endpoint relays; anything else is answered 404 here. */
@@ -29,6 +29,24 @@ export const CONTROL_COMMANDS = [
 export type ControlCommand = (typeof CONTROL_COMMANDS)[number];
 /** The largest request body relayed; the host validates its shape. */
 export const MAX_CONTROL_BODY_BYTES = 16 * 1024;
+/** Bounded host answers fit in the control container's tmpfs without argv transport. */
+export const MAX_CONTROL_ANSWER_BYTES = 8 * 1024 * 1024;
+
+/** Reads an answer from docker exec's stdin, without placing its JSON in argv. */
+export async function readControlAnswer(
+  input: AsyncIterable<Uint8Array | string>,
+): Promise<ControlAnswer> {
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for await (const chunk of input) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bytes += buffer.length;
+    if (bytes > MAX_CONTROL_ANSWER_BYTES)
+      throw new Error("Control answer is too large");
+    chunks.push(buffer);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as ControlAnswer;
+}
 
 export interface ControlRequest {
   readonly id: string;

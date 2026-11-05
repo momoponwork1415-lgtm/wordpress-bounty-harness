@@ -82,5 +82,8 @@ describe("wordPressDiscoveryContractPlan", () => {
     expect(() => wordPressDiscoveryContractPlan("trust-boundary-v1")).toThrow(
       "Unknown WordPress discovery prompt",
     );
+    expect(() => wordPressDiscoveryContractPlan("trust-boundary-v2")).toThrow(
+      "Unknown WordPress discovery prompt",
+    );
   });
 });

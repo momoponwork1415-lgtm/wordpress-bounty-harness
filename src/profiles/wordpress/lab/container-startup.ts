@@ -329,7 +329,7 @@ async function startControl(lab: WordPressLabSession): Promise<void> {
     "--read-only",
     "--cap-drop=ALL",
     "--security-opt=no-new-privileges",
-    `--tmpfs=${CONTROL_STATE_DIRECTORY}:rw,nosuid,nodev,size=1m`,
+    `--tmpfs=${CONTROL_STATE_DIRECTORY}:rw,nosuid,nodev,size=32m`,
     "--volume",
     `${fileURLToPath(new URL("../../../lab-control/", import.meta.url))}:${CONTROL_MOUNT}:ro`,
     "--entrypoint=node",
@@ -345,8 +345,16 @@ async function startControl(lab: WordPressLabSession): Promise<void> {
 export function controlCommand(
   lab: WordPressLabSession,
   args: readonly string[],
+  stdin = false,
 ): readonly string[] {
-  return ["exec", lab.control, "node", `${CONTROL_MOUNT}/cli.js`, ...args];
+  return [
+    "exec",
+    ...(stdin ? ["-i"] : []),
+    lab.control,
+    "node",
+    `${CONTROL_MOUNT}/cli.js`,
+    ...args,
+  ];
 }
 
 /**

@@ -54,7 +54,8 @@ import {
   WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS,
   wordPressDiscoveryModeOf,
   wordPressDiscoveryPrompt,
-  WORDPRESS_TRUST_BOUNDARY,
+  wordPressTrustBoundaryForObjective,
+  wordPressTrustBoundaryId,
   type WordPressDiscoveryAsset,
   type WordPressOutputContractVersion,
 } from "../profiles/wordpress/prompts/index.js";
@@ -1219,9 +1220,18 @@ async function resumeWordPressRun(
       reason: "prompt-version-differs",
       detail: `${started.configuration.promptVariant} is not in the prompt registry`,
     };
+  // Older runs did not record a trust-boundary version; all of them used v1.
+  const recordedTrustBoundary = started.configuration.trustBoundaryVersion;
+  const trustBoundaryId = wordPressTrustBoundaryId(recordedTrustBoundary);
+  if (trustBoundaryId === undefined)
+    return {
+      status: "refused",
+      reason: "prompt-version-differs",
+      detail: `${recordedTrustBoundary} is not in the trust-boundary registry`,
+    };
   const [objective, trustBoundary] = await Promise.all([
     loadWordPressDiscoveryAsset(recordedPrompt),
-    loadWordPressDiscoveryAsset(WORDPRESS_TRUST_BOUNDARY.id),
+    loadWordPressDiscoveryAsset(trustBoundaryId),
   ]);
   const resumePrompt = wordPressResumeParagraph(objective);
   // A segment receives the skills its Trial recorded, at the recorded digests
@@ -1763,7 +1773,9 @@ async function runWordPressCampaign(
   }
   const [objective, trustBoundary] = await Promise.all([
     loadWordPressDiscoveryAsset(config.promptId),
-    loadWordPressDiscoveryAsset(WORDPRESS_TRUST_BOUNDARY.id),
+    loadWordPressDiscoveryAsset(
+      wordPressTrustBoundaryForObjective(config.promptId),
+    ),
   ]);
   return runCampaignPipeline({
     campaignId: input.campaignId,

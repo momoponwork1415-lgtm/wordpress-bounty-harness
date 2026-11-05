@@ -34,6 +34,7 @@ AI に「調べて報告」を頼んだときの成果物を、日付付きで�
 - [2026-11-02-objective-v22-wide.md](2026-11-02-objective-v22-wide.md): wp2shell-bounty-v22-wide（`wide` の現行。v21-wide から hooks.tsv の行数で閉じる規則を消しただけ、ADR 0049 決定 E）の差分、消した 3 か所の日本語訳、出典対照表。
 - [2026-11-04-cloudflare-wordpress-audit-skill.md](2026-11-04-cloudflare-wordpress-audit-skill.md): Cloudflare 派生の `wbh-audit-v1` と目的文 v23-wide の全文、日本語訳、出典対照、既存の採否指標の不整合と調整案（ADR 0050）。
 - [2026-11-04-cloudflare-audit-objective-v25.md](2026-11-04-cloudflare-audit-objective-v25.md): v24-wide のスキル名と Lead の境界を直した v25-wide の全文、日本語訳、出典対照。
+- [2026-11-04-v25-discovery-input-japanese.md](2026-11-04-v25-discovery-input-japanese.md): v25 Trial の全入力の読書順と日本語訳への索引。新版 trust 境界と未訳だった Harness 生成節を全文訳（#812）。
 - [2026-11-01-wbh-verify-v12.md](2026-11-01-wbh-verify-v12.md): wbh-verify v12（前提の部を `lab-setup.md` と同じ 6 節で書き、`<dir>/prior-lab-setup.md` を出発点に読む、#751）の全文と出典対照。
 - [2026-11-01-prior-research-section.md](2026-11-01-prior-research-section.md): Harness 生成節 `## Prior research`（同じ対象の過去 Trial の `recon-map.md` と `lab-setup.md` を置く、ADR 0048）の雛形、日本語訳、出典対照表。
 - [2026-10-31-wbh-screen-v5-source-table.md](2026-10-31-wbh-screen-v5-source-table.md): `wbh-screen` v5 の各項目と、Wordfence の決定・規則の写し・所有者決定との対応。

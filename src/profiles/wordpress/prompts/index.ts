@@ -535,13 +535,21 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
   },
 ] as const satisfies readonly WordPressDiscoveryPromptRecord[];
 
-/** Human-written trust boundary declaration shared by every discovery prompt. */
-export const WORDPRESS_TRUST_BOUNDARY = {
-  id: "trust-boundary-v1",
-  digest:
-    "sha256:962eee77bb9a0e98c8f0ce53129ea842801714ad4cf3226f1d151dbdca0040fd",
-  status: "current",
-} as const satisfies WordPressPromptRecord;
+/** Human-written trust declarations; the v25 comparison uses v2 only. */
+export const WORDPRESS_TRUST_BOUNDARIES = [
+  {
+    id: "trust-boundary-v1",
+    digest:
+      "sha256:962eee77bb9a0e98c8f0ce53129ea842801714ad4cf3226f1d151dbdca0040fd",
+    status: "current",
+  },
+  {
+    id: "trust-boundary-v2",
+    digest:
+      "sha256:23d5e9ebe487751f93fdf7b290ed30c898d20f4d8443d778125e5a4dde1dfb2e",
+    status: "candidate",
+  },
+] as const satisfies readonly WordPressPromptRecord[];
 
 /** Fixed Verifier instructions; the caller records this exact byte digest. */
 export const WORDPRESS_VERIFIER_PROMPTS = [
@@ -586,10 +594,32 @@ function currentOf<const Row extends WordPressPromptRecord>(
   return current[0]!;
 }
 
+/** The existing default declaration for deep and wide production Trials. */
+export const WORDPRESS_TRUST_BOUNDARY = currentOf(WORDPRESS_TRUST_BOUNDARIES);
+
+/** Only the opt-in v25 objective receives the corrected declaration. */
+export function wordPressTrustBoundaryForObjective(
+  objectiveId: WordPressDiscoveryPromptId,
+): (typeof WORDPRESS_TRUST_BOUNDARIES)[number]["id"] {
+  return objectiveId === "wp2shell-bounty-v25-wide"
+    ? "trust-boundary-v2"
+    : WORDPRESS_TRUST_BOUNDARY.id;
+}
+
+export function wordPressTrustBoundaryId(
+  id: string | undefined,
+): (typeof WORDPRESS_TRUST_BOUNDARIES)[number]["id"] | undefined {
+  // Before the version field was recorded, every Trial used v1.
+  return WORDPRESS_TRUST_BOUNDARIES.find(
+    (row) => row.id === (id ?? "trust-boundary-v1"),
+  )?.id;
+}
+
 export type WordPressDiscoveryPromptId = DiscoveryPromptRow["id"];
 export type WordPressVerifierPromptId = VerifierPromptRow["id"];
 export type WordPressDiscoveryAssetId =
-  WordPressDiscoveryPromptId | typeof WORDPRESS_TRUST_BOUNDARY.id;
+  | WordPressDiscoveryPromptId
+  | (typeof WORDPRESS_TRUST_BOUNDARIES)[number]["id"];
 
 export const WORDPRESS_DISCOVERY_PROMPT_IDS: readonly WordPressDiscoveryPromptId[] =
   WORDPRESS_DISCOVERY_PROMPTS.map((prompt) => prompt.id);
@@ -627,7 +657,10 @@ export const WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS: readonly WordPressDiscoveryPro
   ).map((prompt) => prompt.id);
 
 export const WORDPRESS_DISCOVERY_ASSET_IDS: readonly WordPressDiscoveryAssetId[] =
-  [...WORDPRESS_DISCOVERY_PROMPT_IDS, WORDPRESS_TRUST_BOUNDARY.id];
+  [
+    ...WORDPRESS_DISCOVERY_PROMPT_IDS,
+    ...WORDPRESS_TRUST_BOUNDARIES.map((row) => row.id),
+  ];
 
 export const WORDPRESS_VERIFIER_PROMPT_ID = currentOf(
   WORDPRESS_VERIFIER_PROMPTS,
@@ -711,7 +744,15 @@ export async function loadWordPressDiscoveryAsset(
 ): Promise<WordPressDiscoveryAsset> {
   if (!DISCOVERY_ASSET_IDS.has(id))
     throw new Error("Unknown WordPress discovery asset");
-  if (id === WORDPRESS_TRUST_BOUNDARY.id) return readPromptFile(id);
+  const trustBoundary = WORDPRESS_TRUST_BOUNDARIES.find((row) => row.id === id);
+  if (trustBoundary !== undefined) {
+    const asset = await readPromptFile(trustBoundary.id);
+    if (asset.digest !== trustBoundary.digest)
+      throw new Error(
+        "WordPress trust boundary differs from its pinned digest",
+      );
+    return asset;
+  }
   const record = wordPressDiscoveryPrompt(id);
   if (record.fragments === undefined) return readPromptFile(id);
   const texts = await Promise.all(record.fragments.map(readFragment));

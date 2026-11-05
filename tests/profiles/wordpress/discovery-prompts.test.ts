@@ -25,7 +25,10 @@ import {
   WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS,
   WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS,
   WORDPRESS_PROMPT_SECTIONS,
+  WORDPRESS_TRUST_BOUNDARIES,
   WORDPRESS_TRUST_BOUNDARY,
+  wordPressTrustBoundaryForObjective,
+  wordPressTrustBoundaryId,
   WORDPRESS_VERIFIER_PROMPT_ID,
   WORDPRESS_VERIFIER_PROMPTS,
 } from "../../../src/profiles/wordpress/prompts/index.js";
@@ -43,7 +46,7 @@ describe("WordPress prompt table", () => {
     // A changed `.md` body fails here until its row is re-pinned under a new version.
     for (const row of [
       ...WORDPRESS_DISCOVERY_PROMPTS,
-      WORDPRESS_TRUST_BOUNDARY,
+      ...WORDPRESS_TRUST_BOUNDARIES,
     ]) {
       const asset = await loadWordPressDiscoveryAsset(row.id);
       const bytes = await promptBytes(row.id);
@@ -75,7 +78,7 @@ describe("WordPress prompt table", () => {
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual(ids);
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       ...ids,
-      WORDPRESS_TRUST_BOUNDARY.id,
+      ...WORDPRESS_TRUST_BOUNDARIES.map((row) => row.id),
     ]);
     expect(WORDPRESS_OBJECTIVE_ONLY_PROMPT_IDS).toEqual(
       WORDPRESS_DISCOVERY_PROMPTS.filter(
@@ -119,6 +122,27 @@ describe("WordPress prompt table", () => {
     ).toHaveLength(1);
     expect(WORDPRESS_VERIFIER_PROMPT_ID).toBe("verifier-v8");
     expect(WORDPRESS_TRUST_BOUNDARY.id).toBe("trust-boundary-v1");
+    expect(WORDPRESS_TRUST_BOUNDARIES.map((row) => row.status)).toEqual([
+      "current",
+      "candidate",
+    ]);
+    expect(wordPressTrustBoundaryForObjective("wp2shell-bounty-v22-wide")).toBe(
+      "trust-boundary-v1",
+    );
+    expect(wordPressTrustBoundaryForObjective("wp2shell-bounty-v23-wide")).toBe(
+      "trust-boundary-v1",
+    );
+    expect(wordPressTrustBoundaryForObjective("wp2shell-bounty-v25-wide")).toBe(
+      "trust-boundary-v2",
+    );
+    expect(wordPressTrustBoundaryId(undefined)).toBe("trust-boundary-v1");
+    expect(wordPressTrustBoundaryId("trust-boundary-v1")).toBe(
+      "trust-boundary-v1",
+    );
+    expect(wordPressTrustBoundaryId("trust-boundary-v2")).toBe(
+      "trust-boundary-v2",
+    );
+    expect(wordPressTrustBoundaryId("trust-boundary-unknown")).toBeUndefined();
   });
 
   it("carries no entry-index coverage column after ADR 0034", () => {
@@ -1445,10 +1469,16 @@ describe("WordPress discovery prompt assets", () => {
   });
 
   it("defines the human trust boundary", async () => {
-    const trust = await loadWordPressDiscoveryAsset("trust-boundary-v1");
-    expect(trust.text).toContain("human operator reviews and versions");
+    const trust = await loadWordPressDiscoveryAsset("trust-boundary-v2");
+    expect(trust.text).toContain("human-authored declaration");
     expect(trust.text).toContain("contributor");
     expect(trust.text).toContain("administrator");
     expect(trust.text).toContain("unfiltered_html");
+    expect(trust.text).toContain("named human's matching observation");
+    expect(trust.text).toContain(
+      "retained verification Lab or a new review Lab",
+    );
+    expect(trust.text).not.toContain("independent judge");
+    expect(trust.text).not.toContain("canary checks");
   });
 });

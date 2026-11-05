@@ -3,10 +3,11 @@ import {
   CONTROL_STATE_DIRECTORY,
   createControlServer,
   nextControlRequest,
+  readControlAnswer,
   type ControlAnswer,
 } from "./index.js";
 
-// serve | next <seconds> | answer <id> <base64 JSON answer>
+// serve | next <seconds> | answer <id> <base64 JSON answer> | answer-stdin <id>
 const [mode, first, second] = process.argv.slice(2);
 if (mode === "serve")
   createControlServer({ directory: CONTROL_STATE_DIRECTORY }).listen(
@@ -29,4 +30,14 @@ else if (mode === "next") {
     first,
     JSON.parse(Buffer.from(second, "base64").toString("utf8")) as ControlAnswer,
   );
-else throw new Error("Unknown control mode");
+else if (
+  mode === "answer-stdin" &&
+  first !== undefined &&
+  second === undefined
+) {
+  answerControlRequest(
+    CONTROL_STATE_DIRECTORY,
+    first,
+    await readControlAnswer(process.stdin),
+  );
+} else throw new Error("Unknown control mode");
