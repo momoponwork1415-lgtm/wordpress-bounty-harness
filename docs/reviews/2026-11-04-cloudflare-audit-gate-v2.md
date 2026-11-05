@@ -466,7 +466,7 @@ Child check schema: {"$schema":"https://json-schema.org/draft/2020-12/schema","a
 
 | 対象と要素 | 出典 | WordPress 側への写し方 |
 | --- | --- | --- |
-| v24 目的文のスキル版名と従来の探索目的 | [ADR 0050 の v24 追記](../adr/0050-cloudflare-audit-skill-as-wordpress-discovery-base.md)、[v23 目的文](../../src/profiles/wordpress/prompts/wp2shell-bounty-v23-wide.md) | v23 の目的文からスキルの指定だけを v2 に変更。attacker、固定ソース、Programme Boundary、wall の意味は引き継ぐ。 |
+| v24 目的文のスキル版名と従来の探索目的 | [ADR 0050 の v24 追記](../adr/0050-cloudflare-audit-skill-as-wordpress-discovery-base.md)、[v23 目的文](../../src/profiles/wordpress/prompts/experimental/wp2shell-bounty-v23-wide.md) | v23 の目的文からスキルの指定だけを v2 に変更。attacker、固定ソース、Programme Boundary、wall の意味は引き継ぐ。 |
 | v2 の六段階、共有記録の Root 所有、子の scratch、候補と最終記録の別点検 | Cloudflare [SKILL.md](https://github.com/cloudflare/security-audit-skill/blob/c1c8a8c1471069fb0e188eeaff69b8e8db6564a8/skills/security-audit/SKILL.md) と [VALIDATION-AND-REPORTING.md](https://github.com/cloudflare/security-audit-skill/blob/c1c8a8c1471069fb0e188eeaff69b8e8db6564a8/skills/security-audit/VALIDATION-AND-REPORTING.md)、既存の [v1 入力対照](2026-11-04-cloudflare-wordpress-audit-skill.md) | v1 の流れを保ち、子の点検を transport の structured check にする。scratch の書き込み隔離は引き続き agent への指示である。 |
 | child の五キー、空の Finding / Lead、Root の四キー、点検者の `verified` | [ADR 0050 の v24 追記](../adr/0050-cloudflare-audit-skill-as-wordpress-discovery-base.md)、Cloudflare [最終記録の独立点検](https://github.com/cloudflare/security-audit-skill/blob/c1c8a8c1471069fb0e188eeaff69b8e8db6564a8/skills/security-audit/VALIDATION-AND-REPORTING.md) | キー名と claim schema は本リポジトリの版付き出力契約。Cloudflare の JSON schema をコピーしていない。点検した agent と報告する Root を分ける。 |
 | `checks.candidate` を全 verdict で元の下書きに固定し、`replace` を新しい点検へ戻す | Cloudflare [Phase 5 の replacement 再点検](https://github.com/cloudflare/security-audit-skill/blob/c1c8a8c1471069fb0e188eeaff69b8e8db6564a8/skills/security-audit/VALIDATION-AND-REPORTING.md)、[ADR 0050 の v24 追記](../adr/0050-cloudflare-audit-skill-as-wordpress-discovery-base.md) | 元の候補との照合は Harness の輸送上の選択。訂正文は scratch と explanation に残し、修正版に別の `verified` が必要。 |
@@ -524,11 +524,11 @@ Copyright (c) 2025-2026 Cloudflare, Inc.
 
 | 入力 | sha256 |
 | --- | --- |
-| `src/profiles/wordpress/prompts/wp2shell-bounty-v24-wide.md` | `sha256:8822e7516329d4b142422d68b6f82ada9b02923f13e4b454edfcbb532d5ac63a` |
-| `src/profiles/wordpress/prompts/skills/wbh-audit-v2/SKILL.md` | `sha256:35a8a57b7c11866c3a8daaf117b8ab47269f4f41b961d237e03cd2ed0f880039` |
-| `src/profiles/wordpress/prompts/skills/wbh-audit-v2/reconnaissance.md` | `sha256:d3698bc1fd1a038b567c2bf0377281034ab5657783dc5882688edaf139674f71` |
-| `src/profiles/wordpress/prompts/skills/wbh-audit-v2/hunting.md` | `sha256:63784cdc4348de96503ea7759c574498d9ffe87bdd5e3e9ac6ed7a9399dbb1e1` |
-| `src/profiles/wordpress/prompts/skills/wbh-audit-v2/wordpress-classes.md` | `sha256:4e1490b4bdc991b3e2acc2365eb5ebc85d77a76e5c67abe1d7df66107e4cfc2e` |
-| `src/profiles/wordpress/prompts/skills/wbh-audit-v2/validation-and-reporting.md` | `sha256:6283480a4ff789f4b9961859fb657b7aa5ccfac45f3418899431dff11ad23acb` |
-| `src/profiles/wordpress/prompts/skills/wbh-audit-v2/upstream-license.txt` | `sha256:e598e694aa506650c7192d5ea3be0e50aca0d356ea00551c53429f0b01eb6391` |
+| `src/profiles/wordpress/prompts/experimental/wp2shell-bounty-v24-wide.md` | `sha256:8822e7516329d4b142422d68b6f82ada9b02923f13e4b454edfcbb532d5ac63a` |
+| `src/profiles/wordpress/prompts/skills/experimental/wbh-audit-v2/SKILL.md` | `sha256:35a8a57b7c11866c3a8daaf117b8ab47269f4f41b961d237e03cd2ed0f880039` |
+| `src/profiles/wordpress/prompts/skills/experimental/wbh-audit-v2/reconnaissance.md` | `sha256:d3698bc1fd1a038b567c2bf0377281034ab5657783dc5882688edaf139674f71` |
+| `src/profiles/wordpress/prompts/skills/experimental/wbh-audit-v2/hunting.md` | `sha256:63784cdc4348de96503ea7759c574498d9ffe87bdd5e3e9ac6ed7a9399dbb1e1` |
+| `src/profiles/wordpress/prompts/skills/experimental/wbh-audit-v2/wordpress-classes.md` | `sha256:4e1490b4bdc991b3e2acc2365eb5ebc85d77a76e5c67abe1d7df66107e4cfc2e` |
+| `src/profiles/wordpress/prompts/skills/experimental/wbh-audit-v2/validation-and-reporting.md` | `sha256:6283480a4ff789f4b9961859fb657b7aa5ccfac45f3418899431dff11ad23acb` |
+| `src/profiles/wordpress/prompts/skills/experimental/wbh-audit-v2/upstream-license.txt` | `sha256:e598e694aa506650c7192d5ea3be0e50aca0d356ea00551c53429f0b01eb6391` |
 | `wordpress-discovery-contract-v6` | `sha256:aaf778104f414f6187b536cb7601e9ef606052e128d40bd713928802415f3c07` |

@@ -9,7 +9,7 @@
 3. **owner-approved path**。`docs/adr/`、`docs/SPEC.md`、`trust-boundary-v1.md`、`policy/campaign.json`、`policy/programme-scope.md`、`programme-impacts.ts`、`judges.ts`、prompt 本文、`.claude/skills/` の本文。触っていれば `owner-approved` ラベルが付くまで merge しない。AI が委任で付けるときは、読んだ範囲と出典対照を PR comment に書く。
 4. **差分の大きさ**。追加 500 行以内。超えていれば分割を求める。
 5. **テスト**。公開 interface からの受入試験が 1 つ先にあるか（TEST-STRATEGY）。内部関数をなぞるだけのテストは数に入れない。
-6. **数字**。探索・配線・runtime・選定を触る PR は数字の表が要る。agent 入力は本番の同じ選定帯で旧版と新版を交互に回し、Trial 数をそろえて DEVELOPMENT §5 の 6 段で判断する。開発セット 6 case × 各 3 run は、本番で scope 内 Finding は出るのに人間の `match` が 1 週間 0 件の切り分け時だけ。配線・runtime・選定は異なる slug の初回 3 Trial（[measurement.md](measurement.md)）。無ければ Draft のまま「数字待ち」。
+6. **数字**。探索・配線・runtime・選定を触る PR は数字の表が要る。agent 入力の比較 PR は本番の同じ選定帯で旧版と新版を交互に回し、Trial 数をそろえて DEVELOPMENT §5 の 6 段で判断する。所有者が採用を決めた v26-wide の主経路化だけは v22-wide との交互比較を求めず、先行 Trial の数字を運転診断として扱う（ADR 0051 の 2026-11-05 追記）。開発セット 6 case × 各 3 run は、本番で scope 内 Finding は出るのに人間の `match` が 1 週間 0 件の切り分け時だけ。配線・runtime・選定は異なる slug の初回 3 Trial（[measurement.md](measurement.md)）。必要な数字が無ければ Draft のまま「数字待ち」。
 7. **CI**。対象 head の required checks `check` / `adr-guard` / `private-guard` がすべて成功しているか。未実行や skipped を成功の代わりにしない。strict ruleset なので base が古いと merge できない。
 
 ## 独立レビューと再レビュー

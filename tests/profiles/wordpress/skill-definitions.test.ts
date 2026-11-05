@@ -29,7 +29,9 @@ describe("WordPress discovery skills", () => {
   it("pins every skill to its digest and names it in the front matter", async () => {
     for (const row of WORDPRESS_DISCOVERY_SKILLS) {
       const skill = await loadWordPressDiscoverySkill(row.id);
-      const bytes = await readFile(new URL(`${row.id}/SKILL.md`, skillsUrl));
+      const directory =
+        "sourceDirectory" in row ? `${row.sourceDirectory}/${row.id}` : row.id;
+      const bytes = await readFile(new URL(`${directory}/SKILL.md`, skillsUrl));
       expect(skill.digest).toBe(sha256(bytes));
       expect(skill.digest).toBe(row.digest);
       expect(skill.frontMatter.name).toBe(row.name);
@@ -46,7 +48,7 @@ describe("WordPress discovery skills", () => {
         (row as { files?: readonly { name: string; digest: string }[] })
           .files ?? [];
       const inDirectory = (
-        await readdir(new URL(`${row.id}/`, skillsUrl))
+        await readdir(new URL(`${directory}/`, skillsUrl))
       ).sort();
       expect(inDirectory).toEqual(
         ["SKILL.md", ...pinnedFiles.map((file) => file.name)].sort(),
@@ -62,7 +64,16 @@ describe("WordPress discovery skills", () => {
     const onDisk = (await readdir(skillsUrl, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name);
-    expect(onDisk.sort()).toEqual([...WORDPRESS_DISCOVERY_SKILL_IDS].sort());
+    const direct = WORDPRESS_DISCOVERY_SKILLS.filter(
+      (row) => !("sourceDirectory" in row),
+    ).map((row) => row.id);
+    expect(onDisk.sort()).toEqual([...direct, "experimental"].sort());
+    expect((await readdir(new URL("experimental/", skillsUrl))).sort()).toEqual(
+      ["wbh-audit-v1", "wbh-audit-v2"],
+    );
+    expect(WORDPRESS_DISCOVERY_SKILL_IDS).toEqual(
+      WORDPRESS_DISCOVERY_SKILLS.map((row) => row.id),
+    );
     expect(WORDPRESS_LAUNCHABLE_DISCOVERY_SKILL_IDS).toEqual([
       "wbh-tools-v1",
       "wbh-setup-v1",

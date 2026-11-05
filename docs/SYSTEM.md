@@ -1,4 +1,4 @@
-# システムの動き（2026-11-01 版）
+# システムの動き（2026-11-05 版）
 
 この文書は、Harness がいまどう動いているかを 6 つの段で説明する。規則は足さない。正本は [SPEC.md](SPEC.md) と [ADR](adr/) で、食い違えばそちらが勝つ。各段の末尾に「正本」として、読んだ SPEC の節、ADR、コードの場所を並べる。用語は [GLOSSARY.md](../GLOSSARY.md) に合わせる。
 
@@ -26,7 +26,7 @@ flowchart LR
   end
   subgraph A[AI: 目的文とスキル]
     direction LR
-    A3[Codex Root + 子<br/>目的文 v22-wide<br/>wbh-recon v3 → wbh-tools<br/>Lab があれば wbh-setup<br/>prior/ の地図 2 file を読む]
+    A3[Codex Root + 子<br/>目的文 v26-wide<br/>7 月 30 日方式で探索<br/>具体的な問いを Lab で確認<br/>前版の研究記録を読む]
     A5[6 段のスキル<br/>1 screen → 1b source-check<br/>→ 2 群 → 4 dedupe（Lab 前）<br/>→ 3 wbh-verify → 4 dedupe<br/>→ 5 先 → 6 報告書]
     A6[提出の支度<br/>英語報告書 + form JSON<br/>転帰をメール本文から記録]
   end
@@ -95,7 +95,9 @@ flowchart LR
 
 対象ごとに 1 回、Codex の Root と子が協調する Trial を gVisor の使い捨て sandbox で行う。Harness が渡すのは、固定したソース（読み取り専用）、人間が書いた trust 境界宣言、Programme Boundary、目的文、Harness が生成する節（`## Run parameters`、Finding / Lead の出力契約 v4、スキルの場所、`## Prior research`）だけである。評価対象の答え、PoC、公開履歴の中身は渡さない。外向き通信は認証ブローカー経由の provider API に限る。
 
-本番の mode は `wide` で、目的文は `wp2shell-bounty-v22-wide`、スキルは `wbh-recon` v2、`wbh-tools` v1、`wbh-setup` v1 を sandbox に置く。子は同時に 8 まで、制限時間は 120 分で、`wide` は最初の最終報告で終える。Claude runtime の share は 0 である。同じ plugin の前の版の Trial が封じた地図 2 file（`recon-map.md`、`lab-setup.md`）は、`discovery.priorResearch: same-target` のとき `/workspace/research/prior/` に置く。どこを読むか、何を仮説にするか、子に何を任せるかは Root が決める。Harness は舵を取らない。
+リポジトリの wide 方針は `wp2shell-bounty-v26-wide` を既定にし、探索 Lab を付け、最低 60 分を指定する。制限時間の上限は 120 分、同時に生きる子はリポジトリの wide 方針で 3（基底の既定 4、設定可能な上限 8）である。v26 は 7 月 30 日方式の一つの目的文を Root に渡し、探索手順を持つスキルを既定で付けない。v23 / v24 / v25-wide と `wbh-audit-v1/v2` の六段階探索方式は `experimental/` に置き、起動可能な版を名指ししたときだけ使う。これは段 5 の提出前検証に使う六段のスキルとは別である。Claude runtime の share は 0 である。
+
+リポジトリの wide 方針は `discovery.priorResearch: same-target` を指定し、同じ plugin の別 Snapshot の最新 Trial が封じた研究 file を `/workspace/research/prior/` に置く。同一 Snapshot の研究 file 全体はこの経路で渡さない。基礎の `recon-map.md` と `lab-setup.md` に加え、存在すれば `REGISTRY.md`、`assumptions/*.md`、`walks/*.md` と Lab の保存先記録 `stores.json` を渡す（SPEC 第 6 節）。同一 Snapshot の再探索は既定で自動起動しない。どこを読むか、何を仮説にするか、子に何を任せるかは Root が決める。Harness は舵を取らない。稼働中のランナーの Git 外設定と、このリポジトリの既定は別に確認する。
 
 止まった Root は、同じ Snapshot と残りの制限時間で新しい sandbox に再開できる。Codex の `provider-limited` と死んだ持ち主の `interrupted` は自動で、それ以外は操作者の名指しで再開する。言い換えはしない。
 

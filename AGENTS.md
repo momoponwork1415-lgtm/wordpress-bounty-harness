@@ -14,7 +14,7 @@
 
 設計・実装・レビューのすべてで守る。
 
-1. 探索エージェントへ渡すのは、固定したソース、人間が書いた trust 境界宣言、Programme Boundary、Lab、時点で切った対象の公開履歴だけである。公開履歴はカタログ情報に限る（ADR 0012）。評価対象の答え、held-out 公開日以降の記録、PoC、ペイロード、再現手順は渡さない。例外は 2 つで、どちらも campaign 設定で名指ししたときだけ渡る。同じ Snapshot に対する過去 Trial の Lead の代表を `## Prior leads` 節で渡すこと（ADR 0044。`discovery.followUp: leads` のとき、連続ランナーが Lead の残った終了 Trial の第 2 Trial を自動で 1 回組む場合を含む。ADR 0049 追記 2）と、同じ対象の別 Snapshot に対する最新の過去 Trial の `recon-map.md` と `lab-setup.md` を `## Prior research` 節で渡すこと（ADR 0048）である。
+1. 探索エージェントへ渡すのは、固定したソース、人間が書いた trust 境界宣言、Programme Boundary、Lab、時点で切った対象の公開履歴だけである。公開履歴はカタログ情報に限る（ADR 0012）。評価対象の答え、held-out 公開日以降の記録、PoC、ペイロード、再現手順は渡さない。例外は 2 つある。同じ Snapshot に対する過去 Trial の Lead の代表を `## Prior leads` 節で渡すこと（campaign の名指し、または `discovery.followUp: leads` による自動第 2 Trial。ADR 0044、0049 追記 2）と、`discovery.priorResearch: same-target` のときに同じ対象の別 Snapshot の最新 Trial が封じた `recon-map.md`、`lab-setup.md`、存在すれば `REGISTRY.md`、`assumptions/*.md`、`walks/*.md`、`stores.json` を `## Prior research` 節で渡すこと（ADR 0048、0049 追記 2）である。
 2. 対象は gVisor（`runsc`）の使い捨て環境の中でだけ実行する。ホストでは実行せず、弱い隔離へ暗黙に切り替えない。外向き通信は、認証ブローカー経由の provider API に限る。外部サービス接続が通常の利用の前提になる検証では、ADR 0046 の 6 条件を満たす専用 Lab に限って外向き通信と一時公開を行える。出口の中継器と `setup-done` 直後の停止確認は Harness が `--egress-plan` で持ち、公開入口と資格情報は持たない。
 3. Harness は判定器を持たない。確定の根拠は、名指しした人間が review Lab で記録した `review observe` の match と `review decide --reproduced match` だけである（ADR 0040）。エージェントや手順の自己申告、捕捉を読んだだけの推定、AI が自分で Lab を見て打った記録は根拠にしない。所有者が会話の中で観測の結果を明言したときに限り、AI 操作役が所有者の名前で代行記録し、発言の原文と時刻を Private Evidence の attestation に残す（ADR 0040 追記 3、所有者決定 2026-10-31）。リバースシェル、永続化、ホストへのアクセスは証明にしない。
 4. 検証の失敗（環境、手順、観測、証拠の不足）は `incomplete` にする。`contradicted` にも棄却にもしない。
@@ -31,10 +31,10 @@
 - **探索と検証の中身はプロンプトとスキルが受け持つ。** どこを読むか、どの順で仮説を立てるか、どう再現するか、前提をどう作るかは、エージェントの仕事である。確定は、Lab で観測した人間の記録だけで行う。
 - **移す合図。** Harness のコードに「エージェントにこう探させる」「この前提ならこのシナリオ」のような判断が現れたら、プロンプトかスキルへ移す。エージェントの自己申告を Harness が根拠にするコードが現れたら、観測器の記録へ移すか、人間の観測に回す。観測（読んだファイル、経過時間、トークン、出力）は Harness が取る。舵取りは取らない。
 
-## いまの運用（2026-11-01）
+## いまの運用（2026-11-05）
 
-- **凍結 5 項目**（ADR 0045）: 不変条件、Harness と AI の責務、単一協調 Trial、人間の観測による確定、本番をベンチにすること。変更の提案はしない。設計の変更は月 1 回までで、目的文の新版を言い換えで増やさない。
-- **探索**: campaign 設定の `discovery.mode` で `deep` か `wide` を選ぶ（ADR 0039）。目的文は `wide` が `wp2shell-bounty-v22-wide`、`deep` が `wp2shell-bounty-v11` に限る。旧版（`wp2shell-bounty-v21-wide` まで）は過去 Trial の照合用に残し、新規 Trial には使わない。対象ごとに 1 回、Root と子が協調する Trial を行う。子の上限は `discovery.maxChildren`（既定 4、1〜8）、制限時間は 120 分。どちらの mode も既定の最低時間は 0 で、最初の最終報告で終える（ADR 0039 追記 20）。終わってよいかはスキル `wbh-recon` の手順 9 が決める。これらの値は Harness が生成する `## Run parameters` 節で Root に伝える。探索の手順は目的文に足さず、スキル（`src/profiles/wordpress/prompts/skills/<id>/SKILL.md`）に分けて `discovery.skills` で名指しする（ADR 0043）。
+- **凍結 5 項目**（ADR 0045）: 不変条件、Harness と AI の責務、単一協調 Trial、人間の観測による確定、本番をベンチにすること。設計の変更は月 1 回までで、目的文の新版を言い換えで増やさない。7 月 30 日方式の版付き目的文は所有者が決めた限定例外である（ADR 0051）。
+- **探索**: campaign 設定の `discovery.mode` で `deep` か `wide` を選ぶ（ADR 0039）。リポジトリの既定の目的文は `wide` が `wp2shell-bounty-v26-wide`、`deep` が `wp2shell-bounty-v11`。v26 は 7 月 30 日方式の単一目的文で、探索の順序と子の使い方は Root が決める。v23 / v24 / v25-wide と `wbh-audit-v1/v2` の六段階探索方式は `experimental/` に置き、起動可能な版は campaign で名指ししたときだけ使う。v22-wide も比較・過去 Trial の照合用に残す。対象ごとに Root と子が協調する Trial を既定で 1 回行い、子の上限は `discovery.maxChildren`（基底の既定 4、1〜8。リポジトリの wide 方針は 3）、制限時間の上限は 120 分。`minimumActiveMinutes` の基底の既定は 0 で、リポジトリの wide 方針は v26 に 60 分を指定する。時間と子の上限は Harness が生成する `## Run parameters` 節で Root に伝える。別 Snapshot の研究記録はリポジトリの wide 方針で `priorResearch: same-target` として渡す。同一 Snapshot の自動再探索は `followUp: none` として止める。稼働中のランナーが使う Git 外の設定は別に確認する（ADR 0043、0048、0050、0051）。
 - **止まった Trial**: 制限時間・provider・broker・スキーマの失敗は理由付き `incomplete` にし、正常な候補 0 件に数えない（ADR 0033）。Codex の `provider-limited` と持ち主の死んだ `interrupted` はランナーが自動で再開し、それ以外は操作者が `campaign resume --run <runId>` で名指しして再開する。再開は新しいサンドボックス、同じ Snapshot、残りの制限時間で行い、同じ Trial の再開区間として数える。プロンプトの言い換えはしない（ADR 0036）。
 - **選定**: WordPress.org の人気順から、インストール数 5,000 以上、180 日以内更新の対象を 1 バッチ 10 件選ぶ。順序は `install-band-then-published`（帯 100 万 / 10 万 / 1 万の高い帯を先に、帯の中は stable 版の公開日が新しい順。ADR 0037 追記 4）。同じ版の Trial は 1 回で、版が上がれば戻す。探索の方法を変えて再開したときは、方針の `revisitPolicy.countTrialsFrom` に再開時刻を入れ、それより前の Trial を探索済みに数えない（追記 6）。凍結が `deferred` で止まった版は 7 日で再試行する（追記 5）。
 - **Snapshot**: 対象プラグイン、WordPress 本体（Lab image の最新安定版）、実行イメージに対応する PHP ソース、依存プラグインを版と digest で固定する。依存は `Requires Plugins`、WooCommerce の版ヘッダ、選定方針の明示指定から決める。依存の欠落を黙って無視しない。
@@ -47,7 +47,7 @@
 - プロンプト本文、スキル本文、Harness が生成する節の雛形は、`owner-approved` ラベルが付くまでマージしない。所有者は採否とラベル付与を AI に委任している（2026-10-13、2026-10-18）。AI は委任を明記した PR コメントを残し、REST API でラベルを付ける（DEVELOPMENT.md 第 5 節）。ADR・SPEC・方針のパスも同じ。
 - プロンプト本文を変えたら版を上げ、旧版を残して、固定した digest を更新する。台帳にある旧イベントは読み続け、消さない。
 - Finding / Lead の出力契約は目的文に書かず、Harness がスキーマから生成する節として渡す（ADR 0019）。候補は出力境界で棄却せず、正規化して受理するか保留する（ADR 0018）。
-- プロンプトとスキルに、対象固有の関数名、オプション名、URL、画面名を入れない。脆弱性が必ずあるという前提も、固定した攻撃経路も与えない。contributor 以上と、管理者が意図して付与する権限は、trust 境界の内側に置く。
+- プロンプトとスキルに、対象固有の関数名、オプション名、URL、画面名を入れない。固定した攻撃経路は与えない。7 月 30 日方式の版付き目的文に限り、「少なくとも 1 件ある」を探索努力の作業仮定として与える（ADR 0051）。候補の成立や件数の根拠にはならず、根拠なしの Finding / Lead を作らない。他の目的文の存在前提は変えない。contributor 以上と、管理者が意図して付与する権限は、trust 境界の内側に置く。
 
 ## `profiles/wordpress/` の規則（ADR 0011）
 
@@ -56,7 +56,7 @@ WordPress 固有のもの（WordPress.org からの取得、WordPress + MySQL �
 ## 品質ゲートと開発の流れ
 
 - コミット前に `pnpm check` を通す。
-- 変更は「問い 1 つ」に答える PR 1 本にする。PR テンプレートの 5 項目（問い、変えたこと、変えなかったこと、測った数字、消し方）を日本語で埋める。探索に触る PR は本番の数字を貼る。数字のない探索変更はマージしない。
+- 変更は「問い 1 つ」に答える PR 1 本にする。PR テンプレートの 5 項目（問い、変えたこと、変えなかったこと、測った数字、消し方）を日本語で埋める。探索に触る PR は本番の数字を貼る。数字のない探索変更はマージしない。ただし、所有者が 2026-11-05 に採用を決めた v26-wide の主経路化には、v22-wide との交互比較を求めない（ADR 0051 追記）。
 - 「調べて報告」の成果物は `docs/reviews/` に日付を付けて置く。正本ではない。進行中の状態は Git ではなく Issue のコメントに書く。
 - 文書と Issue は、日本の技術者が書く自然な日本語で書く（GLOSSARY.md「表記の決め事」）。
 

@@ -61,6 +61,7 @@ const MAIN_PLANS: Record<string, Plan> = {
   "wp2shell-bounty-v23-wide": inline("v4"),
   "wp2shell-bounty-v24-wide": inline("v6"),
   "wp2shell-bounty-v25-wide": inline("v6"),
+  "wp2shell-bounty-v26-wide": inline("v4"),
   "wp2shell-whitebox-v1.7": inline("v2"),
 };
 

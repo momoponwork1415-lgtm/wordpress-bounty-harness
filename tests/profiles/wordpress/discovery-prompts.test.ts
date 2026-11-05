@@ -33,10 +33,15 @@ import {
   WORDPRESS_VERIFIER_PROMPTS,
 } from "../../../src/profiles/wordpress/prompts/index.js";
 
+const promptFile = (id: string) => {
+  const record = WORDPRESS_DISCOVERY_PROMPTS.find((row) => row.id === id);
+  return record && "sourceFile" in record ? record.sourceFile : `${id}.md`;
+};
+
 const promptBytes = (id: string) =>
   readFile(
     new URL(
-      `../../../src/profiles/wordpress/prompts/${id}.md`,
+      `../../../src/profiles/wordpress/prompts/${promptFile(id)}`,
       import.meta.url,
     ),
   );
@@ -74,7 +79,7 @@ describe("WordPress prompt table", () => {
   it("derives the id lists and the current versions from the table", () => {
     const ids = WORDPRESS_DISCOVERY_PROMPTS.map((row) => row.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(38);
+    expect(ids).toHaveLength(39);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual(ids);
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       ...ids,
@@ -98,24 +103,29 @@ describe("WordPress prompt table", () => {
     ).toHaveLength(WORDPRESS_DISCOVERY_MODES.length);
     expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS).toEqual({
       deep: "wp2shell-bounty-v11",
-      wide: "wp2shell-bounty-v22-wide",
+      wide: "wp2shell-bounty-v26-wide",
     });
     expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID).toBe("wp2shell-bounty-v11");
     // Archived rows carry no mode, so only a current row launches (ADR 0039).
     for (const row of WORDPRESS_DISCOVERY_PROMPTS)
       if (row.status === "archived") expect(row).not.toHaveProperty("mode");
       else expect(row).toHaveProperty("mode");
-    // The WordPress audit-skill objective is opt-in during its comparison.
+    // Comparison objectives are opt-in until a production decision selects one.
     expect(
       WORDPRESS_DISCOVERY_PROMPTS.filter(
         (row) => (row.status as string) === "candidate",
       ).map((row) => row.id),
-    ).toEqual(["wp2shell-bounty-v23-wide", "wp2shell-bounty-v25-wide"]);
+    ).toEqual([
+      "wp2shell-bounty-v22-wide",
+      "wp2shell-bounty-v23-wide",
+      "wp2shell-bounty-v25-wide",
+    ]);
     expect(WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS).toEqual([
       "wp2shell-bounty-v11",
       "wp2shell-bounty-v22-wide",
       "wp2shell-bounty-v23-wide",
       "wp2shell-bounty-v25-wide",
+      "wp2shell-bounty-v26-wide",
     ]);
     expect(
       WORDPRESS_VERIFIER_PROMPTS.filter((row) => row.status === "current"),
@@ -133,6 +143,9 @@ describe("WordPress prompt table", () => {
       "trust-boundary-v1",
     );
     expect(wordPressTrustBoundaryForObjective("wp2shell-bounty-v25-wide")).toBe(
+      "trust-boundary-v2",
+    );
+    expect(wordPressTrustBoundaryForObjective("wp2shell-bounty-v26-wide")).toBe(
       "trust-boundary-v2",
     );
     expect(wordPressTrustBoundaryId(undefined)).toBe("trust-boundary-v1");
@@ -327,6 +340,20 @@ describe("WordPress discovery prompt assets", () => {
     expect(v25.text).toContain("pinned as wbh-audit-v2");
     expect(v25.text).toContain("Report a Lead when");
     expect(v25.text).toContain("one unresolved edge");
+  });
+
+  it("keeps the July 30 objective independent from the six-phase skill and records open routes", async () => {
+    const candidate = await loadWordPressDiscoveryAsset(
+      "wp2shell-bounty-v26-wide",
+    );
+    expect(candidate.text).toContain("operational prior");
+    expect(candidate.text).toContain(
+      "The first surviving candidate is a checkpoint",
+    );
+    expect(candidate.text).toContain("/workspace/research/continuation.json");
+    expect(candidate.text).toContain('"schemaVersion": 1');
+    expect(candidate.text).not.toContain("wbh-audit");
+    expect(candidate.text).not.toContain("wbh-lab");
   });
 
   it("keeps answer strings out of the current Verifier prompt", async () => {
@@ -689,7 +716,11 @@ describe("WordPress discovery prompt assets", () => {
       WORDPRESS_DISCOVERY_PROMPTS.find(
         (row) => row.id === "wp2shell-bounty-v22-wide",
       ),
-    ).toMatchObject({ status: "current", mode: "wide", outputContract: "v4" });
+    ).toMatchObject({
+      status: "candidate",
+      mode: "wide",
+      outputContract: "v4",
+    });
     expect(
       WORDPRESS_DISCOVERY_PROMPTS.find(
         (row) => row.id === "wp2shell-bounty-v22-wide",
@@ -1444,7 +1475,8 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v22-wide" ||
         id === "wp2shell-bounty-v23-wide" ||
         id === "wp2shell-bounty-v24-wide" ||
-        id === "wp2shell-bounty-v25-wide"
+        id === "wp2shell-bounty-v25-wide" ||
+        id === "wp2shell-bounty-v26-wide"
       ) {
         // v5 leaves attacker positions and in-scope effects to the supplied
         // trust boundary and Programme Boundary sections (owner decision, 2026-10-16).

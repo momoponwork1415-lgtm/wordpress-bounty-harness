@@ -134,6 +134,47 @@ describe("WordPressOrgTargetSource", () => {
     );
   });
 
+  it("accepts official metadata with requires false as no minimum WordPress version", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "wporg-target-source-"));
+    const adapter: WordPressOrgSourceAdapter = {
+      retrieve: async (request) => ({
+        status: 200,
+        sourceUrl: request.sourceUrl,
+        bytes: Buffer.from(
+          JSON.stringify({
+            slug: "example-no-minimum",
+            name: "Example No Minimum",
+            version: "2.4.1",
+            requires: false,
+            active_installs: 10_000,
+            last_updated: "2026-11-04T18:02:00Z",
+            download_link:
+              "https://downloads.wordpress.org/plugin/example-no-minimum.2.4.1.zip",
+          }),
+        ),
+      }),
+    };
+    try {
+      const source = openWordPressOrgTargetSource({
+        storageDirectory: directory,
+        adapter,
+        clock: () => new Date("2026-11-05T00:00:00.000Z"),
+      });
+      const observed = await source.observe({
+        kind: "wordpress-org-target-observe",
+        schemaVersion: 1,
+        slug: "example-no-minimum",
+      });
+      expect(observed.status).toBe("observed");
+      if (observed.status !== "observed") return;
+      expect(observed.observation).not.toHaveProperty(
+        "minimumWordPressVersion",
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("observes official metadata and acquires a version-bound oracle-free Target Intake Packet", async () => {
     const directory = await mkdtemp(join(tmpdir(), "wporg-target-source-"));
     const pluginArchive = archive({

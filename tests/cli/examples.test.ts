@@ -23,7 +23,7 @@ const example = async (file: string, version = "3.3.1"): Promise<unknown> =>
     ),
   ) as unknown;
 
-it("starts the checked-in wide v22 campaign with one concurrent target on the Lab image's WordPress (owner decision 2026-10-26; #741 unpinned)", async () => {
+it("starts the checked-in wide v26 campaign with one concurrent target on the Lab image's WordPress (owner decision 2026-11-05; #741 unpinned)", async () => {
   const source = JSON.parse(
     await readFile(
       join(
@@ -41,21 +41,23 @@ it("starts the checked-in wide v22 campaign with one concurrent target on the La
   ) as unknown;
   const config = wordpressCampaignConfigSchema.parse(source);
   expect(config).toMatchObject({
-    promptId: "wp2shell-bounty-v22-wide",
+    promptId: "wp2shell-bounty-v26-wide",
     runWallTimeMinutes: 120,
   });
   expect(config.resources.maxConcurrentTargets).toBe(1);
   // #741: no pin; select takes the Lab image's version and checks it against the latest stable.
   expect(config.wordpressVersion).toBeUndefined();
   expect(config.discovery.lab).toEqual({
-    mode: "none",
+    mode: "attached",
     maxResets: 2,
     maxObservations: 20,
     maxLookups: 60,
   });
   expect(config.discovery).toMatchObject({
-    maxChildren: 4,
-    minimumActiveMinutes: 0,
+    maxChildren: 3,
+    minimumActiveMinutes: 60,
+    followUp: "none",
+    priorResearch: "same-target",
   });
   expect(config.discovery.mode).toBe("wide");
   // deep v11 stays available for named Trials: the same file in deep mode still parses.
@@ -157,6 +159,36 @@ it("runs the wide example as a 20-minute v22-wide Trial on the production select
   expect((await readWordPressCampaignPolicy(config)).promptVariant).toBe(
     "wp2shell-bounty-v11",
   );
+});
+
+it("runs the v26 wide example with an attached Lab for at least 60 active minutes", async () => {
+  const source = JSON.parse(
+    await readFile(
+      join(
+        import.meta.dirname,
+        "..",
+        "..",
+        "examples",
+        "campaign-wide-v26-120.json",
+      ),
+      "utf8",
+    ),
+  ) as unknown;
+  const config = wordpressCampaignConfigSchema.parse(source);
+  expect(config).toMatchObject({
+    promptId: "wp2shell-bounty-v26-wide",
+    runWallTimeMinutes: 120,
+    discovery: {
+      mode: "wide",
+      lab: { mode: "attached" },
+      maxChildren: 3,
+      minimumActiveMinutes: 60,
+      followUp: "none",
+      priorResearch: "same-target",
+    },
+  });
+  expect(config.wordpressVersion).toBeUndefined();
+  expect(config.resources.maxConcurrentTargets).toBe(1);
 });
 
 it.each(["3.3.1", "3.2.6"])(
