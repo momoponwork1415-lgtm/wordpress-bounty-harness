@@ -64,12 +64,12 @@ it("starts the checked-in wide v26 campaign with one concurrent target on the La
   expect(config.discovery.mode).toBe("wide");
   // Deep was retired on 2026-11-05 (ADR 0039 addendum): v11 and deep no longer parse.
   for (const fields of [
-    { discovery: { lab: "none", mode: "deep" } },
+    { discovery: { lab: "attached", mode: "deep" } },
     {
-      discovery: { lab: "none", mode: "deep" },
+      discovery: { lab: "attached", mode: "deep" },
       promptId: "wp2shell-bounty-v11",
     },
-    { discovery: { lab: "none" }, promptId: "wp2shell-bounty-v11" },
+    { discovery: { lab: "attached" }, promptId: "wp2shell-bounty-v11" },
   ])
     expect(
       wordpressCampaignConfigSchema.safeParse({

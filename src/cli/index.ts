@@ -223,8 +223,6 @@ export interface CliProfile {
       readonly target: string | null;
       /** The runner only: the batch a new campaign binds, instead of the latest unbound one (#604). */
       readonly selectionBatchId?: string;
-      /** Explicit independent Trials on the same Snapshot. */
-      readonly repeat?: number;
       /** Checked before each next target; true drains the campaign as `operator`. */
       readonly stop?: () => boolean;
       /** Aborts exploration currently running when continuous mode receives SIGTERM. */
@@ -1219,20 +1217,16 @@ const COMMANDS: readonly Command[] = [
     required: ["campaign", "config"],
     maxPositionals: 1,
     usage: [
-      "campaign run <slug>|--all --campaign <id> --config <path> [--selection <path>] [--repeat <n>]",
+      "campaign run <slug>|--all --campaign <id> --config <path> [--selection <path>]",
     ],
     options: {
       all: BOOL,
       campaign: STR,
       config: STR,
-      repeat: STR,
       selection: STR,
     },
     validate: (values, rest) => {
       const target = rest[0] ?? null;
-      const repeat = values.repeat === undefined ? 1 : Number(values.repeat);
-      if (!Number.isSafeInteger(repeat) || repeat < 1 || repeat > 40)
-        throw new UsageError("--repeat must be an integer from 1 to 40");
       if ((target === null) === (values.all !== true) || rest.length > 1)
         throw new UsageError(
           "campaign run takes exactly one of <slug> or --all",
@@ -1245,7 +1239,6 @@ const COMMANDS: readonly Command[] = [
     },
     handler: async ({ values, rest, state, environment, io, print }) => {
       const target = rest[0] ?? null;
-      const repeat = values.repeat === undefined ? 1 : Number(values.repeat);
       // A manual campaign beside the runner keeps its containers (#399).
       const release = await holdDiscoverySweep(
         state.stateDirectory,
@@ -1256,7 +1249,6 @@ const COMMANDS: readonly Command[] = [
           campaignId: required(values.campaign, "campaign"),
           configPath: resolve(required(values.config, "config")),
           target,
-          repeat,
           ...(values.selection === undefined
             ? {}
             : { selectionPolicyPath: resolve(values.selection) }),

@@ -86,24 +86,23 @@ const WORDPRESS_DEFAULT_WALL_MINUTES = 120;
 const WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES = 0;
 
 /**
- * Whether a discovery Lab is attached and how often the Root may reset it
- * (redesign 2026-10-25 §7). The string form is normalised to the object.
- * `attached` gives each Trial one exploration Lab for its whole wall (ADR
- * 0003, 2026-10-25 addendum); resets are budgeted by `maxResets`, observer
- * visits (`POST /observe`, Phase D2) by `maxObservations`, and the storage
- * lookups `POST /find` / `POST /sql` (ADR 0049) share `maxLookups`. The
- * default is `attached` (ADR 0049, owner decision 2026-11-02).
+ * The discovery Lab's budgets (redesign 2026-10-25 §7). The string form is
+ * normalised to the object. Each Trial has one exploration Lab for its whole
+ * wall (ADR 0003, 2026-10-25 addendum); resets are budgeted by `maxResets`,
+ * observer visits (`POST /observe`, Phase D2) by `maxObservations`, and the
+ * storage lookups `POST /find` / `POST /sql` (ADR 0049) share `maxLookups`.
+ * `attached` is the only mode: `none` was removed on 2026-11-05 (owner).
  */
 const discoveryLabSchema = z
   .union([
-    z.enum(["none", "attached"]).transform((mode) => ({
+    z.literal("attached").transform((mode) => ({
       mode,
       maxResets: undefined,
       maxObservations: undefined,
       maxLookups: undefined,
     })),
     z.strictObject({
-      mode: z.enum(["none", "attached"]),
+      mode: z.literal("attached"),
       maxResets: z.number().int().min(0).max(5).optional(),
       maxObservations: z.number().int().min(0).max(100).optional(),
       maxLookups: z.number().int().min(0).max(300).optional(),

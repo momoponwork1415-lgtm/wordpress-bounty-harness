@@ -38,19 +38,23 @@ describe("discovery.priorResearch configuration (ADR 0048)", () => {
     expect(
       wordpressCampaignConfigSchema.parse({
         ...base,
-        discovery: { lab: "none" },
+        discovery: { lab: "attached" },
       }).discovery.priorResearch,
     ).toBe("none");
     expect(
       wordpressCampaignConfigSchema.parse({
         ...base,
-        discovery: { lab: "none", mode: "wide", priorResearch: "same-target" },
+        discovery: {
+          lab: "attached",
+          mode: "wide",
+          priorResearch: "same-target",
+        },
       }).discovery.priorResearch,
     ).toBe("same-target");
     expect(
       wordpressCampaignConfigSchema.safeParse({
         ...base,
-        discovery: { lab: "none", priorResearch: "all-targets" },
+        discovery: { lab: "attached", priorResearch: "all-targets" },
       }).success,
     ).toBe(false);
   });

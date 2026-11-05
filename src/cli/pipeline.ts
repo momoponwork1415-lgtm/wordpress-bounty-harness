@@ -44,13 +44,13 @@ export interface CampaignPipeline<
   readonly select: () => Promise<readonly Target[]>;
   readonly freeze: (target: Target) => Promise<Snapshot>;
   readonly lab: LabProvisioner<Setup, Handle>;
-  /** `discovery.lab: attached`: drives one Trial's exploration Lab (ADR 0003, 2026-10-25 addendum). */
-  readonly explorationLab?: (handle: Handle) => TrialLab;
+  /** Drives one Trial's exploration Lab (ADR 0003, 2026-10-25 addendum). */
+  readonly explorationLab: (handle: Handle) => TrialLab;
   readonly setupFor: (snapshot: Snapshot) => Setup;
   readonly discovery: (input: {
     readonly target: Target;
     readonly snapshot: Snapshot;
-    readonly lab?: Handle;
+    readonly lab: Handle;
   }) => Promise<{
     readonly input: CampaignInputV1;
     readonly plannedTrials: readonly PlannedTrial[];
@@ -97,7 +97,7 @@ export type CampaignSummary = {
     readonly targetId: string;
     readonly version: string;
     readonly snapshotDigest: string;
-    readonly lab: "ready" | "failed" | "none";
+    readonly lab: "ready" | "failed";
     readonly runCount: number;
     readonly stoppedBy: string;
     /** Why the target's Lab could not be set up; the diagnostic stays private (#284). */
@@ -282,8 +282,6 @@ export async function runCampaignPipeline<
   readonly targetLimit?: TargetLimit;
   /** Per-runtime caps under maxConcurrentTargets; absent, only the total applies. */
   readonly runtimeCaps?: RuntimeTargetCaps<Target>;
-  readonly discoveryLab?: "attached" | "none";
-  readonly repeat?: number;
   /** Checked before each next target. True drains in-flight targets and stops as `operator`. */
   readonly stop?: () => boolean;
   readonly signal?: AbortSignal;
@@ -301,16 +299,6 @@ export async function runCampaignPipeline<
   const maxConcurrentTargets = options.maxConcurrentTargets ?? 1;
   if (!Number.isSafeInteger(maxConcurrentTargets) || maxConcurrentTargets < 1)
     throw new Error("Invalid target concurrency");
-  // An attached Lab serves exactly one Trial (ADR 0003, 2026-10-25 addendum):
-  // refused once here, before anything is selected or frozen.
-  if (options.discoveryLab !== "none") {
-    if ((options.repeat ?? 1) > 1)
-      throw new Error(
-        "An exploration Lab serves one Trial; --repeat needs discovery.lab none",
-      );
-    if (pipeline.explorationLab === undefined)
-      throw new Error("This profile has no exploration Lab");
-  }
   type TargetSummary = CampaignSummary["targets"][number];
   type SkippedSummary = CampaignSummary["skipped"][number];
   type TargetResult = {
@@ -472,103 +460,92 @@ export async function runCampaignPipeline<
       });
 
       stage = "discovery";
-      if (options.discoveryLab !== "none") {
-        const provisioned = await pipeline.lab
-          .provision(snapshot, setup, { purpose: "discovery" })
-          .catch(provisionThrew);
-        if (provisioned.status === "ready") handle = provisioned.handle;
-        const labId =
-          provisioned.status === "ready"
-            ? provisioned.handle.id
-            : options.newId();
-        // Every failure keeps its exception and next step in Private Evidence (#284).
-        const diagnosticDigest =
-          provisioned.status === "ready"
-            ? undefined
-            : await storeLabDiagnostic(options.store, "provision", provisioned);
-        await append({
-          ...base,
-          identity: `lab-provisioned-${labId}`,
-          occurredAt: at(),
-          type: "lab-provisioned",
-          labId,
-          status: provisioned.status === "ready" ? "ready" : "failed",
-          purpose: "discovery",
-          ...(provisioned.status === "ready"
-            ? {
-                setupDigest: provisioned.handle.setupDigest,
-                // #746: the exploration Lab names its base environment too.
-                ...(provisioned.handle.baseline === undefined
-                  ? {}
-                  : { baseline: provisioned.handle.baseline }),
-              }
-            : {}),
-          ...(provisioned.status === "ready"
-            ? {}
-            : {
-                failureStage: "provision" as const,
-                reason: provisioned.reason,
-              }),
+      const provisioned = await pipeline.lab
+        .provision(snapshot, setup, { purpose: "discovery" })
+        .catch(provisionThrew);
+      if (provisioned.status === "ready") handle = provisioned.handle;
+      const labId =
+        provisioned.status === "ready"
+          ? provisioned.handle.id
+          : options.newId();
+      // Every failure keeps its exception and next step in Private Evidence (#284).
+      const diagnosticDigest =
+        provisioned.status === "ready"
+          ? undefined
+          : await storeLabDiagnostic(options.store, "provision", provisioned);
+      await append({
+        ...base,
+        identity: `lab-provisioned-${labId}`,
+        occurredAt: at(),
+        type: "lab-provisioned",
+        labId,
+        status: provisioned.status === "ready" ? "ready" : "failed",
+        purpose: "discovery",
+        ...(provisioned.status === "ready"
+          ? {
+              setupDigest: provisioned.handle.setupDigest,
+              // #746: the exploration Lab names its base environment too.
+              ...(provisioned.handle.baseline === undefined
+                ? {}
+                : { baseline: provisioned.handle.baseline }),
+            }
+          : {}),
+        ...(provisioned.status === "ready"
+          ? {}
+          : {
+              failureStage: "provision" as const,
+              reason: provisioned.reason,
+            }),
+        ...(diagnosticDigest === undefined
+          ? {}
+          : {
+              artifacts: [{ kind: "lab-diagnostic", digest: diagnosticDigest }],
+            }),
+      });
+      if (provisioned.status !== "ready") {
+        result.target = {
+          targetId: target.targetId,
+          version: target.version,
+          snapshotDigest: snapshot.digest,
+          lab: "failed",
+          runCount: 0,
+          stoppedBy:
+            provisioned.reason === "precondition"
+              ? "incomplete(precondition)"
+              : "setup-failed",
           ...(diagnosticDigest === undefined
             ? {}
             : {
-                artifacts: [
-                  { kind: "lab-diagnostic", digest: diagnosticDigest },
-                ],
+                labFailure: {
+                  failureStage: "provision" as const,
+                  reason: provisioned.reason,
+                  nextStep: provisioned.nextStep,
+                  diagnosticDigest,
+                },
               }),
-        });
-        if (provisioned.status !== "ready") {
-          result.target = {
-            targetId: target.targetId,
-            version: target.version,
-            snapshotDigest: snapshot.digest,
-            lab: "failed",
-            runCount: 0,
-            stoppedBy:
-              provisioned.reason === "precondition"
-                ? "incomplete(precondition)"
-                : "setup-failed",
-            ...(diagnosticDigest === undefined
-              ? {}
-              : {
-                  labFailure: {
-                    failureStage: "provision" as const,
-                    reason: provisioned.reason,
-                    nextStep: provisioned.nextStep,
-                    diagnosticDigest,
-                  },
-                }),
-            verifications: [],
-          };
-          return;
-        }
+          verifications: [],
+        };
+        return;
       }
       const prepared = await pipeline.discovery({
         target,
         snapshot,
-        ...(handle === undefined ? {} : { lab: handle }),
+        lab: provisioned.handle,
       });
       const discovered = await runDiscoveryCampaign({
         campaignId,
         ledger,
         evidence: options.store,
         clock,
-        ...(handle === undefined
-          ? {}
-          : {
-              lab: pipeline.explorationLab!(handle),
-              ...(options.signal === undefined
-                ? {}
-                : { signal: options.signal }),
-            }),
+        lab: pipeline.explorationLab(provisioned.handle),
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
         ...prepared,
-        repeatAll: (options.repeat ?? 1) > 1,
       });
       result.target = {
         targetId: target.targetId,
         version: target.version,
         snapshotDigest: snapshot.digest,
-        lab: handle === undefined ? "none" : "ready",
+        lab: "ready",
         runCount: discovered.runCount,
         stoppedBy: discovered.stoppedBy,
         verifications: [],

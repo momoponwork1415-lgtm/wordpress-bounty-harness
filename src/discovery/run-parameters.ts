@@ -9,7 +9,7 @@ export interface RunParameters {
   readonly minimumActiveMinutes: number;
   readonly maxChildren: number;
   readonly lab: {
-    readonly mode: "none" | "attached";
+    readonly mode: "attached";
     readonly maxResets: number;
     /** Attached Labs only (Phase D2); not stated in the section. */
     readonly maxObservations?: number;
@@ -39,9 +39,7 @@ export function runParametersSection(parameters: RunParameters): string {
         ? `- Minimum active exploration time: ${parameters.minimumActiveMinutes} minutes.`
         : "- Minimum active exploration time: 0 minutes (no minimum).",
       `- Maximum concurrent child agents: ${parameters.maxChildren}.`,
-      lab.mode === "none"
-        ? "- Lab: none."
-        : `- Lab: attached, at most ${lab.maxResets} resets.`,
+      `- Lab: attached, at most ${lab.maxResets} resets.`,
     ].join("\n"),
   ].join("\n\n");
 }

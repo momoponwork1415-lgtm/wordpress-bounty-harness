@@ -145,8 +145,6 @@ export async function runDiscoveryCampaign(options: {
   readonly labId?: string;
   /** The exploration Lab of the one planned Trial; its id is the run's `labId`. */
   readonly lab?: TrialLab;
-  /** An explicit repeat runs every planned independent Trial unless a run fails. */
-  readonly repeatAll?: boolean;
   readonly input: CampaignInputV1;
   /** Runs in flight at once on this host; at most four. */
   readonly concurrency?: number;
@@ -330,14 +328,11 @@ export async function runDiscoveryCampaign(options: {
       tally.stopped ??= "provider-limit";
     if (explore.outcome === "failed") tally.stopped ??= "incomplete";
     if (explore.outcome === "completed") {
-      if (!options.repeatAll && explore.heldBoundary && !explore.foundNew)
+      if (explore.heldBoundary && !explore.foundNew)
         tally.stopped ??= "output-boundary";
       else tally.noNewFindings = explore.foundNew ? 0 : tally.noNewFindings + 1;
     }
-    if (
-      !options.repeatAll &&
-      tally.noNewFindings >= input.stopRules.noFindingRuns
-    )
+    if (tally.noNewFindings >= input.stopRules.noFindingRuns)
       tally.stopped ??= "no-new-finding";
   };
   const interrupted =

@@ -14,6 +14,7 @@ import {
 } from "../../src/cli/wordpress-session.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../src/ledger/index.js";
+import { fakeExplorationLab } from "../support/fake-exploration-lab.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -75,7 +76,6 @@ async function campaign(
     store,
     clock: () => new Date("2026-10-19T00:00:00Z"),
     newId: () => `id-${++ids}`,
-    discoveryLab: "none",
     maxConcurrentTargets: options.maxConcurrentTargets ?? 4,
     ...(options.live === undefined &&
     options.liveRuntime === undefined &&
@@ -101,6 +101,7 @@ async function campaign(
     ...(runtimeCaps === undefined ? {} : { runtimeCaps: runtimeCaps as never }),
     ...(options.stop === undefined ? {} : { stop: options.stop }),
     pipeline: {
+      ...fakeExplorationLab(`sha256:${"c".repeat(64)}`),
       select: async () =>
         names.map((name) => ({
           targetId: `wporg:${name}`,
@@ -311,7 +312,7 @@ describe("maxConcurrentTargetsByRuntime in the campaign config", () => {
     wordpressCampaignConfigSchema.safeParse({
       ...base,
       discovery: {
-        lab: "none",
+        lab: "attached",
         ...(share === undefined ? {} : { runtimeShare: share }),
       },
       resources: {

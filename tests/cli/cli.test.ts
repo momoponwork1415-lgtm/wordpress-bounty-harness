@@ -134,6 +134,14 @@ function waitForSecondExecution(): () => Promise<void> {
 /** One attacker GET as the Lab recorder writes it. */
 const SYNTHETIC_CAPTURE = `{"request":{"method":"GET","path":"/synthetic","headers":{},"body":"","bodyBase64":"","truncated":false},"response":{"statusCode":200,"headers":{},"body":"ok","bodyBase64":"b2s=","truncated":false}}\n`;
 
+/** A resumed segment's new Lab has its own accounts and resume notice; the rest is the Trial's text. */
+function withoutLabSection(prompt: string | undefined): string | undefined {
+  return prompt?.replace(
+    /\n\n## Lab\n\n[\s\S]*?(?=\n\n(WordPress core source|Dependency source|Writable notes|## ))/,
+    "",
+  );
+}
+
 async function harness(
   options: {
     readonly askMinutes?: CliIo["askMinutes"];
@@ -1020,7 +1028,7 @@ async function harness(
       schemaVersion: 1,
       selectionPolicyPath: policyPath,
       // Match the current host: discovery never attaches a Lab.
-      discovery: { lab: "none" },
+      discovery: { lab: "attached" },
       promptId: "wp2shell-bounty-v26-wide",
       programmeBoundary: {
         version: "v1",
@@ -1389,7 +1397,7 @@ describe("discovery runtime share", () => {
     } = await harness({
       claude: true,
       config: {
-        discovery: { lab: "none", runtimeShare: { codex: 0, claude: 1 } },
+        discovery: { lab: "attached", runtimeShare: { codex: 0, claude: 1 } },
       },
     });
     await run(
@@ -1416,7 +1424,7 @@ describe("discovery runtime share", () => {
     // only the Run parameters line naming the runtime differs.
     const codex = await harness({
       claude: true,
-      config: { discovery: { lab: "none" } },
+      config: { discovery: { lab: "attached" } },
     });
     await codex.run(
       "campaign",
@@ -1427,8 +1435,11 @@ describe("discovery runtime share", () => {
       "--config",
       codex.configPath,
     );
+    // Each Lab has its own random accounts; the rest of the text is the same.
     const withoutRuntime = (prompt: string | undefined) =>
-      prompt?.replace(/^- Runtime: .*$/m, "");
+      prompt
+        ?.replace(/^- Runtime: .*$/m, "")
+        .replace(/^- (Administrator|subscriber) account: .*$/gm, "");
     expect(prompts[0]).toContain("- Runtime: claude-code/v1, model ");
     expect(codex.prompts[0]).toContain("- Runtime: codex-native/v1, model ");
     expect(withoutRuntime(prompts[0])).toBe(withoutRuntime(codex.prompts[0]));
@@ -1441,7 +1452,7 @@ describe("discovery runtime share", () => {
     const { run, configPath, transportRuns } = await harness({
       claude: true,
       config: {
-        discovery: { lab: "none", runtimeShare: { codex: 1, claude: 1 } },
+        discovery: { lab: "attached", runtimeShare: { codex: 1, claude: 1 } },
         resources: {
           maxConcurrentRuns: 1,
           maxConcurrentTargets: 2,
@@ -1491,7 +1502,7 @@ describe("discovery runtime share", () => {
   it("starts nothing for a Claude-assigned target when the host offers no Claude runtime", async () => {
     const { run, configPath, transportRuns } = await harness({
       config: {
-        discovery: { lab: "none", runtimeShare: { codex: 0, claude: 1 } },
+        discovery: { lab: "attached", runtimeShare: { codex: 0, claude: 1 } },
       },
     });
     await run(
@@ -1532,7 +1543,7 @@ describe("discovery runtime share", () => {
         ...JSON.parse(
           '{"schemaVersion":1,"programmeBoundary":{"version":"v","text":"t"},"wordpressVersion":"6.8","lab":{"siteTitle":"s","initialPosts":[],"customerRole":false}}',
         ),
-        discovery: { lab: "none", runtimeShare: { codex: 0, claude: 0 } },
+        discovery: { lab: "attached", runtimeShare: { codex: 0, claude: 0 } },
       }).success,
     ).toBe(false);
   });
@@ -1573,7 +1584,7 @@ describe("harness CLI vertical slice", () => {
         wallMinutes: 120,
         minimumActiveMinutes: 0,
         maxChildren: 4,
-        lab: { mode: "none", maxResets: 2 },
+        lab: { mode: "attached", maxResets: 2 },
       },
     });
     // The generated section follows the contract; no mode has a floor by default (#686).
@@ -1581,7 +1592,7 @@ describe("harness CLI vertical slice", () => {
       `${contract.text}\n\n## Run parameters\n\nThe Harness sets and enforces these values for this Trial.\n`,
     );
     expect(prompts[0]).toContain(
-      "- Wall time: 120 minutes.\n- Minimum active exploration time: 0 minutes (no minimum).\n- Maximum concurrent child agents: 4.\n- Lab: none.",
+      "- Wall time: 120 minutes.\n- Minimum active exploration time: 0 minutes (no minimum).\n- Maximum concurrent child agents: 4.\n- Lab: attached, at most 2 resets.",
     );
     // The current objective is one whole file, so no section digests are recorded.
     expect(started).not.toHaveProperty("configuration.sectionDigests");
@@ -1591,7 +1602,7 @@ describe("harness CLI vertical slice", () => {
     const { run, root, configPath, prompts, ledger, transportRuns } =
       await harness({
         config: {
-          discovery: { lab: "none", priorResearch: "same-target" },
+          discovery: { lab: "attached", priorResearch: "same-target" },
         },
         researchOnCalls: [1],
       });
@@ -1690,7 +1701,7 @@ describe("harness CLI vertical slice", () => {
 
   it("imports another state's sealed research once and passes it to this state's first Trial of a later version (ADR 0049 D)", async () => {
     const bench = await harness({
-      config: { discovery: { lab: "none" } },
+      config: { discovery: { lab: "attached" } },
       researchOnCalls: [1],
     });
     expect(
@@ -1712,7 +1723,7 @@ describe("harness CLI vertical slice", () => {
       throw new Error("the bench Trial starts");
     // Production shares the work directory (attachments) but has its own ledger.
     const production = await harness({
-      config: { discovery: { lab: "none", priorResearch: "same-target" } },
+      config: { discovery: { lab: "attached", priorResearch: "same-target" } },
       attachmentsDirectory: join(bench.root, "provider"),
     });
     const policyPath = join(production.root, "selection.json");
@@ -1897,7 +1908,7 @@ describe("harness CLI vertical slice", () => {
     );
   });
 
-  it("keeps discovery unverified and hands the agent no Lab account above its trust boundary", async () => {
+  it("keeps discovery unverified and hands the agent no Lab account between subscriber and administrator", async () => {
     const { run, configPath, prompts, docker } = await harness();
 
     const campaign = await run(
@@ -1913,14 +1924,11 @@ describe("harness CLI vertical slice", () => {
     expect(campaign.code).toBe(0);
     expect(campaign.stdout).toContain("wporg:synthetic-plugin 3.3.1");
     expect(campaign.stdout).toContain("stopped by max-runs");
-    expect(campaign.stdout).toContain("lab none");
+    expect(campaign.stdout).toContain("lab ready");
     expect(campaign.stdout).not.toContain(": runtime-confirmed");
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain("Trust boundary");
-    expect(prompts[0]).not.toMatch(/subscriber: wbh-subscriber-/);
-    // The Lab administrator exists for setup only and never reaches the agent.
-    expect(prompts[0]).not.toContain("harness-admin");
-    expect(prompts[0]).not.toMatch(/^- (administrator|editor|contributor)/m);
+    expect(prompts[0]).not.toMatch(/^- (editor|contributor|author) account/im);
     expect(
       docker.every(
         (request) =>
@@ -2092,7 +2100,7 @@ describe("harness CLI vertical slice", () => {
     let failLab = false;
     const { run, configPath, ledger, state, root } = await harness({
       entryPoints: true,
-      config: { promptId: undefined, discovery: { lab: "none" } },
+      config: { promptId: undefined, discovery: { lab: "attached" } },
       labProvisionError: () =>
         failLab ? new TypeError("synthetic handoff Lab failure") : undefined,
     });
@@ -2153,7 +2161,7 @@ describe("harness CLI vertical slice", () => {
     });
   });
 
-  it("runs without a legacy Verifier or discovery Lab, then explicitly hands off one Finding", async () => {
+  it("runs discovery with its exploration Lab and no legacy Verifier, then explicitly hands off one Finding", async () => {
     const {
       run,
       configPath,
@@ -2166,7 +2174,7 @@ describe("harness CLI vertical slice", () => {
       entryPoints: true,
       config: {
         promptId: undefined,
-        discovery: { lab: "none" },
+        discovery: { lab: "attached" },
       },
     });
     const campaignId = "campaign-explore-only";
@@ -2181,21 +2189,22 @@ describe("harness CLI vertical slice", () => {
     );
     if (discovered.stderr) throw new Error(discovered.stderr);
     expect(discovered.code).toBe(0);
-    expect(discovered.stdout).toContain("lab none");
+    expect(discovered.stdout).toContain("lab ready");
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain(
-      "This Trial has no Lab. Runtime confirmation happens during verification.",
+      "## Lab\n\nThis Trial has one Lab of its own for its whole wall time.",
     );
-    expect(prompts[0]).not.toContain("## Lab\n\nEndpoint:");
-    expect(ledger().read({ campaignId, type: "lab-provisioned" })).toHaveLength(
-      0,
-    );
+    expect(
+      ledger()
+        .read({ campaignId, type: "lab-provisioned" })
+        .map(({ event }) => event.type === "lab-provisioned" && event.purpose),
+    ).toEqual(["discovery"]);
     expect(
       ledger().read({ campaignId, type: "verification-finished" }),
     ).toHaveLength(0);
     expect(
       ledger().read({ campaignId, type: "discovery-run-started" })[0]?.event,
-    ).toMatchObject({ labAttached: false });
+    ).toMatchObject({ configuration: { lab: { mode: "attached" } } });
     expect(
       ledger().read({ campaignId, type: "discovery-run-finished" })[0]?.event,
     ).toMatchObject({ outcome: "completed" });
@@ -2250,7 +2259,7 @@ describe("harness CLI vertical slice", () => {
     expect(live.containers.size).toBe(0);
     expect(live.networks.size).toBe(0);
     expect(live.volumes.size).toBe(0);
-    expect(ledger().funnel(campaignId).byLab.none).toMatchObject({
+    expect(ledger().funnel(campaignId).byLab.attached).toMatchObject({
       runs: 1,
       findings: 2,
     });
@@ -2634,47 +2643,6 @@ describe("harness CLI vertical slice", () => {
     expect(live.volumes.size).toBe(0);
   });
 
-  it("does not resume an exploration-Lab Trial under a campaign with discovery.lab none", async () => {
-    const attached = await harness({
-      refuseOnCalls: [1],
-      refusalSession: true,
-      zeroFindings: true,
-      config: { promptId: undefined, discovery: { lab: "attached" } },
-    });
-    const campaignId = "campaign-exploration-resume-none";
-    expect(
-      (
-        await attached.run(
-          "campaign",
-          "run",
-          "synthetic-plugin",
-          "--campaign",
-          campaignId,
-          "--config",
-          attached.configPath,
-        )
-      ).code,
-    ).toBe(0);
-    const written = JSON.parse(await readFile(attached.configPath, "utf8"));
-    written.discovery.lab = "none";
-    await writeFile(attached.configPath, JSON.stringify(written));
-    const resumed = await attached.run(
-      "campaign",
-      "resume",
-      "--campaign",
-      campaignId,
-      "--run",
-      attached.transportRuns[0]!.runId,
-      "--config",
-      attached.configPath,
-    );
-    expect(resumed.code).toBe(3);
-    expect(resumed.stderr).toBe(
-      "not resumable: lab-mode-differs (the campaign configuration has discovery.lab none)",
-    );
-    expect(attached.transportRuns).toHaveLength(1);
-  });
-
   it("does not resume an exploration-Lab Trial when the campaign's reset budget changed", async () => {
     const attached = await harness({
       refuseOnCalls: [1],
@@ -2761,73 +2729,6 @@ describe("harness CLI vertical slice", () => {
       "not resumable: lab-budget-differs (the Trial started with discovery.lab.maxObservations 20; the campaign configuration has 30)",
     );
     expect(attached.transportRuns).toHaveLength(1);
-  });
-
-  it("refuses --repeat with an attached exploration Lab once, before any freeze", async () => {
-    const { run, configPath, ledger, transportRuns } = await harness({
-      config: { promptId: undefined, discovery: { lab: "attached" } },
-    });
-    const campaignId = "campaign-exploration-repeat";
-    const result = await run(
-      "campaign",
-      "run",
-      "synthetic-plugin",
-      "--campaign",
-      campaignId,
-      "--config",
-      configPath,
-      "--repeat",
-      "2",
-    );
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain(
-      "An exploration Lab serves one Trial; --repeat needs discovery.lab none",
-    );
-    expect(transportRuns).toHaveLength(0);
-    for (const type of [
-      "snapshot-frozen",
-      "target-skipped",
-      "lab-provisioned",
-    ] as const)
-      expect(ledger().read({ campaignId, type })).toHaveLength(0);
-  });
-
-  it("--repeat 3 records three independent Trial IDs on the same Snapshot", async () => {
-    const { run, configPath, ledger, prompts } = await harness({
-      zeroFindings: true,
-      config: {
-        promptId: undefined,
-        discovery: { lab: "none" },
-      },
-    });
-    const campaignId = "campaign-repeat-three";
-    const result = await run(
-      "campaign",
-      "run",
-      "synthetic-plugin",
-      "--campaign",
-      campaignId,
-      "--config",
-      configPath,
-      "--repeat",
-      "3",
-    );
-    if (result.stderr) throw new Error(result.stderr);
-    expect(result.code).toBe(0);
-    expect(prompts).toHaveLength(3);
-    const starts = ledger()
-      .read({ campaignId, type: "discovery-run-started" })
-      .map(({ event }) => event);
-    expect(starts).toHaveLength(3);
-    expect(
-      new Set(
-        starts.map((event) =>
-          event.type === "discovery-run-started" ? event.trialId : null,
-        ),
-      ).size,
-    ).toBe(3);
-    expect(new Set(starts.map((event) => event.snapshotDigest)).size).toBe(1);
-    expect(ledger().funnel(campaignId).byLab.none.runs).toBe(3);
   });
 
   it("reads historical stage and continuation references without writing them on new Trials", async () => {
@@ -3010,8 +2911,8 @@ describe("harness CLI vertical slice", () => {
       wordpressVersion: "6.8",
       lab: { siteTitle: "Synthetic", initialPosts: [], customerRole: false },
     };
-    const wide = { lab: "none", mode: "wide" } as const;
-    const deep = { lab: "none", mode: "deep" } as const;
+    const wide = { lab: "attached", mode: "wide" } as const;
+    const deep = { lab: "attached", mode: "deep" } as const;
     // ADR 0039 addendum 3: wide has no floor and the 120-minute cap as its wall.
     expect(
       wordpressCampaignConfigSchema.parse({ ...base, discovery: wide }),
@@ -3092,7 +2993,7 @@ describe("harness CLI vertical slice", () => {
         runWallTimeMinutes: 20,
       },
       { discovery: wide, runWallTimeMinutes: 121 },
-      { discovery: { lab: "none", mode: "screening" } },
+      { discovery: { lab: "attached", mode: "screening" } },
       {
         discovery: { ...wide, minimumActiveMinutes: 90 },
         runWallTimeMinutes: 90,
@@ -3113,7 +3014,7 @@ describe("harness CLI vertical slice", () => {
   it("launches a wide Trial without a floor and records its mode (ADR 0039)", async () => {
     const { run, configPath, transportRuns, prompts, ledger } = await harness({
       config: {
-        discovery: { lab: "none", mode: "wide", maxChildren: 6 },
+        discovery: { lab: "attached", mode: "wide", maxChildren: 6 },
         promptId: undefined,
         runWallTimeMinutes: undefined,
       },
@@ -3143,7 +3044,7 @@ describe("harness CLI vertical slice", () => {
           "- Wall time: 120 minutes.",
           "- Minimum active exploration time: 0 minutes (no minimum).",
           "- Maximum concurrent child agents: 6.",
-          "- Lab: none.",
+          "- Lab: attached, at most 2 resets.",
         ].join("\n"),
         "## Trust boundary",
       ].join("\n\n"),
@@ -3161,7 +3062,7 @@ describe("harness CLI vertical slice", () => {
         wallMinutes: 120,
         minimumActiveMinutes: 0,
         maxChildren: 6,
-        lab: { mode: "none", maxResets: 2 },
+        lab: { mode: "attached", maxResets: 2 },
         model: "gpt-6.1-sol",
         effort: "high",
       });
@@ -3386,39 +3287,6 @@ describe("harness CLI vertical slice", () => {
     expect(attached.transportRuns).toHaveLength(1);
   });
 
-  it("stops the campaign on a provider limit and resumes it with the same command", async () => {
-    const { run, configPath } = await harness({
-      limitOnCalls: [2],
-    });
-    const command = [
-      "campaign",
-      "run",
-      "--all",
-      "--campaign",
-      "campaign-1",
-      "--config",
-      configPath,
-      "--repeat",
-      "4",
-    ];
-    const stopped = await run(...command);
-    expect(stopped.code).toBe(3);
-    expect(stopped.stdout).toContain("runs 2  stopped by provider-limit");
-    expect(stopped.stdout).not.toContain("  finding ");
-    expect(stopped.stdout).toContain(
-      "campaign stopped by provider-limit; run the same command again to resume",
-    );
-    expect(stopped.stdout).toContain("raw 2 → verifier通過 0");
-
-    const resumed = await run(...command);
-    expect(resumed.code).toBe(0);
-    // The limited run is not a Trial (owner decision 2026-10-19): its ordinal
-    // runs again and the campaign reaches its run limit.
-    expect(resumed.stdout).toContain("stopped by max-runs");
-    expect(resumed.stdout).not.toMatch(/^  finding /m);
-    expect(resumed.stdout).toContain("raw 2 → verifier通過 0 → confirmed 0");
-  });
-
   it("finishes in-flight targets after a provider limit, then resumes only unfinished targets", async () => {
     const { run, configPath, prompts, ledger, maxInFlight, live, docker } =
       await harness({
@@ -3471,7 +3339,7 @@ describe("harness CLI vertical slice", () => {
         type: "discovery-run-started",
       }),
     ).toHaveLength(4);
-    // Neither invocation provisions a discovery Lab.
+    // Each Trial, the provider-limited one too, has its own discovery Lab.
     expect(
       ledger()
         .read({
@@ -3482,7 +3350,7 @@ describe("harness CLI vertical slice", () => {
           ({ event }) =>
             event.type === "lab-provisioned" && event.purpose === "discovery",
         ),
-    ).toHaveLength(0);
+    ).toHaveLength(4);
     expect(live.containers.size).toBe(0);
     expect(live.networks.size).toBe(0);
     expect(live.volumes.size).toBe(0);
@@ -3527,7 +3395,7 @@ describe("harness CLI vertical slice", () => {
       root,
     } = await harness({
       entryPoints: true,
-      config: { discovery: { lab: "none" } },
+      config: { discovery: { lab: "attached" } },
     });
     const campaign = "campaign-handoff";
     const discovered = await run(
@@ -3617,7 +3485,7 @@ describe("harness CLI vertical slice", () => {
     // Recording and listing the reject is in review-operations.test.ts (#495).
     const { run, configPath, ledger, root } = await harness({
       entryPoints: true,
-      config: { discovery: { lab: "none" } },
+      config: { discovery: { lab: "attached" } },
     });
     const campaign = ["--campaign", "campaign-screen"];
     await run(
@@ -3699,7 +3567,7 @@ describe("harness CLI vertical slice", () => {
       labIdsDuringVerification,
     } = await harness({
       entryPoints: true,
-      config: { discovery: { lab: "none" } },
+      config: { discovery: { lab: "attached" } },
     });
     const { wordpressVersion } = JSON.parse(
       await readFile(configPath, "utf8"),
@@ -3741,7 +3609,14 @@ describe("harness CLI vertical slice", () => {
     expect(findings.length).toBeGreaterThan(1);
     // The runner started no Verifier and no verification Lab.
     expect(ledger().read({ type: "verification-finished" })).toHaveLength(0);
-    expect(ledger().read({ type: "lab-provisioned" })).toHaveLength(0);
+    expect(
+      ledger()
+        .read({ type: "lab-provisioned" })
+        .filter(
+          ({ event }) =>
+            event.type === "lab-provisioned" && event.purpose !== "discovery",
+        ),
+    ).toHaveLength(0);
     expect(labIdsDuringVerification).toHaveLength(0);
 
     // A Finding the retired automatic Verifier left incomplete stays in the
@@ -3926,7 +3801,7 @@ describe("harness CLI vertical slice", () => {
       config: {
         promptId: undefined,
         // A floor is set here so that the segment carries the remaining minimum (ADR 0039 addendum 20 made the default 0).
-        discovery: { lab: "none", minimumActiveMinutes: 60 },
+        discovery: { lab: "attached", minimumActiveMinutes: 60 },
       },
     });
     const campaign = "campaign-resume";
@@ -3989,7 +3864,9 @@ describe("harness CLI vertical slice", () => {
       },
     });
     expect(segment.prompt).toContain(segment.resumePrompt!);
-    expect(segment.prompt).toBe(transportRuns[0]!.prompt);
+    expect(withoutLabSection(segment.prompt)).toBe(
+      withoutLabSection(transportRuns[0]!.prompt),
+    );
     expect(segment.prompt).toContain(
       "Only a named human's matching observation in a retained verification Lab or a new review Lab",
     );
@@ -4007,7 +3884,7 @@ describe("harness CLI vertical slice", () => {
       trialOrdinal: 0,
       resumesRun: refusedRunId,
       resumeSegment: 1,
-      labAttached: false,
+      labAttached: true,
       configuration: { trustBoundaryVersion: "trust-boundary-v2" },
     });
     // The original failure and skip stay; the Trial is counted once.
@@ -4020,7 +3897,7 @@ describe("harness CLI vertical slice", () => {
     ).toEqual(["failed", "completed"]);
     expect(ledger().funnel(campaign)).toMatchObject({
       discoveryAttempts: 1,
-      byLab: { none: { runs: 1 } },
+      byLab: { attached: { runs: 1 } },
     });
 
     const again = await run(
@@ -4061,7 +3938,7 @@ describe("harness CLI vertical slice", () => {
         zeroFindings: true,
         config: {
           promptId: "wp2shell-bounty-v26-wide",
-          discovery: { lab: "none", mode: "wide" },
+          discovery: { lab: "attached", mode: "wide" },
         },
       });
       const campaign = `campaign-trust-boundary-${caseName}`;
@@ -4183,7 +4060,11 @@ describe("harness CLI vertical slice", () => {
       zeroFindings: true,
       config: {
         promptId: undefined,
-        discovery: { lab: "none", maxChildren: 3, minimumActiveMinutes: 40 },
+        discovery: {
+          lab: "attached",
+          maxChildren: 3,
+          minimumActiveMinutes: 40,
+        },
       },
     });
     const campaign = "campaign-resume-parameters";
@@ -4197,7 +4078,7 @@ describe("harness CLI vertical slice", () => {
     // Between the segments the operator changes every run parameter.
     const written = JSON.parse(await readFile(configPath, "utf8"));
     written.discovery = {
-      lab: "none",
+      lab: "attached",
       maxChildren: 6,
       minimumActiveMinutes: 20,
     };
@@ -4219,7 +4100,9 @@ describe("harness CLI vertical slice", () => {
       minimumActiveMs: 30 * 60_000,
     });
     expect(resumed.stdout).toContain("remaining wall 110 min");
-    expect(segment.prompt).toBe(transportRuns[0]!.prompt);
+    expect(withoutLabSection(segment.prompt)).toBe(
+      withoutLabSection(transportRuns[0]!.prompt),
+    );
     const starts = ledger()
       .read({ campaignId: campaign, type: "discovery-run-started" })
       .map(({ event }) => event);
@@ -4266,7 +4149,7 @@ describe("harness CLI vertical slice", () => {
       zeroFindings: true,
       config: {
         promptId: "wp2shell-bounty-v26-wide",
-        discovery: { lab: "none", mode: "wide", maxChildren: 3 },
+        discovery: { lab: "attached", mode: "wide", maxChildren: 3 },
       },
     });
     const campaign = "campaign-resume-recorded-prompt";
@@ -4275,7 +4158,7 @@ describe("harness CLI vertical slice", () => {
     const first = transportRuns[0]!;
     // Between the segments the campaign moves to 6 children.
     const written = JSON.parse(await readFile(configPath, "utf8"));
-    written.discovery = { lab: "none", mode: "wide", maxChildren: 6 };
+    written.discovery = { lab: "attached", mode: "wide", maxChildren: 6 };
     await writeFile(configPath, JSON.stringify(written));
 
     const resumed = await run(
@@ -4289,7 +4172,9 @@ describe("harness CLI vertical slice", () => {
     const segment = transportRuns[1]!;
     expect(segment.maxChildren).toBe(3);
     expect(segment.resumePrompt).toBe(first.resumePrompt);
-    expect(segment.prompt).toBe(first.prompt);
+    expect(withoutLabSection(segment.prompt)).toBe(
+      withoutLabSection(first.prompt),
+    );
     const starts = ledger()
       .read({ campaignId: campaign, type: "discovery-run-started" })
       .map(({ event }) => event);
@@ -4342,7 +4227,7 @@ describe("harness CLI vertical slice", () => {
       zeroFindings: true,
       config: {
         promptId: undefined,
-        discovery: { lab: "none", runtimeShare: { codex: 0, claude: 1 } },
+        discovery: { lab: "attached", runtimeShare: { codex: 0, claude: 1 } },
       },
     });
     const campaign = "campaign-claude-resume";
@@ -4395,7 +4280,7 @@ describe("harness CLI vertical slice", () => {
       zeroFindings: true,
       config: {
         promptId: undefined,
-        discovery: { lab: "none" },
+        discovery: { lab: "attached" },
       },
     });
     const command = (configPath: string, campaign: string) => [
@@ -4430,12 +4315,15 @@ describe("harness CLI vertical slice", () => {
       .read({ type: "discovery-run-started" })[0]?.event;
     if (started?.type !== "discovery-run-started")
       throw new Error("Missing recorded run");
+    // The retired attached Lab recorded no `configuration.lab`.
+    const { lab: _exploration, ...configuration } = started.configuration;
     await legacy.ledger().append({
       ...started,
       identity: "historical-attached",
       runId: "historical-attached",
       labAttached: true,
       labId: "historical-lab",
+      configuration,
     });
     const attachedResume = await legacy.run(
       "campaign",
@@ -4567,18 +4455,18 @@ describe("harness CLI vertical slice", () => {
 
   it("totals provider-reported usage per target and UTC day", async () => {
     const { run, configPath } = await harness({ limitOnCalls: [3] });
-    await run(
-      "campaign",
-      "run",
-      "--all",
-      "--campaign",
-      "campaign-1",
-      "--config",
-      configPath,
-      "--repeat",
-      "3",
-    );
-    const runtimes = await run("ledger", "runtime", "--campaign", "campaign-1");
+    // Three campaigns run the same target, one Trial (and one Lab) each.
+    for (const campaign of ["campaign-1", "campaign-2", "campaign-3"])
+      await run(
+        "campaign",
+        "run",
+        "--all",
+        "--campaign",
+        campaign,
+        "--config",
+        configPath,
+      );
+    const runtimes = await run("ledger", "runtime");
     expect(runtimes.code).toBe(0);
     expect(runtimes.stdout.split("\n")).toEqual([
       "recorded runtimes (oldest first)",

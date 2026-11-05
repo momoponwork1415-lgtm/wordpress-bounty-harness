@@ -22,7 +22,7 @@ import {
 // The usage text as it was before the commands became a table (2026-10-18).
 const PINNED_USAGE = [
   "usage: harness [--state <dir>] <command>",
-  "  campaign run <slug>|--all --campaign <id> --config <path> [--selection <path>] [--repeat <n>]",
+  "  campaign run <slug>|--all --campaign <id> --config <path> [--selection <path>]",
   "  continuous run --config <path> --selection <path> [--campaign-prefix <text>] [--notify <command>] [--resume]",
   "  continuous stop [--campaign-prefix <text>]",
   "  continuous resume [--campaign-prefix <text>]",

@@ -534,7 +534,6 @@ type WordPressDiscoveryContext = {
   readonly resumeInterrupted?: { log(line: string): void };
   readonly resumeProviderLimited?: { log(line: string): void };
   readonly config: WordPressCampaignConfig;
-  readonly repeat: number;
   readonly boundaries: WordPressCampaignBoundaries;
   readonly setupFor: WordPressCampaignSession["setupFor"];
   readonly state: CliState;
@@ -580,15 +579,7 @@ function wordPressRunParameters(
     wallMinutes: config.runWallTimeMinutes,
     minimumActiveMinutes: config.discovery.minimumActiveMinutes,
     maxChildren: config.discovery.maxChildren,
-    // The observe budget is recorded for attached Labs only, so Lab-less
-    // runs keep the configuration they had.
-    lab:
-      config.discovery.lab.mode === "none"
-        ? {
-            mode: config.discovery.lab.mode,
-            maxResets: config.discovery.lab.maxResets,
-          }
-        : config.discovery.lab,
+    lab: config.discovery.lab,
     runtime: {
       transportKind: profile.transportKind,
       model: profile.requestedModelId,
@@ -614,7 +605,8 @@ function wordPressDiscoveryPromptText(options: {
   readonly objective: WordPressDiscoveryAsset;
   readonly trustBoundary: WordPressDiscoveryAsset;
   readonly config: WordPressCampaignConfig;
-  readonly lab: WordPressDiscoveryInput["lab"];
+  /** Undefined only in a resume's placeholder text before its new Lab is up. */
+  readonly lab: WordPressLabHandle | undefined;
   /** A resumed segment's fresh Lab: how many resets earlier segments used. */
   readonly resumedLab?: WordPressLabUsed;
   readonly source: WordPressDiscoverySource;
@@ -786,13 +778,8 @@ async function planWordPressDiscovery(
   context: WordPressDiscoveryContext,
 ): Promise<WordPressDiscoveryPlan> {
   const { snapshot, lab } = input;
-  const { config, repeat, boundaries, state, objective, trustBoundary } =
-    context;
-  if ((lab === undefined) !== (config.discovery.lab.mode === "none"))
-    throw new Error(
-      "Discovery Lab mode differs from the campaign configuration",
-    );
-  if (lab !== undefined && lab.exploration === undefined)
+  const { config, boundaries, state, objective, trustBoundary } = context;
+  if (lab.exploration === undefined)
     throw new Error("The discovery Lab is not an exploration Lab");
   const wallMinutes = config.runWallTimeMinutes;
   const objectiveOnly = (id: string) =>
@@ -813,8 +800,8 @@ async function planWordPressDiscovery(
           runtimeProfile: boundaries.runtimeProfile,
           executor: boundaries.executor,
         };
-  // One Trial per target; only an explicit `--repeat` plans more (ADR 0029).
-  const maxRuns = repeat;
+  // One Trial per target (ADR 0029); its exploration Lab serves that Trial only.
+  const maxRuns = 1;
   const stopRules = { maxRuns, noFindingRuns: 1 };
   const runParameters = wordPressRunParameters(config, runtime.runtimeProfile);
   // ADR 0048: the latest earlier Trial's map and setup record for this target.
@@ -851,8 +838,7 @@ async function planWordPressDiscovery(
       modelProfileDigest: runtime.runtimeProfile.digest,
       promptDigest: objective.digest,
       stopRules,
-      lab:
-        lab === undefined ? { mode: "none" } : { setupDigest: lab.setupDigest },
+      lab: { setupDigest: lab.setupDigest },
       history: { mode: "none" },
     },
     runWallTimeMs: wallMinutes * 60_000,
@@ -884,10 +870,7 @@ async function planWordPressDiscovery(
                 ? ("none" as const)
                 : ("mounted" as const),
           },
-          labAccess: {
-            database:
-              runParameters.lab.mode === "attached" ? "read-only" : "none",
-          },
+          labAccess: { database: "read-only" },
           ...(share === undefined
             ? {}
             : { runtime: runtime.runtimeProfile.transportKind }),
@@ -1166,12 +1149,6 @@ async function resumeWordPressRun(
   // setup (ADR 0003, 2026-10-25 addendum); the earlier one is already sealed.
   const recordedLab = started.configuration.lab;
   const attached = recordedLab?.mode === "attached";
-  if (attached && config.discovery.lab.mode === "none")
-    return {
-      status: "refused",
-      reason: "lab-mode-differs",
-      detail: "the campaign configuration has discovery.lab none",
-    };
   // The Lab budget is the Trial's: a segment keeps the one the Trial started
   // with, and a campaign configured otherwise does not resume it.
   let labBudget: WordPressLabBudget | undefined;
@@ -1312,7 +1289,8 @@ async function resumeWordPressRun(
     profileDigest: runtime.runtimeProfile.digest,
     wallTimeMs: runParameters.wallMinutes * 60_000,
     minimumActiveMs,
-    lab: attached,
+    // Discovery always attaches a Lab (2026-11-05): a Lab-less Trial is refused.
+    lab: true,
     // A run whose host died is sealed first, then resumed like any other (ADR 0036).
     ...(recoverInterrupted === undefined
       ? {}
@@ -1335,18 +1313,8 @@ async function resumeWordPressRun(
   });
   if (assessment.status === "refused") return assessment;
   const { plan } = assessment;
-  if (plan.lab === undefined) {
-    const outcome = await executeTrialResume(
-      {
-        ...context,
-        executor: runtime.executor,
-        ...(signal === undefined ? {} : { signal }),
-      },
-      plan,
-      { runId: state.newId(), ...run },
-    );
-    return { status: "resumed" as const, plan, outcome };
-  }
+  if (plan.lab === undefined || labBudget === undefined)
+    throw new Error("A resumed Trial needs its exploration Lab record");
   return resumeWithExplorationLab({
     state,
     config,
@@ -1356,7 +1324,7 @@ async function resumeWordPressRun(
     campaignId: input.campaignId,
     previousLabId: started.labId,
     plan,
-    budget: labBudget!,
+    budget: labBudget,
     used: plan.lab,
     promptWith,
     context,
@@ -1594,8 +1562,6 @@ async function runWordPressCampaign(
   ]);
   return runCampaignPipeline({
     campaignId: input.campaignId,
-    discoveryLab: config.discovery.lab.mode,
-    repeat: input.repeat ?? 1,
     maxConcurrentTargets: config.resources.maxConcurrentTargets,
     ...(input.targetLimit === undefined
       ? {}
@@ -1670,7 +1636,6 @@ async function runWordPressCampaign(
             ? {}
             : { resumeProviderLimited: input.resumeProviderLimited }),
           config,
-          repeat: input.repeat ?? 1,
           boundaries,
           setupFor: session.setupFor,
           state,

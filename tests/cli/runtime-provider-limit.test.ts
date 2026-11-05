@@ -22,6 +22,7 @@ import {
 } from "../../src/cli/wordpress-session.js";
 import { Ledger } from "../../src/ledger/index.js";
 import { recordWordPressReport } from "../../src/profiles/wordpress/discovery/candidate-admission.js";
+import { fakeExplorationLab } from "../support/fake-exploration-lab.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -92,10 +93,10 @@ async function campaign(
     store,
     clock: () => new Date("2026-10-20T00:00:00Z"),
     newId: () => `id-${++ids}`,
-    discoveryLab: "none",
     maxConcurrentTargets: options.maxConcurrentTargets ?? 1,
     ...(runtimeCaps === undefined ? {} : { runtimeCaps: runtimeCaps as never }),
     pipeline: {
+      ...fakeExplorationLab(`sha256:${"c".repeat(64)}`),
       select: async () =>
         names.map((name) => ({
           targetId: `wporg:${name}`,
@@ -294,13 +295,13 @@ describe("runtime-scoped stops", () => {
       wordpressVersion: "6.8",
       lab: { siteTitle: "s", initialPosts: [], customerRole: false },
       discovery: {
-        lab: "none",
+        lab: "attached",
         ...(share === undefined ? {} : { runtimeShare: share }),
       },
     });
 
   it.each([
-    ["both runtimes weighted, no Lab", { codex: 1, claude: 1 }, true],
+    ["both runtimes weighted", { codex: 1, claude: 1 }, true],
     ["Claude weighted 0", { codex: 1, claude: 0 }, false],
     ["Codex weighted 0", { codex: 0, claude: 1 }, false],
   ] as const)(

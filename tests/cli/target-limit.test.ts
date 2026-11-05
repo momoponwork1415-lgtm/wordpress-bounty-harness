@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runCampaignPipeline } from "../../src/cli/pipeline.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger } from "../../src/ledger/index.js";
+import { fakeExplorationLab } from "../support/fake-exploration-lab.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -47,7 +48,6 @@ async function campaign(count: number, live: () => number | null) {
     store,
     clock: () => new Date("2026-10-19T00:00:00Z"),
     newId: () => `id-${++ids}`,
-    discoveryLab: "none",
     maxConcurrentTargets: 4,
     targetLimit: {
       read: async () => live(),
@@ -55,6 +55,7 @@ async function campaign(count: number, live: () => number | null) {
       pollMs: 5,
     },
     pipeline: {
+      ...fakeExplorationLab(`sha256:${"c".repeat(64)}`),
       select: async () =>
         Array.from({ length: count }, (_, index) => ({
           targetId: `wporg:t${index}`,
