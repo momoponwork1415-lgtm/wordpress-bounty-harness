@@ -32,7 +32,7 @@ case ごとに分ける。1 case = `state/`（台帳と Private Evidence）と `
 
 - `host.json`: `examples/translatepress-3.3.1/host.example.json` を元に、`workDirectory` を case ごとに分け、`images.*` を全部 digest で指定する。WordPress image は `pdo_mysql` 入りのもの（無いと `incomplete(precondition)`）。
 - `selection.json`: manual 形。`candidateSlugs` と `pinnedVersions` で版を固定し、`promptVariant` を既定 prompt にする。
-- `campaign.json`: 現行の手動探索は `promptId: wp2shell-bounty-v26-wide`、`discovery.mode: wide`、`discovery.lab: attached`、`minimumActiveMinutes: 60`、`runWallTimeMinutes: 120` を指定する。`lab.scenarioId` は #353 で削除したので書かない。入口索引は渡さない。
+- `campaign.json`: 現行の手動探索は `promptId: wp2shell-bounty-v26-wide`、`discovery.mode: wide`、`discovery.lab: attached`、`minimumActiveMinutes: 0`、`runWallTimeMinutes: 120` を指定する。`lab.scenarioId` は #353 で削除したので書かない。入口索引は渡さない。
 - 時刻: ホスト（WSL2）の時計は遅れることがある。開始前に `date -u` と外部の時刻を比べる。ずれていれば記録に注記し、wall は台帳の `wallTimeMs` で読む。
 
 ## 3. 実行
@@ -69,7 +69,7 @@ PR の「測った数字」に貼る列は固定する。
 
 ## 5b. 過去の探索スキルの計測記録（ADR 0043）
 
-以下は当時の実験設計と結果を読むための記録であり、現行 v26-wide の採否手順ではない。`discovery.skills` を書いた campaign は、目的文も契約も変えずに、名指しした `SKILL.md` を sandbox の CLI home に置く。台帳の `discovery-run-started.configuration.skills [{id, digest}]` で実験時の設定を見分ける。
+以下は当時の実験設計と結果を読むための記録であり、現行 v26-wide の採否手順ではない。staging とスキル本文は 2026-11-05 に削除した（ADR 0043 追記 10、本文は tag `archive/pre-v26-cleanup`）。`discovery.skills` を書いた campaign は、目的文も契約も変えずに、名指しした `SKILL.md` を sandbox の CLI home に置く。台帳の `discovery-run-started.configuration.skills [{id, digest}]` で実験時の設定を見分ける。
 
 - 当時の比較対象は同じ mode・同じ選定帯で `discovery.skills` を書かない Trial とし、campaign を 2 つ用意して対象を交互に回す計画だった。現行の必須手順にはしない。
 - 数えるものは上の表と同じ（Finding / Trial、Lead / Trial、段 1b の成立、Lab で人間が `match` を記録した数、読んだ file 数、token、時間）。加えて research artifact を開いて `recon-map.md` の有無と大きさ、Corrections 節の行数を書く。`wbh-tools-v1` の腕では `tools/hooks.tsv`、`tools/sinks.tsv`、`tools/README.md` の有無と行数も書く。中身は読まない。
@@ -89,7 +89,7 @@ PR の「測った数字」に貼る列は固定する。
 
 ## 5c. 過去の Lead 後続 Trial の計測記録（ADR 0044）
 
-以下は当時の実験設計と結果を読むための記録である。現行の v26-wide 方針は `followUp: none` で、Lead 件数による自動の第 2 Trial を起動しない。
+以下は当時の実験設計と結果を読むための記録である。`discovery.priorLeads` と `discovery.followUp` は 2026-11-05 に削除した（ADR 0044、0049 追記 7）。台帳の記録は下の方法で読める。
 
 `discovery.priorLeads.targets` を書いた campaign は、名指しした Snapshot だけを対象にし（選定は回さない）、各 Trial に `## Prior leads` 節と探索 Lab（`discovery.lab: attached` が必須）を付ける。台帳の `discovery-run-started.configuration.priorLeads` の有無で第 2 Trial を見分ける。中身は代表の数 `representatives`、代表の `leadIds`、`representativesDigest`、隙間の文を伏せた数 `gapWithheld`、節の `sectionDigest`。
 

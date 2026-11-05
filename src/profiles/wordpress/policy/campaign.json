@@ -3,9 +3,8 @@
   "discovery": {
     "lab": "attached",
     "mode": "wide",
-    "maxChildren": 3,
-    "minimumActiveMinutes": 60,
-    "followUp": "none",
+    "maxChildren": 4,
+    "minimumActiveMinutes": 0,
     "priorResearch": "same-target"
   },
   "selectionPolicyPath": "src/profiles/wordpress/policy/selection.json",

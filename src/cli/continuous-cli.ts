@@ -296,8 +296,6 @@ export async function continuousCommand(
   const hostStatus = profile.hostStatus;
   if (hostStatus === undefined)
     throw new Error("continuous run needs a host profile");
-  const refusal = await profile.continuousRunRefusal?.(configPath);
-  if (refusal !== undefined) throw new Error(refusal);
   const host = () => hostStatus(state, { configPath, selectionPath });
   const runner = createContinuousRunner({
     stateDirectory: state.stateDirectory,
@@ -326,9 +324,6 @@ export async function continuousCommand(
         configPath,
         selectionPolicyPath: selectionPath,
       }),
-    ...(profile.followUpPolicy === undefined
-      ? {}
-      : { followUpPolicy: () => profile.followUpPolicy!(configPath) }),
     discardStaleSelection: async (campaignId) =>
       (await profile.discardStaleSelection?.(state, {
         campaignId,

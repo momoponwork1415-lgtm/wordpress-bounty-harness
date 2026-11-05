@@ -23,7 +23,6 @@ import type {
   DiscoveryTransportRun,
   ProviderAttachmentStore,
 } from "../discovery/index.js";
-import { MAX_STAGED_SKILLS } from "../discovery/skill-definition.js";
 import type { ExpectedSourceTree } from "../infrastructure/canonical-source-tree.js";
 import type { ScopeFactsProvider } from "../review/index.js";
 import type { Snapshot } from "../snapshot/index.js";
@@ -43,10 +42,6 @@ import {
   WORDPRESS_VERIFIER_PROMPT_ID,
   wordPressDiscoveryModeOf,
 } from "../profiles/wordpress/prompts/index.js";
-import {
-  WORDPRESS_LAUNCHABLE_DISCOVERY_SKILL_IDS,
-  wordPressDiscoverySkillRecord,
-} from "../profiles/wordpress/prompts/skills.js";
 import type {
   WordpressScopeInput,
   WordpressScopePolicy,
@@ -80,19 +75,16 @@ export const DISCOVERY_RUN_MEMORY_MIB =
 const runnablePrompt = z.enum(WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS);
 
 /**
- * ADR 0029 cap and the default wall of both modes. `wide` used 20 until the
- * owner's 2026-10-25 decision (ADR 0039 addendum 3).
+ * ADR 0029 cap and the default wall. `wide` used 20 until the owner's
+ * 2026-10-25 decision (ADR 0039 addendum 3).
  */
 const WORDPRESS_DEFAULT_WALL_MINUTES = 120;
 /**
- * ADR 0033 / 0039: the active floor by mode unless discovery.minimumActiveMinutes
- * sets one. ADR 0039 addendum 20 (#686): no mode has a floor by default; the
- * ending is the skill's judgment (wbh-recon v3 step 9).
+ * ADR 0033 / 0039: the active floor unless discovery.minimumActiveMinutes
+ * sets one. ADR 0039 addendum 20 (#686): there is no floor by default; the
+ * ending is the Root's judgment.
  */
-const WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES = {
-  deep: 0,
-  wide: 0,
-} as const;
+const WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES = 0;
 
 /**
  * Whether a discovery Lab is attached and how often the Root may reset it
@@ -125,35 +117,6 @@ const discoveryLabSchema = z
     maxLookups: maxLookups ?? 60,
   }));
 
-const sha256Digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
-
-/**
- * ADR 0044: one Snapshot of a named second Trial and the Lead representatives
- * it receives, either as Lead ids or as the `--rule pair --json` output of
- * `scripts/lead-groups.mjs` (its Lead-represented groups of this Snapshot).
- * At most 8 per Snapshot (design 2026-10-31 §1).
- */
-export const MAX_PRIOR_LEADS_PER_SNAPSHOT = 8;
-const priorLeadsTargetSchema = z
-  .strictObject({
-    snapshotDigest: sha256Digest,
-    leadIds: z
-      .array(sha256Digest)
-      .min(1)
-      .max(MAX_PRIOR_LEADS_PER_SNAPSHOT)
-      .refine((ids) => new Set(ids).size === ids.length, {
-        message: "leadIds names each Lead once",
-      })
-      .optional(),
-    groupsPath: z.string().min(1).optional(),
-  })
-  .refine(
-    (target) =>
-      (target.leadIds === undefined) !== (target.groupsPath === undefined),
-    { message: "A prior-leads target names leadIds or groupsPath, not both" },
-  );
-export type WordPressPriorLeadsTarget = z.infer<typeof priorLeadsTargetSchema>;
-
 export const LEGACY_VERIFIER_RETIRED =
   "The legacy Codex Verifier is retired; a verification skill handoff must be explicitly requested";
 
@@ -171,8 +134,12 @@ const commonCampaignFields = {
         .refine((mode) => mode !== "partitioned", {
           message: "Partitioned mode was removed in #685",
         })
-        .transform((mode) => mode as "deep" | "wide")
-        .default("deep"),
+        .refine((mode) => mode !== "deep", {
+          message:
+            "Deep mode was retired on 2026-11-05; name a wide Trial instead",
+        })
+        .transform((mode) => mode as "wide")
+        .default("wide"),
       /** Ceiling on live children; the Root decides how many it uses. */
       maxChildren: z
         .number()
@@ -180,29 +147,14 @@ const commonCampaignFields = {
         .min(1)
         .max(MAX_CHILDREN_LIMIT)
         .default(DEFAULT_MAX_CHILDREN),
-      /** Defaults by mode: 60 for `deep`, 0 for `wide` (ADR 0039). */
+      /** Defaults to 0 (ADR 0039 addendum 20). */
       minimumActiveMinutes: z.number().int().min(0).max(119).optional(),
       enumerator: z.unknown().optional(),
       partition: z.unknown().optional(),
       tracer: z.unknown().optional(),
-      /**
-       * ADR 0043: exploration skills staged into the agent CLI's home for a
-       * `deep` or `wide` Trial; absent, none. Ids name pinned versions.
-       */
-      skills: z
-        .array(z.enum(WORDPRESS_LAUNCHABLE_DISCOVERY_SKILL_IDS))
-        .max(MAX_STAGED_SKILLS)
-        .optional(),
-      /**
-       * ADR 0044: present only for a named second Trial. Its targets are the
-       * named Snapshots, not a selection, and each receives the Harness's
-       * `## Prior leads` section; it requires `lab: attached`.
-       */
-      priorLeads: z
-        .strictObject({
-          targets: z.array(priorLeadsTargetSchema).min(1).max(50),
-        })
-        .optional(),
+      skills: z.unknown().optional(),
+      /** ADR 0044's named second Trial was removed on 2026-11-05; refused below. */
+      priorLeads: z.unknown().optional(),
       /**
        * ADR 0048: `same-target` passes the map and setup record of the latest
        * earlier Trial on another Snapshot of the same target under the
@@ -211,12 +163,10 @@ const commonCampaignFields = {
        */
       priorResearch: z.enum(["none", "same-target"]).default("none"),
       /**
-       * ADR 0049 C: whether the continuous runner schedules one follow-up
-       * Trial (ADR 0044's second Trial, with Lab) for an ended Trial that left
-       * Leads. Absent, it follows the Lab: `leads` with `lab: attached`,
-       * `none` with `lab: none` (`wordPressFollowUpPolicy`).
+       * ADR 0049 C's follow-up Trial was removed on 2026-11-05. `none` is
+       * still read so configurations that name it parse; `leads` is refused.
        */
-      followUp: z.enum(["leads", "none"]).optional(),
+      followUp: z.unknown().optional(),
     })
     .prefault({}),
   selectionPolicyPath: z.string().min(1).optional(),
@@ -264,15 +214,13 @@ const commonCampaignFields = {
 export const wordpressCampaignConfigSchema = z
   .strictObject({
     ...commonCampaignFields,
-    /** Defaults to the 120-minute cap in both modes (ADR 0039 addendum 3). */
+    /** Defaults to the 120-minute cap (ADR 0039 addendum 3). */
     runWallTimeMinutes: z.number().positive().max(120).optional(),
     /** Defaults to the current objective of the mode. */
     promptId: runnablePrompt.optional(),
   })
   .superRefine((config, context) => {
     const mode = config.discovery.mode;
-    const promptId =
-      config.promptId ?? WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS[mode];
     if (
       config.promptId !== undefined &&
       wordPressDiscoveryModeOf(config.promptId) !== mode
@@ -282,95 +230,28 @@ export const wordpressCampaignConfigSchema = z
         path: ["promptId"],
         message: `The ${mode} mode runs ${WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS.filter((id) => wordPressDiscoveryModeOf(id) === mode).join(" or ")} only`,
       });
-    if (config.discovery.skills !== undefined) {
-      const names = config.discovery.skills.map(
-        (id) => wordPressDiscoverySkillRecord(id)!.name,
-      );
-      if (new Set(names).size !== names.length)
-        context.addIssue({
-          code: "custom",
-          path: ["discovery", "skills"],
-          message: "discovery.skills names each skill once",
-        });
-    }
-    const auditSkill =
-      promptId === "wp2shell-bounty-v23-wide"
-        ? "wbh-audit-v1"
-        : promptId === "wp2shell-bounty-v25-wide"
-          ? "wbh-audit-v2"
-          : undefined;
-    if (auditSkill !== undefined) {
-      for (const required of [
-        auditSkill,
-        "wbh-setup-v1",
-        "wbh-lab-v1",
-      ] as const)
-        if (!config.discovery.skills?.includes(required))
-          context.addIssue({
-            code: "custom",
-            path: ["discovery", "skills"],
-            message: `${promptId} requires ${required}`,
-          });
-      if (config.discovery.skills?.includes("wbh-recon-v3"))
-        context.addIssue({
-          code: "custom",
-          path: ["discovery", "skills"],
-          message: `${auditSkill} replaces wbh-recon-v3 in this Trial`,
-        });
-      if (config.discovery.lab.mode !== "attached")
-        context.addIssue({
-          code: "custom",
-          path: ["discovery", "lab"],
-          message: `${promptId} requires an attached exploration Lab`,
-        });
-    }
-    if (
-      config.discovery.skills?.includes("wbh-audit-v1") &&
-      promptId !== "wp2shell-bounty-v23-wide"
-    )
+    if (config.discovery.skills !== undefined)
       context.addIssue({
         code: "custom",
         path: ["discovery", "skills"],
-        message: "wbh-audit-v1 requires wp2shell-bounty-v23-wide",
+        message: "Exploration skills were removed in the v26 cleanup",
       });
     if (
-      config.discovery.skills?.includes("wbh-audit-v2") &&
-      promptId !== "wp2shell-bounty-v25-wide"
-    )
-      context.addIssue({
-        code: "custom",
-        path: ["discovery", "skills"],
-        message: "wbh-audit-v2 requires wp2shell-bounty-v25-wide",
-      });
-    if (
-      config.discovery.followUp === "leads" &&
-      config.discovery.lab.mode !== "attached"
+      config.discovery.followUp !== undefined &&
+      config.discovery.followUp !== "none"
     )
       context.addIssue({
         code: "custom",
         path: ["discovery", "followUp"],
         message:
-          "A follow-up Trial runs with discovery.lab attached (ADR 0049); name followUp none with lab none",
+          "The follow-up Trial was removed on 2026-11-05 (ADR 0049); drop discovery.followUp or name none",
       });
-    const priorLeads = config.discovery.priorLeads;
-    if (priorLeads !== undefined) {
-      if (config.discovery.lab.mode !== "attached")
-        context.addIssue({
-          code: "custom",
-          path: ["discovery", "priorLeads"],
-          message:
-            "A prior-leads Trial runs with discovery.lab attached (ADR 0044)",
-        });
-      const snapshots = priorLeads.targets.map(
-        (target) => target.snapshotDigest,
-      );
-      if (new Set(snapshots).size !== snapshots.length)
-        context.addIssue({
-          code: "custom",
-          path: ["discovery", "priorLeads", "targets"],
-          message: "discovery.priorLeads names each Snapshot once",
-        });
-    }
+    if (config.discovery.priorLeads !== undefined)
+      context.addIssue({
+        code: "custom",
+        path: ["discovery", "priorLeads"],
+        message: "discovery.priorLeads was removed on 2026-11-05 (ADR 0044)",
+      });
     for (const role of ["enumerator", "partition", "tracer"] as const)
       if (config.discovery[role] !== undefined)
         context.addIssue({
@@ -386,7 +267,7 @@ export const wordpressCampaignConfigSchema = z
       });
     const floor =
       config.discovery.minimumActiveMinutes ??
-      WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES[mode];
+      WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES;
     if (
       floor > 0 &&
       (config.runWallTimeMinutes ?? WORDPRESS_DEFAULT_WALL_MINUTES) <= floor
@@ -440,7 +321,7 @@ export const wordpressCampaignConfigSchema = z
       ...config.discovery,
       minimumActiveMinutes:
         config.discovery.minimumActiveMinutes ??
-        WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES[config.discovery.mode],
+        WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES,
     },
     promptId:
       config.promptId ??
@@ -554,20 +435,6 @@ export type WordPressVerification = Verification<
 >;
 
 /** The campaign config file, validated; a budget below one discovery run stops here. */
-/**
- * ADR 0049 C: whether the runner schedules follow-up Trials under this
- * configuration. Absent `discovery.followUp` follows the Lab, so a campaign
- * that names `lab: none` schedules none without naming it.
- */
-export function wordPressFollowUpPolicy(
-  config: WordPressCampaignConfig,
-): "leads" | "none" {
-  return (
-    config.discovery.followUp ??
-    (config.discovery.lab.mode === "attached" ? "leads" : "none")
-  );
-}
-
 export async function readWordPressCampaignConfig(
   configPath: string,
 ): Promise<WordPressCampaignConfig> {

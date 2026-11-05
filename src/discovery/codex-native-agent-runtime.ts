@@ -1,16 +1,6 @@
 import { z } from "zod";
 import { isAbsolute, posix } from "node:path";
 
-import {
-  MAX_STAGED_SKILL_BYTES,
-  MAX_STAGED_SKILL_FILE_BYTES,
-  MAX_STAGED_SKILL_FILES,
-  MAX_STAGED_SKILLS,
-  SKILL_FILE_NAME,
-  SKILL_NAME,
-  type StagedSkill,
-} from "./skill-definition.js";
-
 import type { ExpectedSourceTree } from "../infrastructure/canonical-source-tree.js";
 import {
   canonicalDigest,
@@ -103,7 +93,6 @@ const childReportSchema = z.strictObject({
   leads: z.array(z.unknown()),
   examined: childCoverageSchema,
   unexamined: childCoverageSchema,
-  checks: z.array(z.unknown()).optional(),
 });
 const candidateReportSchema = z.object({
   findings: z.array(z.unknown()).default([]),
@@ -111,7 +100,6 @@ const candidateReportSchema = z.object({
   examined: childCoverageSchema.default(""),
   unexamined: childCoverageSchema.default(""),
   coverage: z.unknown().optional(),
-  checks: z.array(z.unknown()).optional(),
 });
 export function extractCandidateReport(message: string) {
   const value = JSON.parse(message) as unknown;
@@ -138,7 +126,7 @@ export function mergeTurnReports(messages: readonly string[]) {
   const distinct = (key: "findings" | "leads") => {
     const seen = new Set<string>();
     return reports
-      .flatMap((report) => report[key] ?? [])
+      .flatMap((report) => report[key])
       .filter((claim) => {
         const identity = canonicalJson(claim);
         if (seen.has(identity)) return false;
@@ -146,24 +134,10 @@ export function mergeTurnReports(messages: readonly string[]) {
         return true;
       });
   };
-  const chronologicalChecks = () => {
-    let previous: string | undefined;
-    return reports
-      .flatMap((report) => report.checks ?? [])
-      .filter((check) => {
-        const identity = canonicalJson(check);
-        if (identity === previous) return false;
-        previous = identity;
-        return true;
-      });
-  };
   return {
     ...latest,
     findings: distinct("findings"),
     leads: distinct("leads"),
-    ...(reports.some((report) => report.checks !== undefined)
-      ? { checks: chronologicalChecks() }
-      : {}),
   };
 }
 /**
@@ -363,8 +337,6 @@ export interface CodexSandboxCommand {
   readonly databaseHost?: { readonly name: string; readonly ipv4: string };
   /** The exploration Lab's control endpoint (ADR 0003, 2026-10-25 addendum). */
   readonly controlHost?: { readonly name: string; readonly ipv4: string };
-  /** ADR 0043: skills staged at `<CODEX_HOME>/skills/<name>/SKILL.md` before the CLI starts. */
-  readonly skills?: readonly StagedSkill[];
 }
 export interface CodexSandboxResult {
   readonly status: "exited" | "failed";
@@ -491,8 +463,6 @@ export interface DiscoveryTransportRun {
     readonly tree: ExpectedSourceTree;
   }[];
   readonly expiresAt: string;
-  /** ADR 0043: the exploration skills the campaign names, staged into the CLI's home. */
-  readonly skills?: readonly StagedSkill[];
 }
 export interface DiscoveryTransportResult {
   readonly receipt: NativeRunReceipt;
@@ -596,29 +566,6 @@ const discoveryTransportRunSchema = z.strictObject({
     entries: z.number().int().nonnegative(),
     bytes: z.number().int().nonnegative(),
   }),
-  /** ADR 0043: the sandbox re-checks names and sizes; the schema bounds the list. */
-  skills: z
-    .array(
-      z.strictObject({
-        name: z.string().regex(SKILL_NAME),
-        content: z.string().min(1).max(MAX_STAGED_SKILL_BYTES),
-        /** #687: supporting files beside `SKILL.md`; the sandbox re-checks the total. */
-        files: z
-          .array(
-            z.strictObject({
-              name: z.string().regex(SKILL_FILE_NAME),
-              content: z.union([
-                z.string().min(1).max(MAX_STAGED_SKILL_FILE_BYTES),
-                z.instanceof(Uint8Array),
-              ]),
-            }),
-          )
-          .max(MAX_STAGED_SKILL_FILES)
-          .optional(),
-      }),
-    )
-    .max(MAX_STAGED_SKILLS)
-    .optional(),
   dependencySource: z
     .strictObject({
       path: dependencyMountPathSchema,
@@ -1784,7 +1731,6 @@ function sandboxCommand(
           })),
         }),
     stdin: run.prompt,
-    ...(run.skills === undefined ? {} : { skills: run.skills }),
     supportFiles: [
       {
         path: "/opt/codex-support/report-schema.json",

@@ -13,7 +13,7 @@
 
 checkout、`--state`、`--host`、campaign 設定、選定方針、接頭辞、出力ログを、稼働中のプロセスの引数と起動記録から確認する。Git 内の [campaign.json](../../src/profiles/wordpress/policy/campaign.json) は新規設定の基準であり、稼働中の runner が読んでいる Git 外の設定を置き換えない。認証情報ファイルの中身を表示しない。
 
-2026-11-05 時点の引継ぎ情報: 直近の起動記録では checkout が `/home/dev/worktree/prod38`、本番 state が `/home/dev/.local/state/wordpress-bounty-harness`、Git 外 host 設定が `/home/dev/.config/wordpress-bounty-harness/host-production-v12-latest-core-xdebug-20261102.json`、接頭辞が `prod-c22` だった。campaign は `prod-c22-20261104-9`。Git 外 campaign 設定は `campaign-production-claude-opus-wide-3-skills-v22-lab-20261104.json` で、v22-wide、Lab 付き、Claude のみ、探索スキル 4 本、`priorResearch: same-target` である。PID ファイルのプロセスは存在せず、memo の `running` は古い。終了 event のない Trial が 3 件ある。この段落は状態の写しであり、次回の監視では必ず再確認する。リポジトリの新しい wide 方針は v26-wide だが、本番設定は自動的に切り替わらない。
+2026-11-05 時点の引継ぎ情報: 直近の起動記録では checkout が `/home/dev/worktree/prod38`、本番 state が `/home/dev/.local/state/wordpress-bounty-harness`、Git 外 host 設定が `/home/dev/.config/wordpress-bounty-harness/host-production-v12-latest-core-xdebug-20261102.json`、接頭辞が `prod-c22` だった。campaign は `prod-c22-20261104-9`。Git 外 campaign 設定は `campaign-production-claude-opus-wide-3-skills-v22-lab-20261104.json` で、v22-wide、Lab 付き、Claude のみ、探索スキル 4 本、`priorResearch: same-target` である。PID ファイルのプロセスは存在せず、memo の `running` は古い。終了 event のない Trial が 3 件ある。この段落は状態の写しであり、次回の監視では必ず再確認する。リポジトリの新しい wide 方針は v26-wide だが、本番設定は自動的に切り替わらない。この設定は `discovery.skills` を持つので、2026-11-05 の staging 削除（ADR 0043 追記 10）以後の checkout では parse で止まる。
 
 ## 3. 観測する
 
@@ -28,7 +28,7 @@ node dist/cli/main.js --state <確認した state> --host <確認した host 設
 稼働中は 5〜10 分おきに、止まっているときは状態変化の有無を次の項目で見る。
 
 1. **選定**: 選ばれた slug と版、インストール数、更新日、初回 / 版上昇の理由、除外理由の件数。選定レポートは `selection-batch-bound` の artifact digest から Private Evidence を辿る。読むのは slug・版・数字だけ。
-2. **Trial**: `discovery-run-started` に実際に記録された prompt 版と、稼働中のランナーが使う Git 外の campaign 設定を照合する。リポジトリの既定は `deep` が v11、`wide` が v26-wide（ADR 0051）だが、既存ランナーが自動的に切り替わるわけではない。同時に走る Root の数、Root ごとの子の数、wall、観測値（読んだ file 数、token）も見る。終了 event がない run は completed や候補 0 件に数えない。
+2. **Trial**: `discovery-run-started` に実際に記録された prompt 版と、稼働中のランナーが使う Git 外の campaign 設定を照合する。リポジトリの既定は `wide` の v26-wide（ADR 0051。`deep` は 2026-11-05 に退役）だが、既存ランナーが自動的に切り替わるわけではない。同時に走る Root の数、Root ごとの子の数、wall、観測値（読んだ file 数、token）も見る。終了 event がない run は completed や候補 0 件に数えない。
 3. **失敗**: provider 429（`provider-limited`）、`provider-cyber-policy` の拒否、`run-failed`、schema error、停滞（終了 event が無く出力も 30 分以上止まる run。2026-10-17 は websocket 426 の後に無言で止まり wall も発火しなかった）。host の memory（`free -g`）と container 数（`docker ps --format '{{.Names}}'` の `wbh-`）。
 4. **Finding**: 件数だけ。category 別、`finding-parked` か対象範囲内か。本文、payload、path、証拠は読まない・引用しない。
 5. **runner の停止**: `stale`、`stopped`、`stopping`、backoff の理由と直前の例外を記録する。再起動はしない。
@@ -47,7 +47,7 @@ node dist/cli/main.js --state <確認した state> --host <確認した host 設
 
 停止した runner の復旧と探索方式の切り替えは監視 session の操作範囲外とし、操作者へ次の順を引き継ぐ。
 
-1. 新しい main を**別の** checkout で build し、旧 Git 外設定を残して v26 の Git 外設定を別ファイルに作る。目的文、Lab、最低時間、子の上限、`followUp`、研究引継ぎが [campaign.json](../../src/profiles/wordpress/policy/campaign.json) と一致するか確認する。
+1. 新しい main を**別の** checkout で build し、旧 Git 外設定を残して v26 の Git 外設定を別ファイルに作る。目的文、Lab、最低時間、子の上限、研究引継ぎが [campaign.json](../../src/profiles/wordpress/policy/campaign.json) と一致するか確認する。
 2. 終了 event のない旧 Trial を台帳から列挙し、runtime と回収可否を確認する。2026-11-05 の `prod-c22-20261104-9` の 3 件は Claude の未終了 run で、[ADR 0036](../adr/0036-operator-resume-after-provider-refusal.md) の規則上 `campaign resume` は `run-unfinished` で拒否する。旧台帳を残して未終了として報告する。同じ接頭辞で runner を再起動すると、その対象は新しい Trial になり得る。
 3. 同時に動く本番 runner がないことと停止マーカーを確認する。旧選定方針の `promptVariant` は v22 なので、v26 用の選定方針を別ファイルで作り、**同じ接頭辞**で v26 設定の `continuous run --resume` を起動する。選定方針の digest が変わるため、runner は旧選定 batch を `selection-batch-discarded`（`policy-changed`）で記録して新しい batch を選ぶ。旧 Claude run は終了 event のない記録として残り、個別再開はできない。runner のログで batch 破棄と新選定を確認し、`continuous status` と次の `discovery-run-started` の prompt ID で切り替えを確かめる。
 

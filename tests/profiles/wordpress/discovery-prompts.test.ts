@@ -79,7 +79,7 @@ describe("WordPress prompt table", () => {
   it("derives the id lists and the current versions from the table", () => {
     const ids = WORDPRESS_DISCOVERY_PROMPTS.map((row) => row.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(39);
+    expect(ids).toHaveLength(36);
     expect(WORDPRESS_DISCOVERY_PROMPT_IDS).toEqual(ids);
     expect(WORDPRESS_DISCOVERY_ASSET_IDS).toEqual([
       ...ids,
@@ -101,11 +101,13 @@ describe("WordPress prompt table", () => {
     expect(
       WORDPRESS_DISCOVERY_PROMPTS.filter((row) => row.status === "current"),
     ).toHaveLength(WORDPRESS_DISCOVERY_MODES.length);
+    // Deep was retired on 2026-11-05; v11 stays archived for digest matching.
     expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS).toEqual({
-      deep: "wp2shell-bounty-v11",
       wide: "wp2shell-bounty-v26-wide",
     });
-    expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID).toBe("wp2shell-bounty-v11");
+    expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID).toBe(
+      "wp2shell-bounty-v26-wide",
+    );
     // Archived rows carry no mode, so only a current row launches (ADR 0039).
     for (const row of WORDPRESS_DISCOVERY_PROMPTS)
       if (row.status === "archived") expect(row).not.toHaveProperty("mode");
@@ -115,16 +117,9 @@ describe("WordPress prompt table", () => {
       WORDPRESS_DISCOVERY_PROMPTS.filter(
         (row) => (row.status as string) === "candidate",
       ).map((row) => row.id),
-    ).toEqual([
-      "wp2shell-bounty-v22-wide",
-      "wp2shell-bounty-v23-wide",
-      "wp2shell-bounty-v25-wide",
-    ]);
+    ).toEqual(["wp2shell-bounty-v22-wide"]);
     expect(WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS).toEqual([
-      "wp2shell-bounty-v11",
       "wp2shell-bounty-v22-wide",
-      "wp2shell-bounty-v23-wide",
-      "wp2shell-bounty-v25-wide",
       "wp2shell-bounty-v26-wide",
     ]);
     expect(
@@ -138,12 +133,6 @@ describe("WordPress prompt table", () => {
     ]);
     expect(wordPressTrustBoundaryForObjective("wp2shell-bounty-v22-wide")).toBe(
       "trust-boundary-v1",
-    );
-    expect(wordPressTrustBoundaryForObjective("wp2shell-bounty-v23-wide")).toBe(
-      "trust-boundary-v1",
-    );
-    expect(wordPressTrustBoundaryForObjective("wp2shell-bounty-v25-wide")).toBe(
-      "trust-boundary-v2",
     );
     expect(wordPressTrustBoundaryForObjective("wp2shell-bounty-v26-wide")).toBe(
       "trust-boundary-v2",
@@ -166,7 +155,7 @@ describe("WordPress prompt table", () => {
   it("ends every launchable objective with the resume directive its mode expects (ADR 0039; #731)", async () => {
     // `wordPressResumeParagraph` (src/cli/wordpress.ts) takes the last paragraph as the
     // directive early Root resumes receive and skips the target when the prefix is wrong.
-    const prefix = { deep: "Before giving up,", wide: "Stop when" } as const;
+    const prefix = { wide: "Stop when" } as const;
     for (const row of WORDPRESS_DISCOVERY_PROMPTS) {
       if (row.status === "archived" || row.mode === undefined) continue;
       const text = (await loadWordPressDiscoveryAsset(row.id)).text;
@@ -199,7 +188,7 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
   const fragmentText = (section: string, file: string) =>
     readFile(new URL(`${section}/${file}.md`, sectionsUrl), "utf8");
 
-  it("composes every current objective and keeps the archived v10 and v12-wide composed", () => {
+  it("keeps the archived composed objectives composed", () => {
     expect(composed.map((row) => row.id)).toEqual([
       "wp2shell-bounty-v10",
       "wp2shell-bounty-v11",
@@ -212,9 +201,8 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
       "wp2shell-bounty-v18-wide",
       "wp2shell-bounty-v19-wide",
     ]);
-    // The deep current is composed; from v20 on a version is one whole file
-    // (ADR 0039 addendum 18), so the wide current is not.
-    expect(composed.map((row) => row.id)).toContain("wp2shell-bounty-v11");
+    // From v20 on a version is one whole file (ADR 0039 addendum 18), so the
+    // wide current is not composed.
     expect(composed.map((row) => row.id)).not.toContain(
       "wp2shell-bounty-v20-wide",
     );
@@ -326,22 +314,6 @@ describe("WordPress prompt fragments (redesign 2026-10-25 §5)", () => {
 });
 
 describe("WordPress discovery prompt assets", () => {
-  it("keeps v24's audit purpose identical while naming the new skill", async () => {
-    const v23 = await loadWordPressDiscoveryAsset("wp2shell-bounty-v23-wide");
-    const v24 = await loadWordPressDiscoveryAsset("wp2shell-bounty-v24-wide");
-    expect(v24.text).toBe(
-      v23.text.replace(
-        "installed wbh-audit skill",
-        "installed wbh-audit-v2 skill",
-      ),
-    );
-    const v25 = await loadWordPressDiscoveryAsset("wp2shell-bounty-v25-wide");
-    expect(v25.text).toContain("Read the installed wbh-audit skill");
-    expect(v25.text).toContain("pinned as wbh-audit-v2");
-    expect(v25.text).toContain("Report a Lead when");
-    expect(v25.text).toContain("one unresolved edge");
-  });
-
   it("keeps the July 30 objective independent from the six-phase skill and records open routes", async () => {
     const candidate = await loadWordPressDiscoveryAsset(
       "wp2shell-bounty-v26-wide",
@@ -1473,9 +1445,6 @@ describe("WordPress discovery prompt assets", () => {
         id === "wp2shell-bounty-v20-wide" ||
         id === "wp2shell-bounty-v21-wide" ||
         id === "wp2shell-bounty-v22-wide" ||
-        id === "wp2shell-bounty-v23-wide" ||
-        id === "wp2shell-bounty-v24-wide" ||
-        id === "wp2shell-bounty-v25-wide" ||
         id === "wp2shell-bounty-v26-wide"
       ) {
         // v5 leaves attacker positions and in-scope effects to the supplied

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { measureCanonicalSourceTree } from "../../src/infrastructure/canonical-source-tree.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
-import { Ledger } from "../../src/ledger/index.js";
+import { Ledger, ledgerEventV1Schema } from "../../src/ledger/index.js";
 
 const snapshot = `sha256:${"a".repeat(64)}`;
 const otherSnapshot = `sha256:${"b".repeat(64)}`;
@@ -1651,8 +1651,6 @@ describe("Ledger public interface", () => {
       reached: 4,
       accepted: 4,
       held: 0,
-      auditPending: 0,
-      auditDisputed: 0,
       parked: 0,
       raw: 4,
       verified: 4,
@@ -1671,8 +1669,6 @@ describe("Ledger public interface", () => {
           reached: 4,
           accepted: 4,
           held: 0,
-          auditPending: 0,
-          auditDisputed: 0,
           parked: 0,
           raw: 4,
           verified: 4,
@@ -1696,8 +1692,6 @@ describe("Ledger public interface", () => {
           reached: 0,
           accepted: 0,
           held: 0,
-          auditPending: 0,
-          auditDisputed: 0,
           parked: 0,
           raw: 0,
           verified: 0,
@@ -1752,8 +1746,6 @@ describe("Ledger public interface", () => {
           reached: 2,
           accepted: 2,
           held: 0,
-          auditPending: 0,
-          auditDisputed: 0,
           parked: 0,
           raw: 2,
           verified: 2,
@@ -1771,8 +1763,6 @@ describe("Ledger public interface", () => {
           reached: 2,
           accepted: 2,
           held: 0,
-          auditPending: 0,
-          auditDisputed: 0,
           parked: 0,
           raw: 2,
           verified: 2,
@@ -2324,5 +2314,68 @@ describe("Ledger capture fields added for the Trial timeline (A2, #212)", () => 
       }),
     ).toEqual({ status: "conflict" });
     expect(ledger.read({})[0]?.event.occurredAt).toBe("2026-10-08T00:00:00Z");
+  });
+});
+
+describe("retired checked/v1 events (ADR 0050, deleted 2026-11-05)", () => {
+  it("still parse, so ledgers that hold them stay readable", () => {
+    const sha = (letter: string) => `sha256:${letter.repeat(64)}`;
+    const base = {
+      schemaVersion: 1,
+      campaignId: "campaign-1",
+      snapshotDigest: sha("a"),
+      occurredAt: "2026-11-04T12:00:00Z",
+      artifacts: [],
+      runId: "run-1",
+      trialId: "trial-1",
+    } as const;
+    const claim = {
+      candidateKind: "finding",
+      candidateIndex: 0,
+      claimDigest: sha("b"),
+    } as const;
+    for (const event of [
+      {
+        ...base,
+        ...claim,
+        identity: "pending-1",
+        type: "audit-candidate-pending",
+        reason: "child-output",
+      },
+      {
+        ...base,
+        ...claim,
+        identity: "promoted-1",
+        type: "audit-candidate-promoted",
+        checkRunId: "run-2",
+        checkIndex: 0,
+      },
+      {
+        ...base,
+        ...claim,
+        identity: "disputed-1",
+        type: "audit-candidate-disputed",
+        promotedIdentity: "promoted-1",
+        causingEventIdentity: "check-2",
+        recordIds: ["finding-1"],
+      },
+      {
+        ...base,
+        identity: "check-1",
+        type: "audit-check-recorded",
+        checkIndex: 0,
+        candidateKind: "finding",
+        claimDigest: sha("b"),
+        verdict: "verified",
+      },
+      {
+        ...base,
+        identity: "held-1",
+        type: "audit-check-held",
+        checkIndex: 1,
+        issuePaths: ["verdict"],
+      },
+    ])
+      expect(ledgerEventV1Schema.safeParse(event).success).toBe(true);
   });
 });

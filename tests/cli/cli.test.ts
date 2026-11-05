@@ -16,7 +16,6 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { pendingFollowUps } from "../../src/cli/continuous.js";
 import { runCli, type CliIo } from "../../src/cli/index.js";
 import { openState } from "../../src/cli/state.js";
 import {
@@ -56,7 +55,6 @@ import {
 import type { ProgrammeIntelligence } from "../../src/profiles/wordpress/programme-intelligence/index.js";
 import { loadWordpressScopePolicy } from "../../src/profiles/wordpress/scope-policy.js";
 import { loadWordPressDiscoveryAsset } from "../../src/profiles/wordpress/prompts/index.js";
-import { loadWordPressDiscoverySkill } from "../../src/profiles/wordpress/prompts/skills.js";
 import {
   createWordPressSelection,
   loadWordPressSelectionPolicy,
@@ -1026,7 +1024,7 @@ async function harness(
       selectionPolicyPath: policyPath,
       // Match the current host: discovery never attaches a Lab.
       discovery: { lab: "none" },
-      promptId: "wp2shell-bounty-v11",
+      promptId: "wp2shell-bounty-v26-wide",
       programmeBoundary: {
         version: "v1",
         text: "Synthetic programme boundary",
@@ -1233,7 +1231,7 @@ async function largeReservedSelectionFixture(reportBytes: number) {
   delete manual.pinnedVersions;
   const policy = {
     ...manual,
-    promptVariant: "wp2shell-bounty-v11",
+    promptVariant: "wp2shell-bounty-v26-wide",
     revisitPolicy: { kind: "version-increased" },
     wordpressVersion: "6.8",
     maximumTargets: 3,
@@ -1556,7 +1554,9 @@ describe("harness CLI vertical slice", () => {
       configPath,
     );
     expect(result.code).toBe(0);
-    const objective = await loadWordPressDiscoveryAsset("wp2shell-bounty-v11");
+    const objective = await loadWordPressDiscoveryAsset(
+      "wp2shell-bounty-v26-wide",
+    );
     const contract = wordPressDiscoveryOutputContractV4();
     expect(prompts[0]).toContain(objective.text.trim());
     expect(prompts[0]).toContain(contract.text);
@@ -1570,7 +1570,6 @@ describe("harness CLI vertical slice", () => {
         promptDigest: objective.digest,
         objectiveDigest: objective.digest,
         contractDigest: contract.digest,
-        sectionDigests: objective.sectionDigests,
         inputDigest: `sha256:${createHash("sha256")
           .update(prompts[0]!)
           .digest("hex")}`,
@@ -1587,45 +1586,8 @@ describe("harness CLI vertical slice", () => {
     expect(prompts[0]).toContain(
       "- Wall time: 120 minutes.\n- Minimum active exploration time: 0 minutes (no minimum).\n- Maximum concurrent child agents: 4.\n- Lab: none.",
     );
-    expect(Object.keys(objective.sectionDigests ?? {})).toEqual([
-      "objective",
-      "strategy",
-      "coordination",
-      "persistence",
-    ]);
-  });
-
-  it("stages the campaign's exploration skills into the Trial and records them by id and digest (ADR 0043)", async () => {
-    const { run, configPath, prompts, ledger, transportRuns } = await harness({
-      config: { discovery: { lab: "none", skills: ["wbh-recon-v3"] } },
-    });
-    const result = await run(
-      "campaign",
-      "run",
-      "synthetic-plugin",
-      "--campaign",
-      "campaign-skills",
-      "--config",
-      configPath,
-    );
-    expect(result.code).toBe(0);
-    const skill = await loadWordPressDiscoverySkill("wbh-recon-v3");
-    expect(transportRuns[0]?.skills).toEqual([
-      { name: "wbh-recon", content: skill.text },
-    ]);
-    // The objective text is unchanged; the skill reaches the agent through the CLI's own listing.
-    const objective = await loadWordPressDiscoveryAsset("wp2shell-bounty-v11");
-    expect(prompts[0]).toContain(objective.text.trim());
-    expect(prompts[0]).not.toContain("wbh-recon");
-    const started = ledger()
-      .read({ campaignId: "campaign-skills", type: "discovery-run-started" })
-      .at(0)?.event;
-    expect(started).toMatchObject({
-      configuration: {
-        promptVariant: "wp2shell-bounty-v11",
-        skills: [{ id: "wbh-recon-v3", digest: skill.digest }],
-      },
-    });
+    // The current objective is one whole file, so no section digests are recorded.
+    expect(started).not.toHaveProperty("configuration.sectionDigests");
   });
 
   it("passes an earlier Trial's map to a later Trial of the same target under Prior research, and records why none when there is no earlier Trial (ADR 0048)", async () => {
@@ -1648,7 +1610,7 @@ describe("harness CLI vertical slice", () => {
       ),
     ).toMatchObject({ code: 0 });
     // The first Trial of the target has nothing to receive and says so.
-    expect(prompts[0]).not.toContain("## Prior research");
+    expect(prompts[0]).not.toContain("\n## Prior research\n");
     expect(transportRuns[0]?.priorResearch).toBeUndefined();
     expect(
       ledger()
@@ -1706,10 +1668,10 @@ describe("harness CLI vertical slice", () => {
       "- /workspace/research/prior/recon-map.md: the map of the plugin that wbh-recon wrote (16 bytes).",
     );
     expect(prompts[1]).not.toContain("# Map of call 1");
-    expect(prompts[1]!.indexOf("## Prior research")).toBeGreaterThan(
+    expect(prompts[1]!.indexOf("\n## Prior research\n")).toBeGreaterThan(
       prompts[1]!.indexOf("## Run parameters"),
     );
-    expect(prompts[1]!.indexOf("## Prior research")).toBeLessThan(
+    expect(prompts[1]!.indexOf("\n## Prior research\n")).toBeLessThan(
       prompts[1]!.indexOf("## Trust boundary"),
     );
     expect(transportRuns[1]?.priorResearch).toEqual([
@@ -1983,7 +1945,7 @@ describe("harness CLI vertical slice", () => {
       programmeBoundary: { version: "v1", text: "Synthetic" },
       wordpressVersion: "6.8",
       lab: { siteTitle: "Synthetic", initialPosts: [], customerRole: false },
-      promptId: "wp2shell-bounty-v11",
+      promptId: "wp2shell-bounty-v26-wide",
     };
     expect(
       wordpressCampaignConfigSchema.safeParse({
@@ -2041,7 +2003,9 @@ describe("harness CLI vertical slice", () => {
     expect(campaign.code).toBe(0);
     expect(campaign.stdout).toContain("stopped by no-new-finding");
     expect(prompts).toHaveLength(1);
-    expect(prompts[0]).toContain("Use multiagents aggressively");
+    expect(prompts[0]).toContain(
+      "You are the root coordinator of a long-running WordPress plugin vulnerability search.",
+    );
     expect(prompts[0]).not.toContain("## Entry points");
     expect(coordinations).toEqual(["cooperative"]);
     expect(expirations).toEqual(["2026-10-08T02:00:00.000Z"]);
@@ -2426,7 +2390,6 @@ describe("harness CLI vertical slice", () => {
     expect(prompts[0]).toContain(
       "Nothing observed in this Lab is a confirmation.",
     );
-    // ADR 0049 addendum 6: no staged skill is named wbh-lab, so the section does not name one.
     expect(prompts[0]).not.toContain("wbh-lab");
     expect(prompts[0]).toContain("- Lab: attached, at most 2 resets.");
     expect(prompts[0]).not.toContain("This Trial has no Lab.");
@@ -2514,51 +2477,6 @@ describe("harness CLI vertical slice", () => {
     expect(live.volumes.size).toBe(0);
   });
 
-  it("names the staged wbh-lab skill once in the `## Lab` section, after the Trace paragraph (ADR 0049 addendum 6)", async () => {
-    const { run, configPath, prompts, transportRuns } = await harness({
-      omitLegacyVerifier: true,
-      config: {
-        promptId: undefined,
-        discovery: {
-          lab: "attached",
-          skills: [
-            "wbh-recon-v3",
-            "wbh-tools-v1",
-            "wbh-setup-v1",
-            "wbh-lab-v1",
-          ],
-        },
-      },
-    });
-    const result = await run(
-      "campaign",
-      "run",
-      "synthetic-plugin",
-      "--campaign",
-      "campaign-lab-skill",
-      "--config",
-      configPath,
-    );
-    if (result.stderr) throw new Error(result.stderr);
-    expect(result.code).toBe(0);
-    expect(transportRuns[0]?.skills?.map(({ name }) => name)).toEqual([
-      "wbh-recon",
-      "wbh-tools",
-      "wbh-setup",
-      "wbh-lab",
-    ]);
-    const sentence =
-      "The installed skill wbh-lab describes when to use Find, Query, Trace and Observe from the research files and how to record each answer; read it before the first of these commands.";
-    expect(prompts[0]).toContain(
-      `A trace shows what ran for that one request as sent; it shows nothing about another request or another account. Trace shares the Find and Query budget.\n\n${sentence}\n\nThe Harness records the HTTP traffic`,
-    );
-    expect(prompts[0]!.split(sentence)).toHaveLength(2);
-    // The objective itself still names no skill; only the generated section does.
-    const objective = await loadWordPressDiscoveryAsset("wp2shell-bounty-v11");
-    expect(objective.text).not.toContain("wbh-lab");
-    expect(prompts[0]!.split("wbh-lab")).toHaveLength(2);
-  });
-
   it("resumes an exploration-Lab Trial on a fresh Lab of the same setup, with the resets left and a notice (Phase D1)", async () => {
     // Each segment answers its control requests before the transport returns.
     let answers: unknown[] = [];
@@ -2581,7 +2499,7 @@ describe("harness CLI vertical slice", () => {
       zeroFindings: true,
       config: {
         promptId: undefined,
-        discovery: { lab: "attached", skills: ["wbh-recon-v3", "wbh-lab-v1"] },
+        discovery: { lab: "attached" },
       },
       executionStarted: async () => {
         const expected = answersBefore + (expectedPerSegment[segment++] ?? 0);
@@ -2658,9 +2576,8 @@ describe("harness CLI vertical slice", () => {
       "## Lab\n\nThis segment resumes the Trial in a new sandbox with a new Lab. The site was provisioned again from the same setup: nothing changed in the earlier Lab remains, and the accounts below replace the earlier ones.",
     );
     expect(notice).toContain("at most 2 times in all and has used 1");
-    // ADR 0049 addendum 6: the segment stages the recorded wbh-lab skill, so its notice names it too.
     expect(notice).toContain(
-      "Trace shares the Find and Query budget.\n\nThe installed skill wbh-lab describes when to use Find, Query, Trace and Observe from the research files and how to record each answer; read it before the first of these commands.\n\nThe Harness records the HTTP traffic",
+      "Trace shares the Find and Query budget.\n\nThe Harness records the HTTP traffic",
     );
     expect(notice).not.toContain(transportRuns[0]!.prompt.slice(0, 200));
     expect(segmentRun.prompt).toContain(notice);
@@ -3028,7 +2945,7 @@ describe("harness CLI vertical slice", () => {
         maxObservations: 20,
         maxLookups: 60,
       },
-      mode: "deep",
+      mode: "wide",
       maxChildren: 4,
       minimumActiveMinutes: 0,
       priorResearch: "none",
@@ -3075,7 +2992,7 @@ describe("harness CLI vertical slice", () => {
     };
     const production = wordpressCampaignConfigSchema.parse(base);
     expect(production).toMatchObject({
-      promptId: "wp2shell-bounty-v11",
+      promptId: "wp2shell-bounty-v26-wide",
       runWallTimeMinutes: 120,
     });
     for (const forbidden of [
@@ -3103,7 +3020,7 @@ describe("harness CLI vertical slice", () => {
         wordpressCampaignConfigSchema.safeParse({
           ...base,
           mode,
-          promptId: "wp2shell-bounty-v11",
+          promptId: "wp2shell-bounty-v26-wide",
         }).success,
       ).toBe(false);
   });
@@ -3125,12 +3042,17 @@ describe("harness CLI vertical slice", () => {
       promptId: "wp2shell-bounty-v26-wide",
       runWallTimeMinutes: 120,
     });
-    expect(
-      wordpressCampaignConfigSchema.parse({ ...base, discovery: deep }),
-    ).toMatchObject({
-      promptId: "wp2shell-bounty-v11",
-      runWallTimeMinutes: 120,
+    // Deep was retired on 2026-11-05 (ADR 0039 addendum); v11 stays archived.
+    const retired = wordpressCampaignConfigSchema.safeParse({
+      ...base,
+      discovery: deep,
     });
+    expect(retired.success).toBe(false);
+    expect(
+      retired.error?.issues.find(
+        (issue) => issue.path.join(".") === "discovery.mode",
+      )?.message,
+    ).toBe("Deep mode was retired on 2026-11-05; name a wide Trial instead");
     expect(
       wordpressCampaignConfigSchema.parse({
         ...base,
@@ -3186,25 +3108,26 @@ describe("harness CLI vertical slice", () => {
       { discovery: wide, promptId: "wp2shell-bounty-v10-wide" },
       { discovery: wide, promptId: "wp2shell-bounty-v11-wide" },
       { discovery: wide, promptId: "wp2shell-bounty-v12-wide" },
+      { discovery: deep, promptId: "wp2shell-bounty-v11" },
       { discovery: deep, promptId: "wp2shell-bounty-v10" },
       { promptId: "wp2shell-bounty-v10" },
       {
-        discovery: { ...deep, minimumActiveMinutes: 60 },
+        discovery: { ...wide, minimumActiveMinutes: 60 },
         runWallTimeMinutes: 60,
       },
       {
-        discovery: { ...deep, minimumActiveMinutes: 60 },
+        discovery: { ...wide, minimumActiveMinutes: 60 },
         runWallTimeMinutes: 20,
       },
       { discovery: wide, runWallTimeMinutes: 121 },
       { discovery: { lab: "none", mode: "screening" } },
       {
-        discovery: { ...deep, minimumActiveMinutes: 90 },
+        discovery: { ...wide, minimumActiveMinutes: 90 },
         runWallTimeMinutes: 90,
       },
       { discovery: { ...wide, minimumActiveMinutes: 120 } },
-      { discovery: { ...deep, maxChildren: 0 } },
-      { discovery: { ...deep, maxChildren: 9 } },
+      { discovery: { ...wide, maxChildren: 0 } },
+      { discovery: { ...wide, maxChildren: 9 } },
       { discovery: { lab: { mode: "none", maxResets: 6 } } },
       { discovery: { lab: { mode: "attached", maxResets: 6 } } },
       { discovery: { lab: { mode: "attached", maxResets: -1 } } },
@@ -3272,17 +3195,16 @@ describe("harness CLI vertical slice", () => {
       });
   });
 
-  it("uses the corrected trust boundary for v25 and preserves it on resume", async () => {
+  it("uses the corrected trust boundary for v26 and preserves it on resume", async () => {
     const { run, configPath, transportRuns, ledger } = await harness({
       refuseOnCalls: [1],
       refusalSession: true,
       zeroFindings: true,
       config: {
-        promptId: "wp2shell-bounty-v25-wide",
+        promptId: "wp2shell-bounty-v26-wide",
         discovery: {
           mode: "wide",
           lab: "attached",
-          skills: ["wbh-audit-v2", "wbh-setup-v1", "wbh-lab-v1"],
         },
       },
     });
@@ -3417,387 +3339,103 @@ describe("harness CLI vertical slice", () => {
     ).toHaveLength(2);
   });
 
-  it("runs a named second Trial on recorded Leads with a Prior leads section, once (ADR 0044)", async () => {
-    const lead = (summary: string) => ({
-      summary,
-      attackerPosition: "subscriber",
-      primitive: "write",
-      storage: { kind: "option", key: "synthetic_plugin_shared" },
-      missingEdge: "consumer",
-      sourceTrace: [
-        { file: "synthetic-plugin.php", function: "synthetic_boot", line: 3 },
-        { file: "includes/synthetic.php", function: "synthetic_save", line: 4 },
-      ],
-      labObservations: "Synthetic partial observation at /synthetic",
-    });
-    const { run, configPath, prompts, ledger, root, profile } = await harness({
-      entryPoints: true,
-      leadsOnCalls: {
-        1: [
-          lead("No reader of the stored value was shown. Second sentence."),
-          lead("It answered POST /wp-admin/admin-ajax.php only."),
-        ],
-      },
-    });
-    const first = await run(
-      "campaign",
-      "run",
-      "synthetic-plugin",
-      "--campaign",
-      "campaign-first",
-      "--config",
-      configPath,
-    );
-    expect(first.code).toBe(0);
-    const leads = ledger()
-      .read({ campaignId: "campaign-first", type: "lead-recorded" })
-      .map(({ event }) => event);
-    expect(leads).toHaveLength(2);
-    const snapshotDigest = leads[0]!.snapshotDigest;
-    const leadIds = leads.flatMap((event) =>
-      event.type === "lead-recorded" ? [event.leadId] : [],
-    );
-    const written = JSON.parse(await readFile(configPath, "utf8"));
-    const second = async (
-      campaignId: string,
-      targets: readonly Record<string, unknown>[],
-    ) => {
-      written.discovery = { lab: "attached", priorLeads: { targets } };
-      await writeFile(configPath, JSON.stringify(written));
-      return run(
-        "campaign",
-        "run",
-        "synthetic-plugin",
-        "--campaign",
-        campaignId,
-        "--config",
-        configPath,
-      );
-    };
-
-    // A Lead of another Snapshot, and a groups file of another rule, stop before any Lab.
-    const otherSnapshot = await second("campaign-other", [
-      { snapshotDigest: sha("a"), leadIds },
-    ]);
-    expect(otherSnapshot.code).toBe(1);
-    expect(otherSnapshot.stderr).toContain("prior-lead-snapshot-differs");
-    const groupsPath = join(root, "lead-groups.json");
-    await writeFile(
-      groupsPath,
-      JSON.stringify({
-        summary: { rule: "overlap" },
-        groups: [
-          {
-            snapshotDigest,
-            representative: { kind: "lead", id: leadIds[0] },
-          },
-        ],
-      }),
-    );
-    const overlap = await second("campaign-overlap", [
-      { snapshotDigest, groupsPath },
-    ]);
-    expect(overlap.code).toBe(1);
-    expect(overlap.stderr).toContain("prior-leads-groups-rule");
-    const missing = await second("campaign-missing", [
-      { snapshotDigest, groupsPath: join(root, "absent.json") },
-    ]);
-    expect(missing.code).toBe(1);
-    expect(missing.stderr).toContain("prior-leads-groups-unreadable");
-    expect(prompts).toHaveLength(1);
-
-    // One Trial per Snapshot: neither --repeat nor the runner runs it again.
-    written.discovery = {
-      lab: "attached",
-      priorLeads: { targets: [{ snapshotDigest, leadIds }] },
-    };
-    await writeFile(configPath, JSON.stringify(written));
-    const repeated = await run(
-      "campaign",
-      "run",
-      "synthetic-plugin",
-      "--campaign",
-      "campaign-repeat",
-      "--config",
-      configPath,
-      "--repeat",
-      "2",
-    );
-    expect(repeated.code).toBe(1);
-    expect(repeated.stderr).toContain("prior-leads-repeat");
-    (profile as { hostStatus?: unknown }).hostStatus = async () => ({
-      loginExpiresAt: new Date("2027-01-01T00:00:00Z"),
-      programmeObservedAt: new Date(now),
-      freeBytes: 100 * 1024 ** 3,
-      loginMarginMinutes: 60,
-    });
-    const runner = await run(
-      "continuous",
-      "run",
-      "--config",
-      configPath,
-      "--selection",
-      join(root, "selection.json"),
-    );
-    expect(runner.code).toBe(1);
-    expect(runner.stderr).toContain(
-      "continuous run does not run discovery.priorLeads",
-    );
-    expect(prompts).toHaveLength(1);
-
-    const named = await second("campaign-second", [
-      { snapshotDigest, leadIds },
-    ]);
-    expect(named.code).toBe(0);
-    expect(prompts).toHaveLength(2);
-    const prompt = prompts[1]!;
-    const section = prompt.slice(
-      prompt.indexOf("## Prior leads"),
-      prompt.indexOf("## Trust boundary"),
-    );
-    expect(prompt.indexOf("## Run parameters")).toBeLessThan(
-      prompt.indexOf("## Prior leads"),
-    );
-    expect(section).toContain(
-      [
-        "### Prior lead 1",
-        "",
-        "- Entry: `synthetic-plugin.php` `synthetic_boot`",
-        "- Effect: `includes/synthetic.php` `synthetic_save`",
-        "- Not shown: No reader of the stored value was shown.",
-      ].join("\n"),
-    );
-    expect(section).toContain("### Prior lead 2");
-    expect(section).toContain("- Not shown: (withheld)");
-    for (const absent of [
-      "Second sentence",
-      "admin-ajax",
-      "synthetic_plugin_shared",
-      "Synthetic partial observation",
-    ])
-      expect(section).not.toContain(absent);
-    expect(prompts[0]).not.toContain("## Prior leads");
-    const started = ledger()
-      .read({ campaignId: "campaign-second", type: "discovery-run-started" })
-      .map(({ event }) => event);
-    expect(started).toHaveLength(1);
-    expect(started[0]).toMatchObject({
-      snapshotDigest,
-      labAttached: true,
-      configuration: {
-        lab: { mode: "attached" },
-        priorLeads: {
-          representatives: 2,
-          leadIds,
-          gapWithheld: 1,
-          sectionDigest: sha256(section.trimEnd()),
-        },
-      },
-    });
-    expect(
-      ledger().read({
-        campaignId: "campaign-first",
-        type: "discovery-run-started",
-      })[0]?.event,
-    ).not.toHaveProperty("configuration.priorLeads");
-
-    // The same Snapshot with the same representatives does not run again.
-    const again = await second("campaign-again", [
-      { snapshotDigest, leadIds: [...leadIds].reverse() },
-    ]);
-    expect(again.code).toBe(1);
-    expect(again.stderr).toContain("prior-leads-already-run");
-    expect(prompts).toHaveLength(2);
-  });
-
-  it("schedules the follow-up Trial itself when a batch's Trial leaves Leads: Prior leads section, Lab, and the link to the first Trial in the ledger (ADR 0049 C)", async () => {
-    const lead = {
-      summary: "No reader of the stored value was shown. Second sentence.",
-      attackerPosition: "subscriber",
-      primitive: "write",
-      storage: null,
-      missingEdge: "consumer",
-      sourceTrace: [
-        { file: "synthetic-plugin.php", function: "synthetic_boot", line: 2 },
-        { file: "includes/synthetic.php", function: "synthetic_save", line: 4 },
-      ],
-      labObservations: "Synthetic partial observation",
-    };
-    const { run, root, profile, configPath, ledger, prompts } = await harness({
+  it("does not resume a second Trial that recorded a Prior leads section, removed on 2026-11-05 (ADR 0044)", async () => {
+    const attached = await harness({
       omitLegacyVerifier: true,
-      entryPoints: true,
-      leadsOnCalls: { 1: [lead] },
-      config: { discovery: { lab: "attached" } },
-    });
-    const { wordpressVersion } = JSON.parse(
-      await readFile(configPath, "utf8"),
-    ) as { wordpressVersion: string };
-    const policy = JSON.parse(
-      await readFile(join(root, "selection.json"), "utf8"),
-    ) as object;
-    await mkdir(join(root, "policies"));
-    await writeFile(
-      join(root, "policies", "selection.json"),
-      JSON.stringify({ ...policy, wordpressVersion }),
-    );
-    (profile as { hostStatus?: unknown }).hostStatus = async () => ({
-      loginExpiresAt: new Date("2027-01-01T00:00:00Z"),
-      programmeObservedAt: new Date(now),
-      freeBytes: 100 * 1024 ** 3,
-      loginMarginMinutes: 60,
-    });
-    // The runner explores its first batch and the follow-up it owes; any later state change stops it.
-    const runner = await run(
-      "continuous",
-      "run",
-      "--config",
-      configPath,
-      "--selection",
-      join(root, "policies", "selection.json"),
-      "--notify",
-      `grep -q ' running campaignId=prod-[0-9]*-[12]$' || touch '${join(root, "state", "continuous.stop")}'`,
-    );
-    expect(runner.code).toBe(0);
-    expect(runner.stdout).toMatch(
-      / follow-up campaign=prod-(\d{8})-2 of=prod-\1-1 targets=1$/m,
-    );
-    expect(runner.stdout).toMatch(/ batch prod-\d{8}-2 stopped=none /);
-    const starts = ledger()
-      .read({ type: "discovery-run-started" })
-      .flatMap(({ event }) =>
-        event.type === "discovery-run-started" && event.runKind === "explore"
-          ? [event]
-          : [],
-      );
-    expect(starts).toHaveLength(2);
-    const [first, second] = starts;
-    expect(first!.campaignId).toMatch(/^prod-\d{8}-1$/);
-    expect(second!.campaignId).toMatch(/^prod-\d{8}-2$/);
-    expect(first!.configuration).not.toHaveProperty("priorLeads");
-    expect(first!.configuration).not.toHaveProperty("followUp");
-    const leadIds = ledger()
-      .read({ campaignId: first!.campaignId, type: "lead-recorded" })
-      .flatMap(({ event }) =>
-        event.type === "lead-recorded" ? [event.leadId] : [],
-      );
-    expect(leadIds).toHaveLength(1);
-    expect(second).toMatchObject({
-      snapshotDigest: first!.snapshotDigest,
-      labAttached: true,
-      configuration: {
-        lab: { mode: "attached" },
-        priorLeads: { representatives: 1, leadIds },
-        followUp: { of: first!.runId, leadCount: 1 },
-      },
-    });
-    expect(
-      ledger()
-        .read({ campaignId: second!.campaignId, type: "follow-up-scheduled" })
-        .map(({ event }) => event),
-    ).toMatchObject([
-      {
-        snapshotDigest: first!.snapshotDigest,
-        ofRunId: first!.runId,
-        ofCampaignId: first!.campaignId,
-        leadCount: 1,
-      },
-    ]);
-    // No selection batch binds the follow-up campaign; the Root received the section unchanged.
-    expect(
-      ledger().read({
-        campaignId: second!.campaignId,
-        type: "selection-batch-bound",
-      }),
-    ).toHaveLength(0);
-    expect(prompts).toHaveLength(2);
-    expect(prompts[0]).not.toContain("## Prior leads");
-    expect(prompts[1]).toContain("## Prior leads");
-    expect(prompts[1]).toContain(
-      "- Not shown: No reader of the stored value was shown.",
-    );
-    // The follow-up Trial left no Leads of its own: nothing more is owed.
-    expect(pendingFollowUps(ledger(), "prod")).toEqual([]);
-  });
-
-  it("does not resume a second Trial whose Prior leads section would differ (ADR 0044)", async () => {
-    const lead = (summary: string) => ({
-      summary,
-      attackerPosition: "subscriber",
-      primitive: "write",
-      storage: null,
-      missingEdge: "consumer",
-      sourceTrace: [
-        { file: "includes/synthetic.php", function: "synthetic_save", line: 4 },
-      ],
-      labObservations: "Synthetic partial observation",
-    });
-    const fixture = await harness({
-      omitLegacyVerifier: true,
-      entryPoints: true,
-      refuseOnCalls: [2],
+      refuseOnCalls: [1],
       refusalSession: true,
-      leadsOnCalls: { 1: [lead("First gap."), lead("Second gap.")] },
+      zeroFindings: true,
+      config: { promptId: undefined, discovery: { lab: "attached" } },
     });
-    const { run, configPath, ledger, transportRuns } = fixture;
+    const campaignId = "campaign-prior-leads-retired";
     expect(
       (
-        await run(
+        await attached.run(
           "campaign",
           "run",
           "synthetic-plugin",
           "--campaign",
-          "campaign-first",
+          campaignId,
           "--config",
-          configPath,
+          attached.configPath,
         )
       ).code,
     ).toBe(0);
-    const leads = ledger()
-      .read({ campaignId: "campaign-first", type: "lead-recorded" })
-      .flatMap(({ event }) => (event.type === "lead-recorded" ? [event] : []));
-    const snapshotDigest = leads[0]!.snapshotDigest;
-    const written = JSON.parse(await readFile(configPath, "utf8"));
-    const configure = async (leadIds: readonly string[]) => {
-      written.discovery = {
-        lab: "attached",
-        priorLeads: { targets: [{ snapshotDigest, leadIds }] },
-      };
-      await writeFile(configPath, JSON.stringify(written));
-    };
-    await configure(leads.map(({ leadId }) => leadId));
-    expect(
-      (
-        await run(
-          "campaign",
-          "run",
-          "synthetic-plugin",
-          "--campaign",
-          "campaign-second",
-          "--config",
-          configPath,
-        )
-      ).code,
-    ).toBe(0);
-    const refused = transportRuns.at(-1)!;
-    expect(
-      ledger()
-        .read({ campaignId: "campaign-second", type: "discovery-run-started" })
-        .at(0)?.event,
-    ).toMatchObject({ configuration: { priorLeads: { representatives: 2 } } });
-    await configure([leads[0]!.leadId]);
-    const resumed = await run(
+    // A second Trial from before the removal: the same run, recorded with
+    // `configuration.priorLeads`, under a run id of its own.
+    const runId = attached.transportRuns[0]!.runId;
+    const copied = `${runId}-prior-leads`;
+    for (const type of [
+      "discovery-run-started",
+      "discovery-run-finished",
+    ] as const) {
+      const event = attached
+        .ledger()
+        .read({ campaignId, type })
+        .map((record) => record.event)
+        .find((recorded) => "runId" in recorded && recorded.runId === runId);
+      if (
+        event?.type !== "discovery-run-started" &&
+        event?.type !== "discovery-run-finished"
+      )
+        throw new Error(`no ${type} of ${runId}`);
+      const appended = await attached.ledger().append({
+        ...event,
+        identity: `${event.identity}-prior-leads`,
+        runId: copied,
+        ...(event.type === "discovery-run-started"
+          ? {
+              configuration: {
+                ...event.configuration,
+                priorLeads: {
+                  representatives: 1,
+                  representativesDigest: `sha256:${"a".repeat(64)}`,
+                  leadIds: [`sha256:${"b".repeat(64)}`],
+                  gapWithheld: 0,
+                  sectionDigest: `sha256:${"c".repeat(64)}`,
+                },
+              },
+            }
+          : {}),
+      } as Parameters<ReturnType<typeof attached.ledger>["append"]>[0]);
+      expect(appended.status).not.toBe("conflict");
+    }
+    const resumed = await attached.run(
       "campaign",
       "resume",
       "--campaign",
-      "campaign-second",
+      campaignId,
       "--run",
-      refused.runId,
+      copied,
       "--config",
-      configPath,
+      attached.configPath,
     );
     expect(resumed.code).toBe(3);
     expect(resumed.stderr).toMatch(/^not resumable: prior-leads-differ /);
-    expect(transportRuns.at(-1)).toBe(refused);
+    expect(attached.transportRuns).toHaveLength(1);
+  });
+
+  it("refuses discovery.priorLeads and followUp leads, and still reads followUp none", () => {
+    const base = {
+      schemaVersion: 1 as const,
+      programmeBoundary: { version: "v1", text: "Synthetic" },
+      wordpressVersion: "6.8",
+      lab: { siteTitle: "Synthetic", initialPosts: [], customerRole: false },
+    };
+    const parse = (discovery: object) =>
+      wordpressCampaignConfigSchema.safeParse({ ...base, discovery });
+    expect(parse({ mode: "wide", followUp: "none" }).success).toBe(true);
+    expect(
+      parse({ mode: "wide", followUp: "leads" }).error?.issues[0]?.path,
+    ).toEqual(["discovery", "followUp"]);
+    expect(
+      parse({
+        mode: "wide",
+        priorLeads: {
+          targets: [{ snapshotDigest: `sha256:${"a".repeat(64)}` }],
+        },
+      }).error?.issues[0]?.path,
+    ).toEqual(["discovery", "priorLeads"]);
   });
 
   it("stops the campaign on a provider limit and resumes it with the same command", async () => {
@@ -4375,7 +4013,7 @@ describe("harness CLI vertical slice", () => {
     expect(unknown.stderr).toBe("not resumable: run-unknown");
     expect(transportRuns).toHaveLength(1);
     expect(transportRuns[0]!.prompt).toContain(
-      "# WordPress trust boundary template v1",
+      "# WordPress trust boundary template v2",
     );
 
     const resumed = await run(
@@ -4405,7 +4043,7 @@ describe("harness CLI vertical slice", () => {
     expect(segment.prompt).toContain(segment.resumePrompt!);
     expect(segment.prompt).toBe(transportRuns[0]!.prompt);
     expect(segment.prompt).toContain(
-      "The independent judge decides runtime confirmation.",
+      "Only a named human's matching observation in a retained verification Lab or a new review Lab",
     );
     expect(resumed.stdout).toContain(
       `resumed ${refusedRunId} as ${segment.runId}  trial ${refusedRunId}  segment 1  remaining wall 110 min`,
@@ -4422,7 +4060,7 @@ describe("harness CLI vertical slice", () => {
       resumesRun: refusedRunId,
       resumeSegment: 1,
       labAttached: false,
-      configuration: { trustBoundaryVersion: "trust-boundary-v1" },
+      configuration: { trustBoundaryVersion: "trust-boundary-v2" },
     });
     // The original failure and skip stay; the Trial is counted once.
     expect(
@@ -4466,7 +4104,7 @@ describe("harness CLI vertical slice", () => {
     expect(transportRuns).toHaveLength(2);
   });
 
-  it.each(["legacy", "unknown"] as const)(
+  it.each(["legacy", "unknown", "skills"] as const)(
     "uses the recorded trust boundary on public resume (%s)",
     async (caseName) => {
       const { run, configPath, transportRuns, ledger, store } = await harness({
@@ -4514,9 +4152,18 @@ describe("harness CLI vertical slice", () => {
         digest: canonicalDigest(historicalReceiptBody),
       });
       const configuration = { ...originalStart.configuration };
-      delete configuration.trustBoundaryVersion;
+      if (caseName !== "skills") delete configuration.trustBoundaryVersion;
       if (caseName === "unknown")
         configuration.trustBoundaryVersion = "trust-boundary-v99";
+      // A Trial from before the v26 cleanup recorded its staged skills (ADR 0043).
+      if (caseName === "skills")
+        configuration.skills = [
+          {
+            id: "wbh-recon-v3",
+            digest:
+              "sha256:5563a8df752e112ea0bed7329bf1755b2cde9d4210e41b6802fb07270a2b6970",
+          },
+        ];
       expect(
         await ledger().append({
           ...originalStart,
@@ -4553,6 +4200,20 @@ describe("harness CLI vertical slice", () => {
         expect(resumed.code).toBe(3);
         expect(resumed.stderr).toBe(
           "not resumable: prompt-version-differs (trust-boundary-v99 is not in the trust-boundary registry)",
+        );
+        expect(transportRuns).toHaveLength(1);
+      } else if (caseName === "skills") {
+        // The ledger still reads the start; the skills it names are gone.
+        expect(
+          ledger()
+            .read({ campaignId: campaign, type: "discovery-run-started" })
+            .at(-1)?.event,
+        ).toMatchObject({
+          configuration: { skills: [{ id: "wbh-recon-v3" }] },
+        });
+        expect(resumed.code).toBe(3);
+        expect(resumed.stderr).toBe(
+          "not resumable: skill-version-differs (wbh-recon-v3 at sha256:5563a8df752e112ea0bed7329bf1755b2cde9d4210e41b6802fb07270a2b6970 is not in the skill registry)",
         );
         expect(transportRuns).toHaveLength(1);
       } else {
@@ -4670,11 +4331,10 @@ describe("harness CLI vertical slice", () => {
     const command = ["--campaign", campaign, "--config", configPath];
     expect((await run("campaign", "run", "--all", ...command)).code).toBe(0);
     const first = transportRuns[0]!;
-    // Between the segments the campaign moves to the deep objective and 6 children
-    // (since ADR 0039 addendum 18 the wide mode has one launchable version).
+    // Between the segments the campaign moves to the current objective and 6 children.
     const written = JSON.parse(await readFile(configPath, "utf8"));
-    written.promptId = "wp2shell-bounty-v11";
-    written.discovery = { lab: "none", mode: "deep", maxChildren: 6 };
+    written.promptId = "wp2shell-bounty-v26-wide";
+    written.discovery = { lab: "none", mode: "wide", maxChildren: 6 };
     await writeFile(configPath, JSON.stringify(written));
 
     const resumed = await run(
@@ -5343,7 +5003,7 @@ describe("harness CLI vertical slice", () => {
       policyPath,
       JSON.stringify({
         ...policy,
-        promptVariant: "wp2shell-bounty-v11",
+        promptVariant: "wp2shell-bounty-v26-wide",
         revisitPolicy: { kind: "version-increased" },
         wordpressVersion: "6.8",
         maximumTargets: 3,
@@ -5408,7 +5068,7 @@ describe("harness CLI vertical slice", () => {
       policyPath,
       JSON.stringify({
         ...policy,
-        promptVariant: "wp2shell-bounty-v11",
+        promptVariant: "wp2shell-bounty-v26-wide",
         revisitPolicy: { kind: "version-increased" },
         wordpressVersion: "6.8",
         maximumTargets: 3,
@@ -5609,7 +5269,7 @@ describe("harness CLI vertical slice", () => {
       policyPath,
       JSON.stringify({
         ...manual,
-        promptVariant: "wp2shell-bounty-v11",
+        promptVariant: "wp2shell-bounty-v26-wide",
         revisitPolicy: { kind: "version-increased" },
         wordpressVersion: "6.8",
         maximumTargets: 3,
@@ -5694,7 +5354,7 @@ describe("harness CLI vertical slice", () => {
       configPath,
     );
     expect(mismatched.code).toBe(1);
-    expect(mismatched.stderr).toContain("wp2shell-bounty-v11");
+    expect(mismatched.stderr).toContain("wp2shell-bounty-v26-wide");
     await writeFile(configPath, JSON.stringify(campaignConfig));
     const campaign = await run(
       "campaign",
@@ -5860,7 +5520,7 @@ describe("harness CLI vertical slice", () => {
       policyPath,
       JSON.stringify({
         ...manual,
-        promptVariant: "wp2shell-bounty-v11",
+        promptVariant: "wp2shell-bounty-v26-wide",
         revisitPolicy: { kind: "version-increased" },
         wordpressVersion: "6.8",
         maximumTargets: 3,
@@ -5954,7 +5614,7 @@ describe("harness CLI vertical slice", () => {
     delete manual.pinnedVersions;
     const automatic = {
       ...manual,
-      promptVariant: "wp2shell-bounty-v11",
+      promptVariant: "wp2shell-bounty-v26-wide",
       revisitPolicy: { kind: "version-increased" },
       wordpressVersion,
       maximumTargets: 3,
@@ -6671,7 +6331,7 @@ describe("harness CLI vertical slice", () => {
       policyPath,
       JSON.stringify({
         ...policy,
-        promptVariant: "wp2shell-bounty-v11",
+        promptVariant: "wp2shell-bounty-v26-wide",
         revisitPolicy: { kind: "version-increased" },
         wordpressVersion: "6.8",
         maximumTargets: 3,
@@ -6844,7 +6504,7 @@ describe("harness CLI vertical slice", () => {
       policyPath,
       JSON.stringify({
         ...policy,
-        promptVariant: "wp2shell-bounty-v11",
+        promptVariant: "wp2shell-bounty-v26-wide",
         revisitPolicy: { kind: "version-increased" },
         wordpressVersion: "6.8",
         maximumTargets: 3,

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { describe, expect, it } from "vitest";
 
 import { wordPressLabSection } from "../../src/cli/wordpress.js";
@@ -20,60 +22,25 @@ const handle = {
 
 const budget = { maxResets: 2, maxObservations: 20, maxLookups: 60 };
 
-const SENTENCE =
-  "The installed skill wbh-lab describes when to use Find, Query, Trace and Observe from the research files and how to record each answer; read it before the first of these commands.";
+// The section past Trials received; a changed byte breaks their prompt digests.
+const digest = (text: string) =>
+  `sha256:${createHash("sha256").update(text).digest("hex")}`;
 
-describe("## Lab section and the staged wbh-lab skill (ADR 0049 addendum 6)", () => {
-  it("names the installed wbh-lab skill once, after the Trace paragraph and before the closing paragraph", () => {
-    const section = wordPressLabSection(handle, budget, undefined, [
-      "wbh-recon",
-      "wbh-tools",
-      "wbh-setup",
-      "wbh-lab",
-    ]);
-    const paragraphs = section.split("\n\n");
-    const index = paragraphs.indexOf(SENTENCE);
-    expect(index).toBeGreaterThan(0);
-    expect(paragraphs[index - 1]).toMatch(
-      /^Trace: .* Trace shares the Find and Query budget\.$/,
+describe("## Lab section", () => {
+  it("keeps the bytes past Trials received", () => {
+    const section = wordPressLabSection(handle, budget);
+    expect(section).not.toContain("wbh-lab");
+    expect(section).not.toContain("installed skill");
+    expect(digest(section)).toBe(
+      "sha256:247381ec7ab594e372d1a4530d0237f13a254a665e509c88c45739038a0c25df",
     );
-    expect(paragraphs[index + 1]).toMatch(
-      /^The Harness records the HTTP traffic/,
-    );
-    expect(paragraphs.at(-1)).toBe(paragraphs[index + 1]);
-    expect(section.split(SENTENCE)).toHaveLength(2);
-    expect(section.split("wbh-lab")).toHaveLength(2);
-  });
-
-  it("is byte-identical to the section without skills when no staged skill is named wbh-lab", () => {
-    const withoutSkills = wordPressLabSection(handle, budget);
-    expect(withoutSkills).not.toContain("wbh-lab");
-    expect(withoutSkills).not.toContain("installed skill");
-    expect(wordPressLabSection(handle, budget, undefined, [])).toBe(
-      withoutSkills,
-    );
-    // Another name, and the skill id rather than the front-matter name, add nothing.
-    expect(
-      wordPressLabSection(handle, budget, undefined, [
-        "wbh-recon",
-        "wbh-tools",
-        "wbh-setup",
-      ]),
-    ).toBe(withoutSkills);
-    expect(wordPressLabSection(handle, budget, undefined, ["wbh-lab-v1"])).toBe(
-      withoutSkills,
-    );
-  });
-
-  it("names the skill in a resumed segment's notice the same way", () => {
     const used = { resetsUsed: 1, observationsUsed: 2, lookupsUsed: 3 };
-    const resumed = wordPressLabSection(handle, budget, used, ["wbh-lab"]);
+    const resumed = wordPressLabSection(handle, budget, used);
     expect(resumed).toContain(
       "This segment resumes the Trial in a new sandbox with a new Lab.",
     );
-    expect(resumed).toContain(
-      `Trace shares the Find and Query budget.\n\n${SENTENCE}\n\nThe Harness records the HTTP traffic`,
+    expect(digest(resumed)).toBe(
+      "sha256:d12a49b9bda043db10c13d9fad3edea00f688aead0d4475d64586539785a483f",
     );
-    expect(wordPressLabSection(handle, budget, used)).not.toContain("wbh-lab");
   });
 });

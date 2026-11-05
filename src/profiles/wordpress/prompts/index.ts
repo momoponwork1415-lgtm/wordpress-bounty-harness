@@ -3,8 +3,8 @@ import { readFile } from "node:fs/promises";
 
 /**
  * One row per agent-facing text under this directory. The `.md` file is
- * `${id}.md` unless a versioned experimental path is recorded; the digest
- * pins its exact bytes so past Trials can be matched (ADR 0029).
+ * `${id}.md`; the digest pins its exact bytes so past Trials can be matched.
+ * Old versions stay here for digest matching only (ADR 0029).
  */
 interface WordPressPromptRecord {
   readonly id: string;
@@ -18,11 +18,15 @@ interface WordPressPromptRecord {
   readonly status: "current" | "candidate" | "archived";
 }
 
-export type WordPressDiscoveryMode = "deep" | "wide";
-export const WORDPRESS_DISCOVERY_MODES = ["deep", "wide"] as const;
+/**
+ * The launch mode a new Trial may take. `deep` was retired on 2026-11-05
+ * (ADR 0039 addendum); its Trials keep `mode: "deep"` in the ledger.
+ */
+export type WordPressDiscoveryMode = "wide";
+export const WORDPRESS_DISCOVERY_MODES = ["wide"] as const;
 
 /** Generated Finding / Lead contract versions the Harness appends (ADR 0019). */
-export type WordPressOutputContractVersion = "v1" | "v2" | "v4" | "v5" | "v6";
+export type WordPressOutputContractVersion = "v1" | "v2" | "v4" | "v5";
 
 /**
  * The human-written parts of a discovery objective (redesign 2026-10-25 §5).
@@ -50,8 +54,6 @@ export interface WordPressDiscoveryPromptRecord extends WordPressPromptRecord {
   readonly outputContract: WordPressOutputContractVersion | null;
   /** Required on a `current` or `candidate` row: the campaign mode that launches it. */
   readonly mode?: WordPressDiscoveryMode;
-  /** Historical experimental body location; the id and digest do not change. */
-  readonly sourceFile?: `experimental/${string}.md`;
   /**
    * The body is composed from these files in order. The composition is
    * byte-identical to `${id}.md`, which stays as the reference copy, so
@@ -60,7 +62,7 @@ export interface WordPressDiscoveryPromptRecord extends WordPressPromptRecord {
   readonly fragments?: readonly WordPressPromptFragment[];
 }
 
-// Paragraphs the deep and wide objectives share unchanged.
+// Paragraphs the archived deep and wide objectives share unchanged.
 const TASK = { section: "objective", file: "task-v10" } as const;
 const SOURCES = { section: "objective", file: "sources-v8" } as const;
 // Only the archived v10 and v12-wide carry it; v11, v13-wide and v14-wide drop it
@@ -225,8 +227,8 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:0ce13a617484c0e0b7ff3af6a55b4b821ea106189a897ed573040e9d5ad16ae9",
     outputContract: "v4",
-    status: "current",
-    mode: "deep",
+    // The deep objective until deep was retired (ADR 0039 addendum 2026-11-05).
+    status: "archived",
     // v10 without the lifetime paragraph, the child count and the minutes;
     // the Run parameters section states the enforced values (ADR 0039 追記 4).
     // The hand-over paragraph follows the research paragraph (owner
@@ -500,39 +502,6 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     // (wbh-recon step 9) and the Trial wall.
   },
   {
-    id: "wp2shell-bounty-v23-wide",
-    digest:
-      "sha256:8fb5d251e8ea6610269dc816ebf30a9c8584565b396b161a2c31c642c28c7e77",
-    outputContract: "v4",
-    status: "candidate",
-    mode: "wide",
-    sourceFile: "experimental/wp2shell-bounty-v23-wide.md",
-    // Owner decision 2026-11-04, ADR 0050: the purpose remains here, while
-    // the WordPress audit loop and its research records move to wbh-audit.
-    // Retained as an opt-in experimental comparison after the 2026-11-05
-    // decision to use v26 as the repository default.
-  },
-  {
-    id: "wp2shell-bounty-v24-wide",
-    digest:
-      "sha256:8822e7516329d4b142422d68b6f82ada9b02923f13e4b454edfcbb532d5ac63a",
-    outputContract: "v6",
-    status: "archived",
-    sourceFile: "experimental/wp2shell-bounty-v24-wide.md",
-    // v23 objective with the versioned wbh-audit-v2 skill named explicitly.
-    // Its generated contract carries independent Phase 5 child checks.
-  },
-  {
-    id: "wp2shell-bounty-v25-wide",
-    digest:
-      "sha256:cacc8ff2ca04a61446fef3ac42ec6b89502d6b5ea5edbae796f5ad772d5ba3cd",
-    outputContract: "v6",
-    status: "candidate",
-    mode: "wide",
-    sourceFile: "experimental/wp2shell-bounty-v25-wide.md",
-    // v24 with the CLI-visible skill name and the one-edge Lead handoff clear.
-  },
-  {
     id: "wp2shell-bounty-v26-wide",
     digest:
       "sha256:5524803320490e0ce15f3fed4253a13216cf8c37a3545b26a27c162bfd6939e4",
@@ -553,7 +522,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
   },
 ] as const satisfies readonly WordPressDiscoveryPromptRecord[];
 
-/** Human-written trust declarations; v25 and current v26 use v2. */
+/** Human-written trust declarations; current v26 uses v2. */
 export const WORDPRESS_TRUST_BOUNDARIES = [
   {
     id: "trust-boundary-v1",
@@ -612,15 +581,14 @@ function currentOf<const Row extends WordPressPromptRecord>(
   return current[0]!;
 }
 
-/** The existing default declaration for deep and wide production Trials. */
+/** The existing default declaration for production Trials. */
 export const WORDPRESS_TRUST_BOUNDARY = currentOf(WORDPRESS_TRUST_BOUNDARIES);
 
-/** v25 and current v26 receive the corrected declaration. */
+/** Current v26 receives the corrected declaration. */
 export function wordPressTrustBoundaryForObjective(
   objectiveId: WordPressDiscoveryPromptId,
 ): (typeof WORDPRESS_TRUST_BOUNDARIES)[number]["id"] {
-  return objectiveId === "wp2shell-bounty-v25-wide" ||
-    objectiveId === "wp2shell-bounty-v26-wide"
+  return objectiveId === "wp2shell-bounty-v26-wide"
     ? "trust-boundary-v2"
     : WORDPRESS_TRUST_BOUNDARY.id;
 }
@@ -645,7 +613,6 @@ export const WORDPRESS_DISCOVERY_PROMPT_IDS: readonly WordPressDiscoveryPromptId
 
 /** The current discovery objective of each launch mode (ADR 0039). */
 export const WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS = {
-  deep: currentOf(WORDPRESS_DISCOVERY_PROMPTS, "deep").id,
   wide: currentOf(WORDPRESS_DISCOVERY_PROMPTS, "wide").id,
 } as const satisfies Record<WordPressDiscoveryMode, WordPressDiscoveryPromptId>;
 
@@ -658,9 +625,9 @@ export const WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS =
     row.status === "archived" ? [] : [row.id],
   );
 
-/** The `deep` objective: the single cooperative Trial every earlier decision names. */
+/** The current objective of the only launch mode, `wide`. */
 export const WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID =
-  WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS.deep;
+  WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS.wide;
 
 /** The mode a current or candidate objective launches under; archived objectives have none. */
 export function wordPressDiscoveryModeOf(
@@ -714,14 +681,13 @@ const sha256 = (bytes: Uint8Array | string): `sha256:${string}` =>
 
 async function readPromptFile<Id extends string>(
   id: Id,
-  sourceFile: string = `${id}.md`,
 ): Promise<{
   readonly id: Id;
   readonly sourceUrl: URL;
   readonly text: string;
   readonly digest: `sha256:${string}`;
 }> {
-  const sourceUrl = new URL(`./${sourceFile}`, import.meta.url);
+  const sourceUrl = new URL(`./${id}.md`, import.meta.url);
   const bytes = await readFile(sourceUrl);
   return {
     id,
@@ -774,8 +740,7 @@ export async function loadWordPressDiscoveryAsset(
     return asset;
   }
   const record = wordPressDiscoveryPrompt(id);
-  if (record.fragments === undefined)
-    return readPromptFile(id, record.sourceFile);
+  if (record.fragments === undefined) return readPromptFile(id);
   const texts = await Promise.all(record.fragments.map(readFragment));
   const text = composeFragments(texts);
   const digest = sha256(text);
@@ -792,7 +757,7 @@ export async function loadWordPressDiscoveryAsset(
   }
   return {
     id,
-    sourceUrl: new URL(`./${record.sourceFile ?? `${id}.md`}`, import.meta.url),
+    sourceUrl: new URL(`./${id}.md`, import.meta.url),
     text,
     digest,
     sectionDigests,
