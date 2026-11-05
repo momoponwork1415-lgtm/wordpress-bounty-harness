@@ -9,7 +9,8 @@
     "wordpressCli": "wordpress@sha256:<docker image inspect の RepoDigests にある64桁>",
     "browser": "mcr.microsoft.com/playwright@sha256:<docker image inspect の RepoDigests にある64桁>",
     "codex": "<Codex CLI image>@sha256:<docker image inspect の RepoDigests にある64桁>",
-    "broker": "node@sha256:<docker image inspect の RepoDigests にある64桁>"
+    "broker": "node@sha256:<docker image inspect の RepoDigests にある64桁>",
+    "mail": "axllent/mailpit@sha256:<docker image inspect の RepoDigests にある64桁>"
   },
   "codex": {
     "bundledCatalogPath": "<Codex image内の、CLI同梱モデルカタログの絶対パス>",

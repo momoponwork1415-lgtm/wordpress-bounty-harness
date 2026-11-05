@@ -101,6 +101,11 @@ export const wordpressHostConfigSchema = z.strictObject({
     browser: pinnedImage,
     codex: pinnedImage,
     broker: pinnedImage,
+    /**
+     * ADR 0026 追記 (#805): Mailpit, a verification Lab's internal mail
+     * sink. Absent, Labs catch no mail as before.
+     */
+    mail: pinnedImage.optional(),
   }),
   codex: z.strictObject({
     /** Path inside the Codex image to the CLI's bundled model catalog. */
@@ -430,6 +435,7 @@ export async function createWordPressHostProfile(options: {
         wordpressCli: host.images.wordpressCli,
         browser: host.images.browser,
         recorder: host.images.broker,
+        ...(host.images.mail === undefined ? {} : { mail: host.images.mail }),
       },
       source: sources,
       ...(options.runDocker === undefined
@@ -658,6 +664,7 @@ export async function createWordPressHostProfile(options: {
         wordpressCli: host.images.wordpressCli,
         browser: host.images.browser,
         recorder: host.images.broker,
+        ...(host.images.mail === undefined ? {} : { mail: host.images.mail }),
       },
       source: openMaterializedSources({
         rootDirectory: directories.sources,
@@ -945,6 +952,8 @@ async function preflight(options: {
   );
 
   for (const [role, image] of Object.entries(options.host.images)) {
+    // #805: the mail sink is optional; absent, there is nothing to check.
+    if (image === undefined) continue;
     const present =
       (await docker(["image", "inspect", "--format", "{{.Id}}", image])) !==
       undefined;

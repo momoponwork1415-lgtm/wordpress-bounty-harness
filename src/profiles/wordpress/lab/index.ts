@@ -72,6 +72,11 @@ import {
   type LabImages,
 } from "./lab-session.js";
 import {
+  readLabMail,
+  type LabMailRead,
+  type LabMailSummary,
+} from "./mail-capture.js";
+import {
   prepareWordPressLab,
   type PreparedWordPressLab,
   type WordPressLabSetup,
@@ -109,6 +114,13 @@ export {
   wordpressLabStateSchema,
 } from "./state-capture.js";
 export { hostGatewayName, type HostExposure } from "./host-exposure.js";
+export { labAccountEmail } from "./lab-session.js";
+export type {
+  LabMailAddress,
+  LabMailMessage,
+  LabMailRead,
+  LabMailSummary,
+} from "./mail-capture.js";
 export type {
   WordPressLabSetup,
   ParsedWordPressLabSetup,
@@ -170,6 +182,16 @@ export interface WordPressLab extends LabProvisioner<
   /** Review-only receiver address for a human-operated browser in the Lab network. */
   reviewReceiverIp(handle: WordPressLabHandle): string | null;
   /**
+   * ADR 0026 追記 (#805): what the Lab's internal mail sink caught, newest
+   * first; `wanted` picks which messages are read in full. Every recipient's
+   * mail is here: a caller that hands mail on filters it first. `absent`
+   * when the Lab has no mail sink.
+   */
+  readMail(
+    handle: WordPressLabHandle,
+    wanted?: (summary: LabMailSummary) => boolean,
+  ): Promise<LabMailRead>;
+  /**
    * Ends handoff precondition setup (#430): revokes the setup administrator.
    * False when the Lab cannot.
    */
@@ -206,6 +228,13 @@ export interface WordPressLab extends LabProvisioner<
       readonly via?: "wordpress" | "recorder";
       /** #699: paths the host entrance answers with 403 (a foreign attacker origin). */
       readonly deniedPaths?: readonly WordPressDeniedPath[];
+      /**
+       * #805: also publishes the mail sink's web UI, every recipient's mail,
+       * for a person in a review Lab; 0 takes a free port. Never with
+       * `deniedPaths`, which is the attacker's entrance. Ignored when the Lab
+       * has no mail sink.
+       */
+      readonly mailPort?: number;
     },
   ): Promise<HostExposure>;
   /**
@@ -305,7 +334,9 @@ const labId = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const labLeftoverPatterns = (id: string) =>
   ({
     containers: [
-      new RegExp(`^wbh-${id}-(?:db|wp|canary|proxy|host|ctl|egress[1-4])$`),
+      new RegExp(
+        `^wbh-${id}-(?:db|wp|canary|proxy|host|ctl|mail|egress[1-4])$`,
+      ),
     ],
     networks: [new RegExp(`^wbh-${id}-net$`)],
     volumes: [new RegExp(`^wbh-${id}-site$`)],
@@ -322,7 +353,10 @@ function issueHandle(input: {
   readonly internalIp: string;
   readonly recorderIp: string;
 }): WordPressLabHandle {
-  const { lab, prepared, images, internalIp, recorderIp } = input;
+  const { lab, prepared, internalIp, recorderIp } = input;
+  // #805: the mail sink stays out of the setup digest, so a review package
+  // sealed before it existed still rebuilds its Lab.
+  const { mail: _mail, ...images } = input.images;
   const { setup, snapshot } = prepared;
   return {
     id: lab.id,
@@ -669,6 +703,12 @@ export function openWordPressLab(options: {
     reviewReceiverIp(handle) {
       return sessionFor(handle)?.receiverIp ?? null;
     },
+    async readMail(handle, wanted) {
+      const lab = sessionFor(handle);
+      return lab === undefined
+        ? { status: "unavailable" }
+        : readLabMail(lab, wanted);
+    },
     async finishSetup(handle) {
       const lab = sessionFor(handle);
       if (lab === undefined) return false;
@@ -815,6 +855,7 @@ export function openWordPressLab(options: {
         ...(input.deniedPaths === undefined
           ? {}
           : { deniedPaths: input.deniedPaths }),
+        ...(input.mailPort === undefined ? {} : { mailPort: input.mailPort }),
       });
     },
     attackerEntrance(handle, attackerPosition) {

@@ -50,6 +50,8 @@ export interface WordPressReviewLabSession {
     readonly hostHeader: string;
     readonly port: number;
   };
+  /** #805: every message the Lab's mail sink caught, on host loopback; absent without one. */
+  readonly mail?: { readonly url: string };
   /** Removes the Lab; a second call is a no-op. The caller decides when. */
   close(): Promise<void>;
 }
@@ -57,6 +59,7 @@ export interface WordPressReviewLabSession {
 /**
  * WordPress redirects to its own address without a port, so only port 80
  * opens in a browser (#592); when it is taken, a free port still serves curl.
+ * A person sees all the Lab's mail on a free port beside it (#805).
  */
 async function exposeForBrowser(
   lab: Pick<WordPressLab, "exposeToHost">,
@@ -65,11 +68,17 @@ async function exposeForBrowser(
   const exposed = await lab.exposeToHost(handle, {
     httpPort: 80,
     via: "recorder",
+    mailPort: 0,
   });
   return exposed.status === "exposed"
     ? exposed
-    : lab.exposeToHost(handle, { httpPort: 0, via: "recorder" });
+    : lab.exposeToHost(handle, { httpPort: 0, via: "recorder", mailPort: 0 });
 }
+
+const mailUi = (exposed: { readonly mailPort?: number }) =>
+  exposed.mailPort === undefined
+    ? {}
+    : { mail: { url: `http://127.0.0.1:${exposed.mailPort}/` } };
 
 /** Builds one fresh review Lab from a sealed package without running discovery. */
 export async function openWordPressReviewLab(input: {
@@ -140,6 +149,7 @@ export async function openWordPressReviewLab(input: {
         hostHeader: new URL(handle.endpoint).host,
         port: exposed.httpPort,
       },
+      ...mailUi(exposed),
       close,
     };
   } catch (error) {
@@ -333,6 +343,8 @@ export interface HeldVerificationLabSession {
     readonly hostHeader: string;
     readonly port: number;
   };
+  /** #805: every message the Lab's mail sink caught, on host loopback; absent without one. */
+  readonly mail?: { readonly url: string };
   /** The digest `review observe --receipt` takes, and where its file is. */
   readonly receipt: { readonly digest: string; readonly path: string };
   /**
@@ -459,6 +471,7 @@ export async function holdWordPressVerificationLab(input: {
         hostHeader: new URL(handle.endpoint).host,
         port: exposed.httpPort,
       },
+      ...mailUi(exposed),
       receipt: first!.receipt,
       ...(others.length === 0 ? {} : { others }),
       expiresAt: new Date(startedAt.getTime() + input.wallMs).toISOString(),

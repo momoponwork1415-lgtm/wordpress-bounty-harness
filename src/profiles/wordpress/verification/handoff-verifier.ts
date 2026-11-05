@@ -15,12 +15,19 @@ import { fileURLToPath } from "node:url";
 
 import { canonicalJson } from "../../../infrastructure/canonical-json.js";
 import type { VerifierRunReceipt } from "../../../verification/index.js";
-import type {
-  EgressClosure,
-  WordPressAttackerOrigin,
-  WordPressLab,
-  WordPressLabHandle,
+import {
+  labAccountEmail,
+  type EgressClosure,
+  type WordPressAttackerOrigin,
+  type WordPressLab,
+  type WordPressLabHandle,
 } from "../lab/index.js";
+import {
+  addressedToAttacker,
+  attackerMailbox,
+  attackerMailRecipients,
+  type AttackerMailRecipients,
+} from "./attacker-mailbox.js";
 import {
   WORDPRESS_VERIFIER_FILE_NAMES,
   type WordPressVerifierFiles,
@@ -41,6 +48,8 @@ const SKILL_URL = new URL(
  * window a person observes in the same Lab after the attempt is recorded.
  */
 export const HANDOFF_WALL_MS = 30 * 60_000;
+/** #805: how often the attacker's mailbox is read again while the route runs. */
+const MAIL_REFRESH_MS = 5_000;
 
 /** The receipt of one handoff run; `reason` is why it ended short of six files. */
 type HandoffRunReceipt = VerifierRunReceipt & {
@@ -70,6 +79,8 @@ const HANDOFF_FILES = new Set([
   "setup-done",
   "observation-ready",
   "abort",
+  "mailbox.json",
+  ".mailbox.json.tmp",
   ...WORDPRESS_VERIFIER_FILE_NAMES,
 ]);
 const ABORT_REASON_CODES = new Set([
@@ -84,9 +95,10 @@ const ABORT_REASON_CODES = new Set([
  * setup-only `lab.json`, waits for `setup-done`, has the Harness close setup
  * and restart its observation, then releases
  * attacker-only `attack.json` and waits for the six
- * Verifier files or `abort`. It never reads the files' meaning;
- * `WordPressVerifier` records them as for any transport, and a person
- * confirms the Finding in a Lab (#525).
+ * Verifier files or `abort`. While it waits it keeps `mailbox.json` to the
+ * mail the Lab caught for the attacker alone (#805). It never reads the
+ * files' meaning; `WordPressVerifier` records them as for any transport, and
+ * a person confirms the Finding in a Lab (#525).
  */
 export class HandoffVerifier implements WordPressVerifierTransport {
   readonly preconditionSetup = "transport" as const;
@@ -102,7 +114,8 @@ export class HandoffVerifier implements WordPressVerifierTransport {
         | "reviewAdministrator"
         | "attackerEntrance"
         | "closeEgress"
-      >;
+      > &
+        Partial<Pick<WordPressLab, "readMail">>;
       /** Requested loopback ports; 0 takes a free one. `lab.json` names the bound ports. */
       readonly ports: { readonly http: number; readonly database: number };
       /** The Finding's review export JSON, written beside `lab.json`. */
@@ -111,6 +124,8 @@ export class HandoffVerifier implements WordPressVerifierTransport {
       /** Bounds setup and the route together; the Codex Verifier's default. */
       readonly wallTimeMs?: number;
       readonly pollIntervalMs?: number;
+      /** #805: how often `mailbox.json` is read again; 5 s by default. */
+      readonly mailRefreshMs?: number;
       readonly skillPath?: string;
     },
   ) {}
@@ -311,6 +326,14 @@ export class HandoffVerifier implements WordPressVerifierTransport {
           mode: 0o600,
           flag: "wx",
         });
+        // #805: the attacker's mailbox exists before `attack.json` names it.
+        const recipients = attackerMailRecipients(
+          attackerAccount === undefined
+            ? undefined
+            : labAccountEmail(attackerAccount.username),
+        );
+        const mailbox = join(directory, "mailbox.json");
+        const hasMail = await this.#writeMailbox(recipients);
         const attackJsonTemp = join(directory, ".attack.json.tmp");
         await writeFile(
           attackJsonTemp,
@@ -337,13 +360,35 @@ export class HandoffVerifier implements WordPressVerifierTransport {
             ...(input.referenceRoute === undefined
               ? {}
               : { referenceRoute: input.referenceRoute }),
+            ...(hasMail
+              ? {
+                  mail: {
+                    mailbox,
+                    addresses: recipients.addresses,
+                    domain: recipients.domain,
+                  },
+                }
+              : {}),
           }),
           { mode: 0o600, flag: "wx" },
         );
         await rename(attackJsonTemp, join(directory, "attack.json"));
+        let mailReadAt = this.options.clock().getTime();
         const route = await this.#waitFor(
           WORDPRESS_VERIFIER_FILE_NAMES,
           deadline,
+          hasMail
+            ? async () => {
+                const now = this.options.clock().getTime();
+                if (
+                  now - mailReadAt <
+                  (this.options.mailRefreshMs ?? MAIL_REFRESH_MS)
+                )
+                  return;
+                mailReadAt = now;
+                await this.#writeMailbox(recipients);
+              }
+            : undefined,
         );
         if (route !== "found")
           return route === "abort"
@@ -371,6 +416,7 @@ export class HandoffVerifier implements WordPressVerifierTransport {
   async #waitFor(
     names: readonly string[],
     deadline: number,
+    poll?: () => Promise<void>,
   ): Promise<"found" | "abort" | "timeout"> {
     for (;;) {
       if (await exists(join(this.options.directory, "abort"))) return "abort";
@@ -379,8 +425,42 @@ export class HandoffVerifier implements WordPressVerifierTransport {
       );
       if (present.every(Boolean)) return "found";
       if (this.options.clock().getTime() >= deadline) return "timeout";
+      await poll?.();
       await sleep(this.options.pollIntervalMs ?? 1_000);
     }
+  }
+
+  /**
+   * #805: writes `mailbox.json` with the Lab's mail for the attacker alone.
+   * False when the Lab has no mail sink; a failed read keeps the last
+   * mailbox and says `unavailable` only before the first one.
+   */
+  async #writeMailbox(recipients: AttackerMailRecipients): Promise<boolean> {
+    const { lab, handle, directory } = this.options;
+    if (lab.readMail === undefined) return false;
+    const read = await lab
+      .readMail(handle, addressedToAttacker(recipients))
+      .catch(() => ({ status: "unavailable" }) as const);
+    if (read.status === "absent") return false;
+    const path = join(directory, "mailbox.json");
+    if (read.status !== "captured" && (await exists(path))) return true;
+    const temp = join(directory, ".mailbox.json.tmp");
+    await writeFile(
+      temp,
+      canonicalJson({
+        schema: "wbh-handoff-mailbox/v1",
+        readAt: this.options.clock().toISOString(),
+        recipients,
+        status: read.status,
+        messages:
+          read.status === "captured"
+            ? attackerMailbox(read.messages, recipients)
+            : [],
+      }),
+      { mode: 0o600 },
+    );
+    await rename(temp, path);
+    return true;
   }
 
   async #abortReason(): Promise<string> {
