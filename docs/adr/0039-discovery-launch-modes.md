@@ -380,3 +380,10 @@ v19-wide の追記 16 で入れた停止規則は、登録簿に sink 種ごと�
 - 決定: 床は置かない。床は 1 対象あたりの時間を 18 分 → 90 分にして広さを 4〜5 分の 1 にする取引であり、深さが報酬になる証拠が無い（ADR 0045 の広さの方針、所有者の記録 32 件の 58% が SQLi と格納型 XSS）。深さは第 2 Trial（ADR 0049 決定 C）で Lead の残った対象にだけ足す。床を置くなら第 2 Trial だけに置く案を、転換率（leads2 の 4 / 14）を見てから判断する。
 - 次に確かめること: recon-v3 の手順 9（閉じる手順）が Finding を Lead に変えていないかを、同じ対象で recon-v2 と v3 を交互に回して見る（変えるのは recon の版だけ）。今日の Lead の欠けた辺は 86% が producer で、`wbh-lab-v1`（ADR 0043 追記 7）の Find がちょうどそこに当たる。
 - 既定（wide 0、deep 0）、wall 120 分、コード、目的文は変えていない。
+
+## 2026-11-05 追記 23: `deep` を退役し、v11 を archived にする（所有者決定、消すだけ）
+
+- 所有者は 2026-11-05 に探索方式を `wp2shell-bounty-v26-wide`（mode `wide`）に固定し、主経路が使わない機構は「すべて削除でいい」と決めた。深さは ADR 0045 の「名指しの深掘り」のとおり wide Trial を名指しで立てて得るので、`deep` の mode は要らない。本番台帳に deep の Trial は 0 件である。
+- 新しい campaign 設定は `discovery.mode` に `wide` だけを受け、既定も `wide` にする。`deep` は理由付きで拒否する。`wp2shell-bounty-v11` は `archived` にして `mode` を外し、本文・断片・digest は過去 Trial の照合に残す。
+- 台帳の `discovery-run-started.configuration.mode: "deep"` は読み続ける。旧 deep Trial の再開は、Trial が記録した版と mode で再開段落（「Before giving up,」）を選ぶ（ADR 0036）。
+- 消し方: この追記の commit を revert する。削除前の状態は tag `archive/pre-v26-cleanup` に残る。

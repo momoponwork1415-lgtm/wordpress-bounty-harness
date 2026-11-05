@@ -1026,7 +1026,7 @@ async function harness(
       selectionPolicyPath: policyPath,
       // Match the current host: discovery never attaches a Lab.
       discovery: { lab: "none" },
-      promptId: "wp2shell-bounty-v11",
+      promptId: "wp2shell-bounty-v26-wide",
       programmeBoundary: {
         version: "v1",
         text: "Synthetic programme boundary",
@@ -1233,7 +1233,7 @@ async function largeReservedSelectionFixture(reportBytes: number) {
   delete manual.pinnedVersions;
   const policy = {
     ...manual,
-    promptVariant: "wp2shell-bounty-v11",
+    promptVariant: "wp2shell-bounty-v26-wide",
     revisitPolicy: { kind: "version-increased" },
     wordpressVersion: "6.8",
     maximumTargets: 3,
@@ -1556,7 +1556,9 @@ describe("harness CLI vertical slice", () => {
       configPath,
     );
     expect(result.code).toBe(0);
-    const objective = await loadWordPressDiscoveryAsset("wp2shell-bounty-v11");
+    const objective = await loadWordPressDiscoveryAsset(
+      "wp2shell-bounty-v26-wide",
+    );
     const contract = wordPressDiscoveryOutputContractV4();
     expect(prompts[0]).toContain(objective.text.trim());
     expect(prompts[0]).toContain(contract.text);
@@ -1570,7 +1572,6 @@ describe("harness CLI vertical slice", () => {
         promptDigest: objective.digest,
         objectiveDigest: objective.digest,
         contractDigest: contract.digest,
-        sectionDigests: objective.sectionDigests,
         inputDigest: `sha256:${createHash("sha256")
           .update(prompts[0]!)
           .digest("hex")}`,
@@ -1587,12 +1588,8 @@ describe("harness CLI vertical slice", () => {
     expect(prompts[0]).toContain(
       "- Wall time: 120 minutes.\n- Minimum active exploration time: 0 minutes (no minimum).\n- Maximum concurrent child agents: 4.\n- Lab: none.",
     );
-    expect(Object.keys(objective.sectionDigests ?? {})).toEqual([
-      "objective",
-      "strategy",
-      "coordination",
-      "persistence",
-    ]);
+    // The current objective is one whole file, so no section digests are recorded.
+    expect(started).not.toHaveProperty("configuration.sectionDigests");
   });
 
   it("stages the campaign's exploration skills into the Trial and records them by id and digest (ADR 0043)", async () => {
@@ -1614,7 +1611,9 @@ describe("harness CLI vertical slice", () => {
       { name: "wbh-recon", content: skill.text },
     ]);
     // The objective text is unchanged; the skill reaches the agent through the CLI's own listing.
-    const objective = await loadWordPressDiscoveryAsset("wp2shell-bounty-v11");
+    const objective = await loadWordPressDiscoveryAsset(
+      "wp2shell-bounty-v26-wide",
+    );
     expect(prompts[0]).toContain(objective.text.trim());
     expect(prompts[0]).not.toContain("wbh-recon");
     const started = ledger()
@@ -1622,7 +1621,7 @@ describe("harness CLI vertical slice", () => {
       .at(0)?.event;
     expect(started).toMatchObject({
       configuration: {
-        promptVariant: "wp2shell-bounty-v11",
+        promptVariant: "wp2shell-bounty-v26-wide",
         skills: [{ id: "wbh-recon-v3", digest: skill.digest }],
       },
     });
@@ -1648,7 +1647,7 @@ describe("harness CLI vertical slice", () => {
       ),
     ).toMatchObject({ code: 0 });
     // The first Trial of the target has nothing to receive and says so.
-    expect(prompts[0]).not.toContain("## Prior research");
+    expect(prompts[0]).not.toContain("\n## Prior research\n");
     expect(transportRuns[0]?.priorResearch).toBeUndefined();
     expect(
       ledger()
@@ -1706,10 +1705,10 @@ describe("harness CLI vertical slice", () => {
       "- /workspace/research/prior/recon-map.md: the map of the plugin that wbh-recon wrote (16 bytes).",
     );
     expect(prompts[1]).not.toContain("# Map of call 1");
-    expect(prompts[1]!.indexOf("## Prior research")).toBeGreaterThan(
+    expect(prompts[1]!.indexOf("\n## Prior research\n")).toBeGreaterThan(
       prompts[1]!.indexOf("## Run parameters"),
     );
-    expect(prompts[1]!.indexOf("## Prior research")).toBeLessThan(
+    expect(prompts[1]!.indexOf("\n## Prior research\n")).toBeLessThan(
       prompts[1]!.indexOf("## Trust boundary"),
     );
     expect(transportRuns[1]?.priorResearch).toEqual([
@@ -1983,7 +1982,7 @@ describe("harness CLI vertical slice", () => {
       programmeBoundary: { version: "v1", text: "Synthetic" },
       wordpressVersion: "6.8",
       lab: { siteTitle: "Synthetic", initialPosts: [], customerRole: false },
-      promptId: "wp2shell-bounty-v11",
+      promptId: "wp2shell-bounty-v26-wide",
     };
     expect(
       wordpressCampaignConfigSchema.safeParse({
@@ -2041,7 +2040,9 @@ describe("harness CLI vertical slice", () => {
     expect(campaign.code).toBe(0);
     expect(campaign.stdout).toContain("stopped by no-new-finding");
     expect(prompts).toHaveLength(1);
-    expect(prompts[0]).toContain("Use multiagents aggressively");
+    expect(prompts[0]).toContain(
+      "You are the root coordinator of a long-running WordPress plugin vulnerability search.",
+    );
     expect(prompts[0]).not.toContain("## Entry points");
     expect(coordinations).toEqual(["cooperative"]);
     expect(expirations).toEqual(["2026-10-08T02:00:00.000Z"]);
@@ -2554,7 +2555,9 @@ describe("harness CLI vertical slice", () => {
     );
     expect(prompts[0]!.split(sentence)).toHaveLength(2);
     // The objective itself still names no skill; only the generated section does.
-    const objective = await loadWordPressDiscoveryAsset("wp2shell-bounty-v11");
+    const objective = await loadWordPressDiscoveryAsset(
+      "wp2shell-bounty-v26-wide",
+    );
     expect(objective.text).not.toContain("wbh-lab");
     expect(prompts[0]!.split("wbh-lab")).toHaveLength(2);
   });
@@ -3028,7 +3031,7 @@ describe("harness CLI vertical slice", () => {
         maxObservations: 20,
         maxLookups: 60,
       },
-      mode: "deep",
+      mode: "wide",
       maxChildren: 4,
       minimumActiveMinutes: 0,
       priorResearch: "none",
@@ -3075,7 +3078,7 @@ describe("harness CLI vertical slice", () => {
     };
     const production = wordpressCampaignConfigSchema.parse(base);
     expect(production).toMatchObject({
-      promptId: "wp2shell-bounty-v11",
+      promptId: "wp2shell-bounty-v26-wide",
       runWallTimeMinutes: 120,
     });
     for (const forbidden of [
@@ -3103,7 +3106,7 @@ describe("harness CLI vertical slice", () => {
         wordpressCampaignConfigSchema.safeParse({
           ...base,
           mode,
-          promptId: "wp2shell-bounty-v11",
+          promptId: "wp2shell-bounty-v26-wide",
         }).success,
       ).toBe(false);
   });
@@ -3125,12 +3128,17 @@ describe("harness CLI vertical slice", () => {
       promptId: "wp2shell-bounty-v26-wide",
       runWallTimeMinutes: 120,
     });
-    expect(
-      wordpressCampaignConfigSchema.parse({ ...base, discovery: deep }),
-    ).toMatchObject({
-      promptId: "wp2shell-bounty-v11",
-      runWallTimeMinutes: 120,
+    // Deep was retired on 2026-11-05 (ADR 0039 addendum); v11 stays archived.
+    const retired = wordpressCampaignConfigSchema.safeParse({
+      ...base,
+      discovery: deep,
     });
+    expect(retired.success).toBe(false);
+    expect(
+      retired.error?.issues.find(
+        (issue) => issue.path.join(".") === "discovery.mode",
+      )?.message,
+    ).toBe("Deep mode was retired on 2026-11-05; name a wide Trial instead");
     expect(
       wordpressCampaignConfigSchema.parse({
         ...base,
@@ -3186,25 +3194,26 @@ describe("harness CLI vertical slice", () => {
       { discovery: wide, promptId: "wp2shell-bounty-v10-wide" },
       { discovery: wide, promptId: "wp2shell-bounty-v11-wide" },
       { discovery: wide, promptId: "wp2shell-bounty-v12-wide" },
+      { discovery: deep, promptId: "wp2shell-bounty-v11" },
       { discovery: deep, promptId: "wp2shell-bounty-v10" },
       { promptId: "wp2shell-bounty-v10" },
       {
-        discovery: { ...deep, minimumActiveMinutes: 60 },
+        discovery: { ...wide, minimumActiveMinutes: 60 },
         runWallTimeMinutes: 60,
       },
       {
-        discovery: { ...deep, minimumActiveMinutes: 60 },
+        discovery: { ...wide, minimumActiveMinutes: 60 },
         runWallTimeMinutes: 20,
       },
       { discovery: wide, runWallTimeMinutes: 121 },
       { discovery: { lab: "none", mode: "screening" } },
       {
-        discovery: { ...deep, minimumActiveMinutes: 90 },
+        discovery: { ...wide, minimumActiveMinutes: 90 },
         runWallTimeMinutes: 90,
       },
       { discovery: { ...wide, minimumActiveMinutes: 120 } },
-      { discovery: { ...deep, maxChildren: 0 } },
-      { discovery: { ...deep, maxChildren: 9 } },
+      { discovery: { ...wide, maxChildren: 0 } },
+      { discovery: { ...wide, maxChildren: 9 } },
       { discovery: { lab: { mode: "none", maxResets: 6 } } },
       { discovery: { lab: { mode: "attached", maxResets: 6 } } },
       { discovery: { lab: { mode: "attached", maxResets: -1 } } },
@@ -3551,11 +3560,11 @@ describe("harness CLI vertical slice", () => {
     expect(prompts).toHaveLength(2);
     const prompt = prompts[1]!;
     const section = prompt.slice(
-      prompt.indexOf("## Prior leads"),
+      prompt.indexOf("\n## Prior leads\n") + 1,
       prompt.indexOf("## Trust boundary"),
     );
     expect(prompt.indexOf("## Run parameters")).toBeLessThan(
-      prompt.indexOf("## Prior leads"),
+      prompt.indexOf("\n## Prior leads\n"),
     );
     expect(section).toContain(
       [
@@ -3575,7 +3584,7 @@ describe("harness CLI vertical slice", () => {
       "Synthetic partial observation",
     ])
       expect(section).not.toContain(absent);
-    expect(prompts[0]).not.toContain("## Prior leads");
+    expect(prompts[0]).not.toContain("\n## Prior leads\n");
     const started = ledger()
       .read({ campaignId: "campaign-second", type: "discovery-run-started" })
       .map(({ event }) => event);
@@ -3709,7 +3718,7 @@ describe("harness CLI vertical slice", () => {
       }),
     ).toHaveLength(0);
     expect(prompts).toHaveLength(2);
-    expect(prompts[0]).not.toContain("## Prior leads");
+    expect(prompts[0]).not.toContain("\n## Prior leads\n");
     expect(prompts[1]).toContain("## Prior leads");
     expect(prompts[1]).toContain(
       "- Not shown: No reader of the stored value was shown.",
@@ -4374,7 +4383,7 @@ describe("harness CLI vertical slice", () => {
     expect(unknown.stderr).toBe("not resumable: run-unknown");
     expect(transportRuns).toHaveLength(1);
     expect(transportRuns[0]!.prompt).toContain(
-      "# WordPress trust boundary template v1",
+      "# WordPress trust boundary template v2",
     );
 
     const resumed = await run(
@@ -4404,7 +4413,7 @@ describe("harness CLI vertical slice", () => {
     expect(segment.prompt).toContain(segment.resumePrompt!);
     expect(segment.prompt).toBe(transportRuns[0]!.prompt);
     expect(segment.prompt).toContain(
-      "The independent judge decides runtime confirmation.",
+      "Only a named human's matching observation in a retained verification Lab or a new review Lab",
     );
     expect(resumed.stdout).toContain(
       `resumed ${refusedRunId} as ${segment.runId}  trial ${refusedRunId}  segment 1  remaining wall 110 min`,
@@ -4421,7 +4430,7 @@ describe("harness CLI vertical slice", () => {
       resumesRun: refusedRunId,
       resumeSegment: 1,
       labAttached: false,
-      configuration: { trustBoundaryVersion: "trust-boundary-v1" },
+      configuration: { trustBoundaryVersion: "trust-boundary-v2" },
     });
     // The original failure and skip stay; the Trial is counted once.
     expect(
@@ -4669,11 +4678,10 @@ describe("harness CLI vertical slice", () => {
     const command = ["--campaign", campaign, "--config", configPath];
     expect((await run("campaign", "run", "--all", ...command)).code).toBe(0);
     const first = transportRuns[0]!;
-    // Between the segments the campaign moves to the deep objective and 6 children
-    // (since ADR 0039 addendum 18 the wide mode has one launchable version).
+    // Between the segments the campaign moves to the current objective and 6 children.
     const written = JSON.parse(await readFile(configPath, "utf8"));
-    written.promptId = "wp2shell-bounty-v11";
-    written.discovery = { lab: "none", mode: "deep", maxChildren: 6 };
+    written.promptId = "wp2shell-bounty-v26-wide";
+    written.discovery = { lab: "none", mode: "wide", maxChildren: 6 };
     await writeFile(configPath, JSON.stringify(written));
 
     const resumed = await run(
@@ -5342,7 +5350,7 @@ describe("harness CLI vertical slice", () => {
       policyPath,
       JSON.stringify({
         ...policy,
-        promptVariant: "wp2shell-bounty-v11",
+        promptVariant: "wp2shell-bounty-v26-wide",
         revisitPolicy: { kind: "version-increased" },
         wordpressVersion: "6.8",
         maximumTargets: 3,
@@ -5407,7 +5415,7 @@ describe("harness CLI vertical slice", () => {
       policyPath,
       JSON.stringify({
         ...policy,
-        promptVariant: "wp2shell-bounty-v11",
+        promptVariant: "wp2shell-bounty-v26-wide",
         revisitPolicy: { kind: "version-increased" },
         wordpressVersion: "6.8",
         maximumTargets: 3,
@@ -5608,7 +5616,7 @@ describe("harness CLI vertical slice", () => {
       policyPath,
       JSON.stringify({
         ...manual,
-        promptVariant: "wp2shell-bounty-v11",
+        promptVariant: "wp2shell-bounty-v26-wide",
         revisitPolicy: { kind: "version-increased" },
         wordpressVersion: "6.8",
         maximumTargets: 3,
@@ -5693,7 +5701,7 @@ describe("harness CLI vertical slice", () => {
       configPath,
     );
     expect(mismatched.code).toBe(1);
-    expect(mismatched.stderr).toContain("wp2shell-bounty-v11");
+    expect(mismatched.stderr).toContain("wp2shell-bounty-v26-wide");
     await writeFile(configPath, JSON.stringify(campaignConfig));
     const campaign = await run(
       "campaign",
@@ -5859,7 +5867,7 @@ describe("harness CLI vertical slice", () => {
       policyPath,
       JSON.stringify({
         ...manual,
-        promptVariant: "wp2shell-bounty-v11",
+        promptVariant: "wp2shell-bounty-v26-wide",
         revisitPolicy: { kind: "version-increased" },
         wordpressVersion: "6.8",
         maximumTargets: 3,
@@ -5953,7 +5961,7 @@ describe("harness CLI vertical slice", () => {
     delete manual.pinnedVersions;
     const automatic = {
       ...manual,
-      promptVariant: "wp2shell-bounty-v11",
+      promptVariant: "wp2shell-bounty-v26-wide",
       revisitPolicy: { kind: "version-increased" },
       wordpressVersion,
       maximumTargets: 3,
@@ -6670,7 +6678,7 @@ describe("harness CLI vertical slice", () => {
       policyPath,
       JSON.stringify({
         ...policy,
-        promptVariant: "wp2shell-bounty-v11",
+        promptVariant: "wp2shell-bounty-v26-wide",
         revisitPolicy: { kind: "version-increased" },
         wordpressVersion: "6.8",
         maximumTargets: 3,
@@ -6843,7 +6851,7 @@ describe("harness CLI vertical slice", () => {
       policyPath,
       JSON.stringify({
         ...policy,
-        promptVariant: "wp2shell-bounty-v11",
+        promptVariant: "wp2shell-bounty-v26-wide",
         revisitPolicy: { kind: "version-increased" },
         wordpressVersion: "6.8",
         maximumTargets: 3,
