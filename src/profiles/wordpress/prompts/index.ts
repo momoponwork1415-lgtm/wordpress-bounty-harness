@@ -527,6 +527,18 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     // v24 with the CLI-visible skill name and the one-edge Lead handoff clear.
   },
   {
+    id: "wp2shell-bounty-v26-wide",
+    digest:
+      "sha256:5524803320490e0ce15f3fed4253a13216cf8c37a3545b26a27c162bfd6939e4",
+    outputContract: "v4",
+    status: "candidate",
+    mode: "wide",
+    // Versioned candidate based on the exact 2026-07-30 TranslatePress
+    // direct-discovery contract. The Root owns a class-neutral portfolio,
+    // adversarial review and on-demand Lab questions. The historical source
+    // and this current-Harness adaptation have distinct digests.
+  },
+  {
     id: "wp2shell-whitebox-v1.7",
     digest:
       "sha256:3318ae6a06290ffbf306533f66357eb41401c1c48ccc7de7cc4e991ac3e07afb",
