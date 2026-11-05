@@ -85,9 +85,9 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 - 攻撃者位置: 未認証と subscriber（customer 相当）だけ。contributor 以上は trust 境界の内側として宣言する（第 8a 節）。
 - 入力: 固定ソース（読み取り専用）、人間が書いた trust 境界宣言、Programme Boundary、目的文、Harness が生成する節（`## Run parameters`、版付きの Finding / Lead 出力契約、`discovery.priorResearch: same-target` のときの `## Prior research`）。評価対象の答え、PoC、公開履歴の中身、入口索引は渡さない（不変条件 1、ADR 0012、0034）。
 - 目的文: リポジトリの既定は `wide` の `wp2shell-bounty-v26-wide`。新しい Trial の mode は `wide` だけで、`deep` と `wp2shell-bounty-v11` は 2026-11-05 に退役した。台帳の `mode: "deep"` は読み続け、旧 deep Trial は記録した版と mode で再開する（ADR 0039 追記 23）。v26-wide は 7 月 30 日の `DISCOVERY.md` に基づく単一目的文である。v22-wide は比較用に残す。v26 は「少なくとも 1 件ある」を探索努力の作業仮定として与えるが、候補の根拠にせず 0 件もそのまま記録する。本文を変えたら版を上げ、旧版と digest を残す（ADR 0051）。
-- 構成: 対象ごとに Root と子の協調 Trial を 1 回。同時に生きる子の上限は `discovery.maxChildren`（既定 4、1〜8）で Harness が強制し、何体使うかは Root が決める。子の有効な Finding と Lead は Root の最終報告と独立に記録する。Claude runtime は `runtimeShare` で分けられるが、本番の share は 0 である。
+- 構成: 対象ごとに Root と子の協調 Trial を 1 回。同時に生きる子の上限は `discovery.maxChildren`（既定 4、1〜8）で Harness が強制し、何体使うかは Root が決める。子の有効な Finding と Lead は Root の最終報告と独立に記録する。Claude runtime は `runtimeShare` で分ける。本番は Git 外の設定で Codex を主にし、Claude にも枠を持たせる（所有者決定 2026-11-05 夜）。
 - 許可する操作: 固定ソースの読み取り、Lab があればそこへの HTTP。外向き通信は認証ブローカー経由の provider API だけ（不変条件 2）。`discovery.lab: attached`（既定、ADR 0049）では Trial ごとに探索 Lab を 1 台立て、制御口は `reset` / `observe` と、保存先の観測器 `find`（植えた印の table / column / file）、`sql`（読み取り専用ユーザーで SELECT 1 文、200 行まで）、`trace`（1 リクエストの plugin 内の関数呼び出し列）を受ける。`find`、`sql`、`trace` は 1 つの予算 `discovery.lab.maxLookups`（既定 60）を共有する。Harness は捕捉と状態の差分と要求・答えを封じて回数を数えるだけで、答えを読まず判定しない（ADR 0003 の 2026-10-25 追記と 2026-11-02 追記）。Lab を付けないのは `none` を名指ししたときだけである。
-- 停止規則: 制限時間の上限は 120 分（`runWallTimeMinutes`）。`discovery.minimumActiveMinutes` の基底の既定は 0（ADR 0039 追記 20）で、リポジトリの wide 方針は v26 に 60 分、子の上限 3 を指定する。v26 は目的文が時間内の探索の進め方を決める。`minimumActiveMinutes` を 1 以上に設定すると早い最終報告の後も同じセッションで続ける。値は目的文に書かず `## Run parameters` で伝える。継続不能、制限時間、provider、broker、スキーマの失敗は理由付きの `incomplete` で、候補 0 件には数えない（ADR 0033、0039、0051）。
+- 停止規則: 制限時間の上限は 120 分（`runWallTimeMinutes`）。`discovery.minimumActiveMinutes` の基底の既定は 0（ADR 0039 追記 20）で、リポジトリの wide 方針は最低時間 0、子の上限 4 を指定する（所有者決定 2026-11-05 夜。pilot 7 本の Root が全部 60 分の床で閉じたため、床を外して目的文に閉じ方を任せる。ADR 0051 追記）。v26 は目的文が時間内の探索の進め方を決める。`minimumActiveMinutes` を 1 以上に設定すると早い最終報告の後も同じセッションで続ける。値は目的文に書かず `## Run parameters` で伝える。継続不能、制限時間、provider、broker、スキーマの失敗は理由付きの `incomplete` で、候補 0 件には数えない（ADR 0033、0039、0051）。
 - 再開: 止まった Root（`completed` 以外）は同じ Snapshot、同じ再開段落、残りの制限時間で新しい sandbox に再開できる。Codex の `provider-limited` は backoff 後に再開区間 5 まで自動で、死んだ持ち主の `interrupted` は再起動したランナーが自動で、それ以外は `campaign resume --run` で名指しして再開する。言い換えはしない（ADR 0036）。
 - 出力: Root の最終報告は `findings`、`leads`、`examined`、`unexamined` の 4 キー。報告は `direct/v1` で受ける。候補は出力境界で棄却せず、正規化して受理するか理由付きで保留する（ADR 0018、0051）。
 - 保留と Lead: スキーマ失敗は `candidate-held` に分け、0 件の正常完了にしない。Lead はソースに根拠があり影響までの辺が 1 つ足りない primitive で、検証列には入らず、`review leads` で人間が全件を見る。
@@ -96,7 +96,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 - 以前の調査（ADR 0048）: リポジトリの wide 方針は `discovery.priorResearch: same-target` を指定する。この設定のとき、同じ plugin の別 Snapshot の最新 Trial が封じた `recon-map.md` と `lab-setup.md` を `/workspace/research/prior/` に置く。tsv と route file は渡さない。2026-11-02（ADR 0049 決定 D）から、あれば `REGISTRY.md`、`assumptions/*.md`、`walks/*.md` と、その Trial の `lookupLog` から写した `stores.json` も置き、全部で 2 MiB・64 file までとし、`research import --from <state dir>` で別の台帳の終了 Trial（`research-imported`）も同じ候補にする。
 - 同時実行: `resources.maxConcurrentTargets`（1〜10）と runtime 別の上限、`memoryBudgetMiB` で Harness が決める。live の上書きは `continuous concurrency`。provider の上限は backoff して同じ campaign で再開する。
 - 記録する項目（run ごと）: trialId / trialOrdinal、Root と子の役割、要求 model ID と effort、CLI の版と同梱カタログの digest、認証方式、各 agent の usage（provider が返さない項目は `unavailable`）、読んだ file と command の件数の下限、prompt と source の digest、wall と停止理由。診断 artifact は Private Evidence に置く。
-- 本番 model: Daybreak Blue 対応の `gpt-6-sol` 系。暗黙に別 model へ切り替えない。
+- 本番 model: Daybreak Blue 対応の `gpt-6-sol` 系、effort は元 run と同じ `ultra`（Root と子）。Claude の Root は `claude-opus-5-5` の `max`。暗黙に別 model へ切り替えない（所有者決定 2026-11-05 夜、ADR 0051 追記）。
 
 ## 7. Verificationの仕様
 
