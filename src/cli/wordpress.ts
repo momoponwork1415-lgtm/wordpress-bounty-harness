@@ -44,7 +44,6 @@ import {
   WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID,
   WORDPRESS_DISCOVERY_PROMPT_IDS,
   WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS,
-  wordPressDiscoveryModeOf,
   wordPressDiscoveryPrompt,
   WORDPRESS_TRUST_BOUNDARY,
   wordPressTrustBoundaryId,
@@ -732,29 +731,17 @@ export function wordPressLabSection(
 
 /**
  * The last paragraph of the objective is the pinned directive early Root
- * resumes receive. The archived deep objectives' starts "Before giving up,";
- * the wide objective's is its bounded stop rule and starts "Stop when" (ADR
- * 0039). A segment uses the mode its Trial recorded; Trials from before the
- * mode was recorded were deep.
+ * resumes receive: the wide objective's bounded stop rule, which starts
+ * "Stop when" (ADR 0039). Only wide objectives are in the registry
+ * (2026-11-05), so a deep or partitioned Trial is refused before this as
+ * `prompt-version-differs`.
  */
-const WORDPRESS_RESUME_PARAGRAPH_PREFIX = {
-  deep: "Before giving up,",
-  wide: "Stop when",
-} as const;
-
-function wordPressResumeParagraph(
-  objective: WordPressDiscoveryAsset,
-  recordedMode?: "deep" | "wide",
-): string {
+function wordPressResumeParagraph(objective: WordPressDiscoveryAsset): string {
   const resumePrompt = objective.text
     .trim()
     .split(/\n\s*\n/)
     .at(-1);
-  const mode = recordedMode ?? wordPressDiscoveryModeOf(objective.id) ?? "deep";
-  if (
-    resumePrompt === undefined ||
-    !resumePrompt.startsWith(WORDPRESS_RESUME_PARAGRAPH_PREFIX[mode])
-  )
+  if (resumePrompt === undefined || !resumePrompt.startsWith("Stop when"))
     throw new Error("Versioned minimum exploration directive is missing");
   return resumePrompt;
 }
@@ -1122,12 +1109,7 @@ async function resumeWordPressRun(
     loadWordPressDiscoveryAsset(recordedPrompt),
     loadWordPressDiscoveryAsset(trustBoundaryId),
   ]);
-  const resumePrompt = wordPressResumeParagraph(
-    objective,
-    started.configuration.mode === "partitioned"
-      ? undefined
-      : started.configuration.mode,
-  );
+  const resumePrompt = wordPressResumeParagraph(objective);
   // A Trial that recorded exploration skills (ADR 0043) cannot be rebuilt:
   // the skills were removed in the v26 cleanup.
   const [recordedSkill] = started.configuration.skills ?? [];
