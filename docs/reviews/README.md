@@ -9,6 +9,7 @@ AI に「調べて報告」を頼んだときの成果物を、日付付きで�
 正本と運用文書（AGENTS、SPEC、ADR、`docs/` 直下、`docs/agents/`、`docs/evaluation/`、`docs/knowledge/`、skill、コード）から参照されている報告と、それらの報告が参照している報告だけを置く。
 
 設計と方針の出典:
+- [2026-11-05-july30-single-prompt-ja.md](2026-11-05-july30-single-prompt-ja.md): 7 月 30 日方式から作った v26-wide 比較候補の全文、日本語訳、原本との対応。ADR 0051 の出典。
 - [2026-11-04-current-harness-vs-cloudflare-audit-skill.md](2026-11-04-current-harness-vs-cloudflare-audit-skill.md): 現行 v22-wide と Cloudflare 公開 Audit Skill の探索割当、漏れ点検、独立検証、Lab、過去 run、記録分離を比較。固定4役を外す所有者判断の記録。
 - [2026-10-31-exploration-structure-investigation.md](2026-10-31-exploration-structure-investigation.md): 探索の構造調査。Root が中央値約 16 分で閉じ、120 分の大半を使わない構造を本番台帳と実行記録から示した。ADR 0039 追記 16（#714）の数字の出典。
 - [2026-11-01-system-overview.html](2026-11-01-system-overview.html): 選定から提出までの全体と 6 段の責務分担を 1 枚にした図解（2026-11-01、所有者の「システム全体を解説して」への答え）。

@@ -140,6 +140,9 @@ describe("WordPress prompt table", () => {
     expect(wordPressTrustBoundaryForObjective("wp2shell-bounty-v25-wide")).toBe(
       "trust-boundary-v2",
     );
+    expect(wordPressTrustBoundaryForObjective("wp2shell-bounty-v26-wide")).toBe(
+      "trust-boundary-v2",
+    );
     expect(wordPressTrustBoundaryId(undefined)).toBe("trust-boundary-v1");
     expect(wordPressTrustBoundaryId("trust-boundary-v1")).toBe(
       "trust-boundary-v1",

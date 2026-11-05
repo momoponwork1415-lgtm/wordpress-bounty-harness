@@ -609,11 +609,12 @@ function currentOf<const Row extends WordPressPromptRecord>(
 /** The existing default declaration for deep and wide production Trials. */
 export const WORDPRESS_TRUST_BOUNDARY = currentOf(WORDPRESS_TRUST_BOUNDARIES);
 
-/** Only the opt-in v25 objective receives the corrected declaration. */
+/** Opt-in comparison objectives receive the corrected declaration. */
 export function wordPressTrustBoundaryForObjective(
   objectiveId: WordPressDiscoveryPromptId,
 ): (typeof WORDPRESS_TRUST_BOUNDARIES)[number]["id"] {
-  return objectiveId === "wp2shell-bounty-v25-wide"
+  return objectiveId === "wp2shell-bounty-v25-wide" ||
+    objectiveId === "wp2shell-bounty-v26-wide"
     ? "trust-boundary-v2"
     : WORDPRESS_TRUST_BOUNDARY.id;
 }

@@ -13,8 +13,8 @@
 2026-10-13 のロードマップ（Step 1〜3）は役目を終えた。いまは本番ランナーを回しながら、次の規則で変更を決める。当時のロードマップと決定の経緯は Git 履歴と [ADR 0032](adr/0032-owner-decisions-on-constraints-2026-10-13.md) にある。
 
 - **本番が bench。** 探索の数字は本番の対象から取る（所有者決定 2026-10-26）。開発セットに戻すのは、本番で対象範囲内の Finding は出るのに人間の観測の `match` が 1 週間 0 件のときだけ。既知の公開事例の benchmark は、現行の方法が 1 回の Trial で既知の型を外したときに、その型を名指しして回す。pass@3 のような反復は置かない。
-- **変えない 5 つ。** 不変条件 1〜8、Harness は制御だけ、確定は人間の Lab 観測だけ、探索プロンプトの文面（消すだけは許す）、設計変更は月 1 回（[ADR 0045](adr/0045-frozen-core-and-three-exploration-forces.md)）。これらを変える提案は出さない。
-- **計測は新版だけ、対にしない。** agent 入力を変えたら新版だけを本番で回し、過去の同じ分母の数字と比べる。分母は Codex 1 時間あたりの Lab 発火数と Wordfence の結果（ADR 0045）。手順は [docs/agents/measurement.md](agents/measurement.md)、採否は第 5 節の 6 段。
+- **変えない 5 つ。** 不変条件 1〜8、Harness は制御だけ、確定は人間の Lab 観測だけ、探索プロンプトの文面（消すだけは許す）、設計変更は月 1 回（[ADR 0045](adr/0045-frozen-core-and-three-exploration-forces.md)）。2026-11-05 に所有者が決めた 7 月 30 日方式の版付き比較候補だけ、目的文の凍結の例外とする（[ADR 0051](adr/0051-july30-prompt-pilot.md)）。
+- **採否前は対で、採用後は新版だけを測る。** agent 入力を変える比較候補は第 5 節のとおり同じ選定帯と Lab 条件で旧版・新版を交互に回す。採用後の監視では新版だけを本番で回し、過去の同じ分母の数字と比べる。分母は Codex 1 時間あたりの Lab 発火数と Wordfence の結果（ADR 0045）。手順は [docs/agents/measurement.md](agents/measurement.md)、採否は第 5 節の 6 段。
 - **Harness の変更は制御だけ。** 選定、Snapshot、sandbox、制限、保存、park、Lab の供給、観測の記録、台帳。探索と検証の「やり方」が code に現れたらプロンプトかスキルへ移す（[AGENTS.md](../AGENTS.md) の責務）。bug 修正と削除は随時、新しい機構は ADR 0045 の月 1 回の枠で。
 - **文書の役割。** 正本は [SPEC.md](SPEC.md) と [ADR](adr/)。いまの動きの説明は [SYSTEM.md](SYSTEM.md)。調べて報告した文書は [docs/reviews/](reviews/) に日付付きで置き、正本ではない。本番の設定、台帳、Private Evidence は Git 外。
 - **人間の判断点は 2 つ。** 提出前のレビュー（Lab で自分の目で観測する）と外部行動の承認。人間はコマンドを打たず、会話で述べたことを AI が本人の名で記録する（2026-10-31）。
