@@ -1062,7 +1062,7 @@ async function harness(
     const config = wordpressCampaignConfigSchema.parse(
       JSON.parse(await readFile(configPath, "utf8")),
     );
-    const { scenarioId: _removed, ...labSetup } = config.lab;
+    const labSetup = config.lab;
     for (const { event: finding } of state.ledger.read({
       campaignId,
       type: "finding-recorded",
@@ -3043,11 +3043,6 @@ describe("harness CLI vertical slice", () => {
     });
     expect(retired.success).toBe(false);
     expect(
-      retired.error?.issues.find(
-        (issue) => issue.path.join(".") === "discovery.mode",
-      )?.message,
-    ).toBe("Deep mode was retired on 2026-11-05; name a wide Trial instead");
-    expect(
       wordpressCampaignConfigSchema.parse({
         ...base,
         discovery: wide,
@@ -3406,29 +3401,6 @@ describe("harness CLI vertical slice", () => {
     expect(resumed.code).toBe(3);
     expect(resumed.stderr).toMatch(/^not resumable: prior-leads-differ /);
     expect(attached.transportRuns).toHaveLength(1);
-  });
-
-  it("refuses discovery.priorLeads and followUp leads, and still reads followUp none", () => {
-    const base = {
-      schemaVersion: 1 as const,
-      programmeBoundary: { version: "v1", text: "Synthetic" },
-      wordpressVersion: "6.8",
-      lab: { siteTitle: "Synthetic", initialPosts: [], customerRole: false },
-    };
-    const parse = (discovery: object) =>
-      wordpressCampaignConfigSchema.safeParse({ ...base, discovery });
-    expect(parse({ mode: "wide", followUp: "none" }).success).toBe(true);
-    expect(
-      parse({ mode: "wide", followUp: "leads" }).error?.issues[0]?.path,
-    ).toEqual(["discovery", "followUp"]);
-    expect(
-      parse({
-        mode: "wide",
-        priorLeads: {
-          targets: [{ snapshotDigest: `sha256:${"a".repeat(64)}` }],
-        },
-      }).error?.issues[0]?.path,
-    ).toEqual(["discovery", "priorLeads"]);
   });
 
   it("stops the campaign on a provider limit and resumes it with the same command", async () => {
@@ -6591,7 +6563,7 @@ describe("harness CLI vertical slice", () => {
       configPath,
     );
     expect(named.code).not.toBe(0);
-    expect(named.stderr).toContain("Lab scenarios were removed in #353");
+    expect(named.stderr).toContain("scenarioId");
     expect(labStarts()).toBe(beforeLabStarts);
     expect(ledger().read({ campaignId: "campaign-1" })).toHaveLength(
       beforeEvents,

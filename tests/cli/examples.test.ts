@@ -100,56 +100,27 @@ it("starts the checked-in wide v26 campaign with one concurrent target on the La
     ).toBe(accepted);
 });
 
-it("rejects every removed partitioned campaign setting at parse time", () => {
+it("leaves retired campaign keys to the schema's general refusal", () => {
   const base = {
     schemaVersion: 1,
     programmeBoundary: { version: "v", text: "t" },
-    wordpressVersion: "6.8",
     lab: { siteTitle: "s", initialPosts: [], customerRole: false },
   };
-  const cases = [
-    ["discovery.mode", { discovery: { mode: "partitioned" } }],
-    ["discovery.enumerator", { discovery: { enumerator: {} } }],
-    ["discovery.partition", { discovery: { partition: {} } }],
-    ["discovery.tracer", { discovery: { tracer: {} } }],
-    [
-      "resources.partitionedRoleMemoryProfile",
-      {
-        resources: {
-          memoryBudgetMiB: 10752,
-          partitionedRoleMemoryProfile: "compact-768-256",
-        },
-      },
-    ],
-  ] as const;
-  for (const [path, fields] of cases) {
-    const result = wordpressCampaignConfigSchema.safeParse({
-      ...base,
-      ...fields,
-    });
-    expect(result.success, path).toBe(false);
-    expect(
-      result.error?.issues.find((issue) => issue.path.join(".") === path)
-        ?.message ?? "",
-      path,
-    ).toContain("Partitioned mode was removed in #685");
-  }
-});
-
-it("rejects discovery.skills at parse time", () => {
-  const result = wordpressCampaignConfigSchema.safeParse({
-    schemaVersion: 1,
-    programmeBoundary: { version: "v", text: "t" },
-    wordpressVersion: "6.8",
-    lab: { siteTitle: "s", initialPosts: [], customerRole: false },
-    discovery: { skills: ["wbh-recon-v3"] },
-  });
-  expect(result.success).toBe(false);
-  expect(
-    result.error?.issues.find(
-      (issue) => issue.path.join(".") === "discovery.skills",
-    )?.message,
-  ).toBe("Exploration skills were removed in the v26 cleanup");
+  const parse = (fields: object) =>
+    wordpressCampaignConfigSchema.safeParse({ ...base, ...fields });
+  expect(parse({ discovery: { followUp: "none" } }).success).toBe(true);
+  for (const fields of [
+    { discovery: { followUp: "leads" } },
+    { discovery: { priorLeads: {} } },
+    { discovery: { skills: ["wbh-recon-v3"] } },
+    { discovery: { mode: "partitioned" } },
+    { discovery: { enumerator: {} } },
+    {
+      resources: { memoryBudgetMiB: 10752, partitionedRoleMemoryProfile: "x" },
+    },
+    { lab: { ...base.lab, scenarioId: "approved-comment-v1" } },
+  ])
+    expect(parse(fields).success, JSON.stringify(fields)).toBe(false);
 });
 
 it("runs the v26 wide example with an attached Lab for at least 60 active minutes", async () => {

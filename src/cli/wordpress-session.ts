@@ -129,17 +129,7 @@ const commonCampaignFields = {
       /** Opt-in split of targets between Codex and Claude; absent, all run on Codex. */
       runtimeShare: runtimeShareSchema.optional(),
       /** The launch mode of every Trial this campaign starts (ADR 0039). */
-      mode: z
-        .enum(["deep", "wide", "partitioned"])
-        .refine((mode) => mode !== "partitioned", {
-          message: "Partitioned mode was removed in #685",
-        })
-        .refine((mode) => mode !== "deep", {
-          message:
-            "Deep mode was retired on 2026-11-05; name a wide Trial instead",
-        })
-        .transform((mode) => mode as "wide")
-        .default("wide"),
+      mode: z.enum(["wide"]).default("wide"),
       /** Ceiling on live children; the Root decides how many it uses. */
       maxChildren: z
         .number()
@@ -149,12 +139,6 @@ const commonCampaignFields = {
         .default(DEFAULT_MAX_CHILDREN),
       /** Defaults to 0 (ADR 0039 addendum 20). */
       minimumActiveMinutes: z.number().int().min(0).max(119).optional(),
-      enumerator: z.unknown().optional(),
-      partition: z.unknown().optional(),
-      tracer: z.unknown().optional(),
-      skills: z.unknown().optional(),
-      /** ADR 0044's named second Trial was removed on 2026-11-05; refused below. */
-      priorLeads: z.unknown().optional(),
       /**
        * ADR 0048: `same-target` passes the map and setup record of the latest
        * earlier Trial on another Snapshot of the same target under the
@@ -162,11 +146,8 @@ const commonCampaignFields = {
        * nothing.
        */
       priorResearch: z.enum(["none", "same-target"]).default("none"),
-      /**
-       * ADR 0049 C's follow-up Trial was removed on 2026-11-05. `none` is
-       * still read so configurations that name it parse; `leads` is refused.
-       */
-      followUp: z.unknown().optional(),
+      /** ADR 0049 addendum 7: `none` still parses; the follow-up Trial is gone. */
+      followUp: z.literal("none").optional(),
     })
     .prefault({}),
   selectionPolicyPath: z.string().min(1).optional(),
@@ -177,7 +158,6 @@ const commonCampaignFields = {
       maxConcurrentRuns: z.number().int().min(1).max(4).default(1),
       maxConcurrentTargets: z.number().int().min(1).max(10).default(1),
       memoryBudgetMiB: z.number().int().positive(),
-      partitionedRoleMemoryProfile: z.unknown().optional(),
       /**
        * Opt-in caps per discovery runtime under maxConcurrentTargets (2026-10-19).
        * Absent, only the total applies.
@@ -207,8 +187,6 @@ const commonCampaignFields = {
         administratorSecondaryLocale: z.string().regex(/^[a-z]{2}_[A-Z]{2}$/),
       })
       .optional(),
-    /** Removed in #353; rejected below so an old config fails before any Lab. */
-    scenarioId: z.string().optional(),
   }),
 };
 export const wordpressCampaignConfigSchema = z
@@ -229,41 +207,6 @@ export const wordpressCampaignConfigSchema = z
         code: "custom",
         path: ["promptId"],
         message: `The ${mode} mode runs ${WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS.filter((id) => wordPressDiscoveryModeOf(id) === mode).join(" or ")} only`,
-      });
-    if (config.discovery.skills !== undefined)
-      context.addIssue({
-        code: "custom",
-        path: ["discovery", "skills"],
-        message: "Exploration skills were removed in the v26 cleanup",
-      });
-    if (
-      config.discovery.followUp !== undefined &&
-      config.discovery.followUp !== "none"
-    )
-      context.addIssue({
-        code: "custom",
-        path: ["discovery", "followUp"],
-        message:
-          "The follow-up Trial was removed on 2026-11-05 (ADR 0049); drop discovery.followUp or name none",
-      });
-    if (config.discovery.priorLeads !== undefined)
-      context.addIssue({
-        code: "custom",
-        path: ["discovery", "priorLeads"],
-        message: "discovery.priorLeads was removed on 2026-11-05 (ADR 0044)",
-      });
-    for (const role of ["enumerator", "partition", "tracer"] as const)
-      if (config.discovery[role] !== undefined)
-        context.addIssue({
-          code: "custom",
-          path: ["discovery", role],
-          message: "Partitioned mode was removed in #685",
-        });
-    if (config.resources.partitionedRoleMemoryProfile !== undefined)
-      context.addIssue({
-        code: "custom",
-        path: ["resources", "partitionedRoleMemoryProfile"],
-        message: "Partitioned mode was removed in #685",
       });
     const floor =
       config.discovery.minimumActiveMinutes ??
@@ -306,13 +249,6 @@ export const wordpressCampaignConfigSchema = z
         code: "custom",
         path: ["lab", "initialApprovedComment"],
         message: "An approved comment requires an initial post",
-      });
-    if (config.lab.scenarioId !== undefined)
-      context.addIssue({
-        code: "custom",
-        path: ["lab", "scenarioId"],
-        message:
-          "Lab scenarios were removed in #353; wbh-verify prepares preconditions",
       });
   })
   .transform((config) => ({
@@ -520,11 +456,10 @@ export async function readWordPressCampaignPolicy(
 const setupFor =
   (config: WordPressCampaignConfig) =>
   (snapshot: Snapshot): WordPressLabSetup => {
-    const { scenarioId: _removed, ...lab } = config.lab;
     return {
       schemaVersion: 1,
       snapshotDigest: snapshot.digest,
-      ...lab,
+      ...config.lab,
     };
   };
 
