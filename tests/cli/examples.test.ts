@@ -57,8 +57,8 @@ it("starts the checked-in wide v26 campaign with one concurrent target on the La
     maxLookups: 60,
   });
   expect(config.discovery).toMatchObject({
-    maxChildren: 3,
-    minimumActiveMinutes: 60,
+    maxChildren: 4,
+    minimumActiveMinutes: 0,
     priorResearch: "same-target",
   });
   expect(config.discovery.mode).toBe("wide");
@@ -199,8 +199,8 @@ it("runs the v26 wide example with an attached Lab for at least 60 active minute
     discovery: {
       mode: "wide",
       lab: { mode: "attached" },
-      maxChildren: 3,
-      minimumActiveMinutes: 60,
+      maxChildren: 4,
+      minimumActiveMinutes: 0,
       priorResearch: "same-target",
     },
   });

@@ -95,7 +95,7 @@ flowchart LR
 
 対象ごとに 1 回、Codex の Root と子が協調する Trial を gVisor の使い捨て sandbox で行う。Harness が渡すのは、固定したソース（読み取り専用）、人間が書いた trust 境界宣言、Programme Boundary、目的文、Harness が生成する節（`## Run parameters`、Finding / Lead の出力契約 v4、`## Prior research`）だけである。評価対象の答え、PoC、公開履歴の中身は渡さない。外向き通信は認証ブローカー経由の provider API に限る。
 
-リポジトリの wide 方針は `wp2shell-bounty-v26-wide` を既定にし、探索 Lab を付け、最低 60 分を指定する。制限時間の上限は 120 分、同時に生きる子はリポジトリの wide 方針で 3（基底の既定 4、設定可能な上限 8）である。v26 は 7 月 30 日方式の一つの目的文を Root に渡し、探索スキルは渡さない（staging は 2026-11-05 に削除。ADR 0043 追記 10）。Cloudflare 派生の六段階探索方式（v23 / v24 / v25-wide、`wbh-audit-v1/v2`、`checked/v1`）は 2026-11-05 に削除した（ADR 0050）。Claude runtime の share は 0 である。
+リポジトリの wide 方針は `wp2shell-bounty-v26-wide` を既定にし、探索 Lab を付け、最低時間は置かない。制限時間の上限は 120 分、同時に生きる子はリポジトリの wide 方針で 4（基底の既定 4、設定可能な上限 8）である。v26 は 7 月 30 日方式の一つの目的文を Root に渡し、探索スキルは渡さない（staging は 2026-11-05 に削除。ADR 0043 追記 10）。Cloudflare 派生の六段階探索方式（v23 / v24 / v25-wide、`wbh-audit-v1/v2`、`checked/v1`）は 2026-11-05 に削除した（ADR 0050）。本番の runtime は Git 外の設定で Codex を主にし、Claude にも枠を持たせる（所有者決定 2026-11-05 夜。Codex は effort ultra、Claude の Root は max）。
 
 リポジトリの wide 方針は `discovery.priorResearch: same-target` を指定し、同じ plugin の別 Snapshot の最新 Trial が封じた研究 file を `/workspace/research/prior/` に置く。同一 Snapshot の研究 file 全体はこの経路で渡さない。基礎の `recon-map.md` と `lab-setup.md` に加え、存在すれば `REGISTRY.md`、`assumptions/*.md`、`walks/*.md` と Lab の保存先記録 `stores.json` を渡す（SPEC 第 6 節）。同一 Snapshot の再探索は起動しない。Lead の件数で起動する第 2 Trial（`discovery.followUp`）と Lead を名指しで渡す入力（`discovery.priorLeads`、`## Prior leads`）は 2026-11-05 に削除した（ADR 0044、0049 追記 7）。どこを読むか、何を仮説にするか、子に何を任せるかは Root が決める。Harness は舵を取らない。稼働中のランナーの Git 外設定と、このリポジトリの既定は別に確認する。
 
