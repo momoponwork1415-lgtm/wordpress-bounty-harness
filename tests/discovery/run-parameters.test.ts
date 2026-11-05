@@ -35,7 +35,7 @@ describe("Run parameters section (redesign 2026-10-25 §5.1)", () => {
         wallMinutes: 120,
         minimumActiveMinutes: 0,
         maxChildren: 4,
-        lab: { mode: "none", maxResets: 2 },
+        lab: { mode: "attached", maxResets: 2 },
         runtime,
       }),
     ).toContain("- Minimum active exploration time: 0 minutes (no minimum).");
@@ -50,16 +50,16 @@ describe("Run parameters section (redesign 2026-10-25 §5.1)", () => {
     };
     for (const [lab, expected] of [
       [
-        "none",
-        { mode: "none", maxResets: 2, maxObservations: 20, maxLookups: 60 },
+        "attached",
+        { mode: "attached", maxResets: 2, maxObservations: 20, maxLookups: 60 },
       ],
       [
-        { mode: "none" },
-        { mode: "none", maxResets: 2, maxObservations: 20, maxLookups: 60 },
+        { mode: "attached" },
+        { mode: "attached", maxResets: 2, maxObservations: 20, maxLookups: 60 },
       ],
       [
-        { mode: "none", maxResets: 5 },
-        { mode: "none", maxResets: 5, maxObservations: 20, maxLookups: 60 },
+        { mode: "attached", maxResets: 5 },
+        { mode: "attached", maxResets: 5, maxObservations: 20, maxLookups: 60 },
       ],
       [
         { mode: "attached", maxObservations: 0 },
@@ -79,5 +79,11 @@ describe("Run parameters section (redesign 2026-10-25 §5.1)", () => {
         wordpressCampaignConfigSchema.parse({ ...base, discovery: { lab } })
           .discovery.lab,
       ).toEqual(expected);
+    // Owner decision 2026-11-05: discovery always attaches a Lab.
+    for (const lab of ["none", { mode: "none" }])
+      expect(
+        wordpressCampaignConfigSchema.safeParse({ ...base, discovery: { lab } })
+          .success,
+      ).toBe(false);
   });
 });

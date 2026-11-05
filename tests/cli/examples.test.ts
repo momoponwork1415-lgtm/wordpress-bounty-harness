@@ -64,12 +64,12 @@ it("starts the checked-in wide v26 campaign with one concurrent target on the La
   expect(config.discovery.mode).toBe("wide");
   // Deep was retired on 2026-11-05 (ADR 0039 addendum): v11 and deep no longer parse.
   for (const fields of [
-    { discovery: { lab: "none", mode: "deep" } },
+    { discovery: { lab: "attached", mode: "deep" } },
     {
-      discovery: { lab: "none", mode: "deep" },
+      discovery: { lab: "attached", mode: "deep" },
       promptId: "wp2shell-bounty-v11",
     },
-    { discovery: { lab: "none" }, promptId: "wp2shell-bounty-v11" },
+    { discovery: { lab: "attached" }, promptId: "wp2shell-bounty-v11" },
   ])
     expect(
       wordpressCampaignConfigSchema.safeParse({
@@ -169,87 +169,21 @@ it.each(["3.3.1", "3.2.6"])(
   },
 );
 
-describe("historical TranslatePress development fixtures", () => {
-  it("keeps old prompt examples readable but rejects them as new campaigns", async () => {
-    for (const [version, files] of [
-      [
-        "3.3.1",
-        [
-          "campaign.json",
-          "campaign-luna-40.json",
-          "campaign-short-managed-v4.json",
-          "campaign-wp2shell-bounty-v2.json",
-          "campaign-whitebox-v1.7.json",
-        ],
-      ],
-      [
-        "3.2.6",
-        [
-          "campaign-short-managed-v4.json",
-          "campaign-wp2shell-bounty-v2.json",
-          "campaign-short-managed-v4-comment-fixture.json",
-          "campaign-wp2shell-bounty-v2-comment-fixture.json",
-        ],
-      ],
-    ] as const)
-      for (const file of files) {
-        const source = await example(file, version);
-        expect(wordpressCampaignConfigSchema.safeParse(source).success).toBe(
-          false,
-        );
-      }
-  });
-
-  it("preserves the archived whitebox comparison and pinned target metadata", async () => {
-    const old = (await example("campaign-wp2shell-bounty-v2.json")) as Record<
-      string,
-      unknown
-    >;
-    const whitebox = (await example("campaign-whitebox-v1.7.json")) as Record<
-      string,
-      unknown
-    >;
-    expect(whitebox).toEqual({ ...old, promptId: "wp2shell-whitebox-v1.7" });
-    const policy = wordPressSelectionPolicySchema.parse(
-      await example("selection.json"),
-    );
-    if (!("candidateSlugs" in policy))
-      throw new Error("Expected manual policy");
-    expect(policy.candidateSlugs).toEqual(["translatepress-multilingual"]);
-    expect(policy.pinnedVersions).toEqual({
-      "translatepress-multilingual": "3.3.1",
-    });
-  });
-
-  it("preserves both old Stored XSS comparison inputs and validates the comment setup", async () => {
-    for (const suffix of ["", "-comment-fixture"]) {
-      const short = (await example(
-        `campaign-short-managed-v4${suffix}.json`,
-        "3.2.6",
-      )) as Record<string, unknown>;
-      const wp2shell = (await example(
-        `campaign-wp2shell-bounty-v2${suffix}.json`,
-        "3.2.6",
-      )) as Record<string, unknown>;
-      expect(short.lab).toEqual(wp2shell.lab);
-      expect(short.programmeBoundary).toEqual(wp2shell.programmeBoundary);
-    }
-    const production = (await example(
-      "campaign-production-v1.json",
-      "3.2.6",
-    )) as Record<string, unknown>;
-    const comment = (await example(
-      "campaign-short-managed-v4-comment-fixture.json",
-      "3.2.6",
-    )) as { lab: Record<string, unknown> };
-    expect(comment.lab.initialApprovedComment).toBe(true);
-    expect(
-      wordpressCampaignConfigSchema.safeParse({
-        ...production,
-        lab: { ...comment.lab, initialPosts: [] },
-      }).success,
-    ).toBe(false);
-  });
+describe("TranslatePress development set", () => {
+  it.each(["3.3.1", "3.2.6"])(
+    "pins the %s selection to the one plugin version",
+    async (version) => {
+      const policy = wordPressSelectionPolicySchema.parse(
+        await example("selection.json", version),
+      );
+      if (!("candidateSlugs" in policy))
+        throw new Error("Expected manual policy");
+      expect(policy.candidateSlugs).toEqual(["translatepress-multilingual"]);
+      expect(policy.pinnedVersions).toEqual({
+        "translatepress-multilingual": version,
+      });
+    },
+  );
 
   it("keeps the programme transcription pending its submission cap", async () => {
     const transcription = wordfenceProgrammeTranscriptionSchema.parse(

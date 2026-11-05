@@ -21,6 +21,7 @@ import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-
 import { Ledger } from "../../src/ledger/index.js";
 import { recordWordPressReport } from "../../src/profiles/wordpress/discovery/candidate-admission.js";
 import { inspectWordPressLedgerExclusions } from "../../src/profiles/wordpress/selection/ledger-exclusions.js";
+import { fakeExplorationLab } from "../support/fake-exploration-lab.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const campaignId = "prod-20261021-1";
@@ -123,8 +124,8 @@ async function open(runtime: "codex-native/v1" | "claude-code/v1") {
       store,
       clock: () => new Date("2026-10-21T00:00:00Z"),
       newId: () => `id-${++ids}`,
-      discoveryLab: "none",
       pipeline: {
+        ...fakeExplorationLab(`sha256:${"c".repeat(64)}`),
         select: async () => [
           {
             targetId: "wporg:limited",

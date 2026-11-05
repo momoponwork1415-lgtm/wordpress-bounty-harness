@@ -109,3 +109,9 @@ B の 3 つ目の観測器 `POST /trace` を、決定どおりに実装した。
 
 記録済みの `follow-up-scheduled`、`configuration.followUp`、`target-skipped` の `follow-up-refused` は読み続ける。ランナーは campaign 番号を振るときに `follow-up-scheduled` の番号も数える。Lab 常設（決定 A・B）、研究 file の引き継ぎ（決定 D、ADR 0048）は残す。同一 Snapshot の条件付き再探索は、ADR 0051 の 2026-11-05 追記のとおり別の契約として設計する。
 
+
+## 2026-11-05 追記 8: `discovery.lab: none` を削除した
+
+所有者の 2026-11-05 の決定（探索方式を `wp2shell-bounty-v26-wide` に固定し、主経路が使わないコードは削除する）を受け、決定 A で既定にした Lab 付きを唯一の形にした。campaign 設定の `discovery.lab` は `attached`（文字列か、予算を書いたオブジェクト）だけを受け、`none` は設定の検査で止める。パイプラインは Trial ごとに必ず探索 Lab を立てる。Lab 無しの Trial でしか使えなかった `campaign run --repeat`（同じ Snapshot に独立 Trial を複数作る）も消した。Run parameters 節の `- Lab: none.` の枝は届かなくなったので消した。v26-wide の Trial に渡る文は変わらない。
+
+台帳の Lab 無しの旧 Trial（`configuration.lab.mode: none`、`labAttached: false`、funnel の `byLab.none`）と、`CampaignInput v1` の `lab: { mode: "none" }` は読み続ける。その再開は `lab-mode-differs` で断る（再開には常に新しい Lab を付けるため）。消し方は、この PR を revert する。

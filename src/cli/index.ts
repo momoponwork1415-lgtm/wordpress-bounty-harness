@@ -4,13 +4,12 @@ import {
 } from "../lab/egress-plan.js";
 import { z } from "zod";
 
-import { lstat, readFile, writeFile } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 import { summarizeRecordedRuntimes } from "../discovery/index.js";
 import { canonicalJson } from "../infrastructure/canonical-json.js";
-import { serializeFindingGroupKeyCache } from "../ledger/finding-group-key-cache.js";
 import { readFindingGroups } from "../ledger/finding-groups.js";
 import {
   EXTERNAL_OUTCOMES,
@@ -153,10 +152,6 @@ export type ResumeCampaignRunSummary =
 /** A profile composition: everything target-specific the commands need. */
 export interface CliProfile {
   review(state: CliState): Review;
-  /** One-time, profile-owned derivation of pre-group Finding keys. */
-  deriveLegacyFindingGroupKeyCache?(
-    state: CliState,
-  ): Promise<ReadonlyMap<string, readonly string[]>>;
   /** Profile-owned, digest-only keys derived from a stored Lead. */
   leadGroupKeyDigests?(lead: unknown): readonly string[];
   /** A profile may provide a fresh, foreground Lab for human reproduction. */
@@ -228,8 +223,6 @@ export interface CliProfile {
       readonly target: string | null;
       /** The runner only: the batch a new campaign binds, instead of the latest unbound one (#604). */
       readonly selectionBatchId?: string;
-      /** Explicit independent Trials on the same Snapshot. */
-      readonly repeat?: number;
       /** Checked before each next target; true drains the campaign as `operator`. */
       readonly stop?: () => boolean;
       /** Aborts exploration currently running when continuous mode receives SIGTERM. */
@@ -442,8 +435,6 @@ interface ReviewSignalSource {
 
 export type CliEnvironment = {
   readonly stateDirectory: string;
-  /** Optional digest-only projection for pre-group Finding events (#653). */
-  readonly findingGroupKeyCachePath?: string;
   readonly profile: CliProfile;
   readonly clock?: () => Date;
   readonly newId?: () => string;
@@ -1222,69 +1213,20 @@ function continuousRow(
 /** One row per command, in the order the usage text lists them. */
 const COMMANDS: readonly Command[] = [
   command({
-    name: "select",
-    required: ["config"],
-    usage: ["select --config <path> [--minimum <n>]"],
-    options: { config: STR, minimum: STR },
-    validate: (values) => {
-      const minimum =
-        values.minimum === undefined ? undefined : Number(values.minimum);
-      if (
-        minimum !== undefined &&
-        (!Number.isSafeInteger(minimum) || minimum < 1 || minimum > 5)
-      )
-        throw new UsageError("--minimum must be an integer from 1 to 5");
-    },
-    handler: async ({ values, state, environment, io }) => {
-      const minimum =
-        values.minimum === undefined ? undefined : Number(values.minimum);
-      const report = await environment.profile.select(state, {
-        configPath: resolve(required(values.config, "config")),
-        ...(minimum === undefined ? {} : { minimum }),
-      });
-      for (const target of report.selected)
-        io.stdout(
-          `${target.targetId} ${target.version} installs ${target.activeInstallations}  updated ${target.versionPublishedAt ?? "unavailable"}  ${target.reason}  observed ${target.observedAt}  source ${target.sourceUrl ?? "unavailable"}  excluded none`,
-        );
-      for (const target of report.excluded)
-        io.stdout(
-          `excluded ${target.targetId}  reasons ${target.reasons.join(",")}  observed ${target.observedAt ?? "unavailable"}  source ${target.sourceUrl ?? "unavailable"}`,
-        );
-      if (report.core !== undefined)
-        io.stdout(
-          `wordpress core ${report.core.version} (${report.core.source})  latest ${
-            report.core.latest === null
-              ? "not checked"
-              : "version" in report.core.latest
-                ? report.core.latest.version
-                : `unavailable (${report.core.latest.unavailable})`
-          }  ${report.core.status}`,
-        );
-      if (report.batchId !== null)
-        io.stdout(`selection batch ${report.batchId}`);
-      if (report.selected.length === 0) io.stdout("no targets selected");
-      return 0;
-    },
-  }),
-  command({
     name: "campaign run",
     required: ["campaign", "config"],
     maxPositionals: 1,
     usage: [
-      "campaign run <slug>|--all --campaign <id> --config <path> [--selection <path>] [--repeat <n>]",
+      "campaign run <slug>|--all --campaign <id> --config <path> [--selection <path>]",
     ],
     options: {
       all: BOOL,
       campaign: STR,
       config: STR,
-      repeat: STR,
       selection: STR,
     },
     validate: (values, rest) => {
       const target = rest[0] ?? null;
-      const repeat = values.repeat === undefined ? 1 : Number(values.repeat);
-      if (!Number.isSafeInteger(repeat) || repeat < 1 || repeat > 40)
-        throw new UsageError("--repeat must be an integer from 1 to 40");
       if ((target === null) === (values.all !== true) || rest.length > 1)
         throw new UsageError(
           "campaign run takes exactly one of <slug> or --all",
@@ -1297,7 +1239,6 @@ const COMMANDS: readonly Command[] = [
     },
     handler: async ({ values, rest, state, environment, io, print }) => {
       const target = rest[0] ?? null;
-      const repeat = values.repeat === undefined ? 1 : Number(values.repeat);
       // A manual campaign beside the runner keeps its containers (#399).
       const release = await holdDiscoverySweep(
         state.stateDirectory,
@@ -1308,7 +1249,6 @@ const COMMANDS: readonly Command[] = [
           campaignId: required(values.campaign, "campaign"),
           configPath: resolve(required(values.config, "config")),
           target,
-          repeat,
           ...(values.selection === undefined
             ? {}
             : { selectionPolicyPath: resolve(values.selection) }),
@@ -1448,26 +1388,6 @@ const COMMANDS: readonly Command[] = [
       if (result.status === "already-restored")
         throw new Error(`Finding ${findingId} is already restored`);
       print([`restored finding ${findingId} to the review queue`]);
-      return 0;
-    },
-  }),
-  command({
-    name: "review group-cache",
-    readOnly: true,
-    required: ["output"],
-    usage: ["review group-cache --output <file>"],
-    options: { output: STR },
-    handler: async ({ values, state, environment, print }) => {
-      const derive = environment.profile.deriveLegacyFindingGroupKeyCache;
-      if (derive === undefined)
-        throw new UsageError("This profile has no legacy Finding group keys");
-      const cache = await derive(state);
-      const output = required(values.output, "output");
-      await writeFile(output, serializeFindingGroupKeyCache(cache), {
-        flag: "wx",
-        mode: 0o600,
-      });
-      print([`wrote ${cache.size} legacy Finding key entries to ${output}`]);
       return 0;
     },
   }),
@@ -2642,9 +2562,6 @@ export async function runCli(
       environment,
       {
         readOnly: handler.readOnly,
-        ...(environment.findingGroupKeyCachePath === undefined
-          ? {}
-          : { findingGroupKeyCachePath: environment.findingGroupKeyCachePath }),
       },
     );
     return await invoke({

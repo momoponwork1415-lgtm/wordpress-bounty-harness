@@ -3,7 +3,6 @@ import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
-import { loadFindingGroupKeyCache } from "../ledger/finding-group-key-cache.js";
 import { Ledger } from "../ledger/index.js";
 
 export type CliState = {
@@ -25,7 +24,6 @@ export async function openState(
   } = {},
   options: {
     readonly readOnly?: boolean;
-    readonly findingGroupKeyCachePath?: string;
   } = {},
 ): Promise<CliState> {
   const root = resolve(directory);
@@ -38,17 +36,12 @@ export async function openState(
     // A bounded capture and its supporting evidence fit in one artifact.
     maxBytes: 72 * 1024 * 1024,
   });
-  const findingGroupKeyCache =
-    options.findingGroupKeyCachePath === undefined
-      ? new Map<string, readonly string[]>()
-      : await loadFindingGroupKeyCache(options.findingGroupKeyCachePath);
   return {
     store,
     stateDirectory: root,
     ledger: new Ledger({
       databasePath: join(root, "ledger.sqlite"),
       artifactStore: store,
-      findingGroupKeyCache,
       readOnly: options.readOnly ?? false,
     }),
     clock: environment.clock ?? (() => new Date()),

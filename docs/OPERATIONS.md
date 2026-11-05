@@ -37,7 +37,7 @@ harness continuous status
 harness continuous concurrency [<n>] [--runtime codex] --config <campaign.json>
 ```
 
-- `run` は `select` → `campaign run --all` → 次のバッチを回り続ける。起動は `setsid nohup ... &` で、標準出力を `<state>/continuous-<日付>-<p>.out` へ向ける。実行履歴の正本は台帳で、`<state>/continuous-<p>.pid` / `.json` / `.stop` は作業用。
+- `run` は選定 → `campaign run --all` → 次のバッチを回り続ける。起動は `setsid nohup ... &` で、標準出力を `<state>/continuous-<日付>-<p>.out` へ向ける。実行履歴の正本は台帳で、`<state>/continuous-<p>.pid` / `.json` / `.stop` は作業用。
 - 動いているか見るときは `pgrep -af '^node --no-warnings dist/cli/main.js .*continuous run'` と打つ。先頭を固定しないと、打っている shell 自身に一致する。
 - `stop` は `<state>/continuous-<p>.stop` を置き、ランナーは進行中の対象を終わらせてから止まる。`--host` が要る。マーカーは crash や再起動でも消えないので、再開は `resume` か `run --resume`。
 - 止まる理由は 5 つ: operator、候補枯渇（`exhausted`）、Programme 写しの 35 日超（`programme-stale`）、例外 3 バッチ連続（`errors`）、completed 0 のバッチ 3 連続（`no-progress`）。quota、拒否、ログイン失効（`waiting-login`）、disk 不足では止まらず待つ。
@@ -49,22 +49,20 @@ harness continuous concurrency [<n>] [--runtime codex] --config <campaign.json>
 
 ## 3. 選定
 
-```sh
-harness select --config <selection.json> [--minimum <n>]
-```
+選定はランナー（`continuous run`）が各バッチの前に行う。単独の `select` コマンドは 2026-11-05 に削除した。
 
 - 人気順の一覧をインストール数の下限（5,000）か API の終端まで読み、180 日以内更新、除外著者と slug 以外を並べる。順序は `ordering`（本番は `install-band-then-published`）。1 バッチは `maximumTargets`（本番 10）件。
 - 同じ版の Trial は 1 回（`previously-selected`）。版が上がれば戻す。探索の方法を変えて再開するときは `revisitPolicy.countTrialsFrom` に再開時刻を書き、それより前の Trial を数えない。
 - 凍結が `deferred` で止まった版は 7 日除外（`freeze-deferred`）、archive が拒否された版は版が上がるまで除外。探索 Lab の供給に失敗した版は `lab-provision-failed`。別のランナーが予約中の slug は `reserved-by-runner`。
 - 選定レポートは `selection-batch-bound` の artifact digest から Private Evidence の `selection-report.json` を辿る。`inspections[]` の `status` と `reasons` で、なぜ選ばれなかったかが分かる。読むのは slug・版・数字だけ。
-- WordPress 本体は `select` が WordPress.org の最新安定版を読み、host 設定の Lab image の版と比べる。違えば何も凍結せず `core-image-outdated` で止まる（ADR 0047）。
+- WordPress 本体は選定が WordPress.org の最新安定版を読み、host 設定の Lab image の版と比べる。違えば何も凍結せず `core-image-outdated` で止まる（ADR 0047）。
 
 ## 4. Trial を 1 つだけ回す
 
 校正や比較で、1 つの slug を版を固定して回すとき。本番の台帳に混ぜないため、別の `--state` を使う。
 
 ```sh
-harness campaign run <slug> --campaign <id> --config <campaign.json> --selection <selection.json> [--repeat <n>]
+harness campaign run <slug> --campaign <id> --config <campaign.json> --selection <selection.json>
 harness campaign resume --campaign <id> --run <runId> --config <campaign.json>
 harness ledger stops --campaign <id>
 harness ledger resumes --campaign <id>
@@ -72,7 +70,7 @@ harness research import --from <別の state dir> [--slug <slug>]
 ```
 
 - 選定方針は手動の形にする: `candidateSlugs` と `pinnedVersions`、`minimumActiveInstallations: 0`、`maximumTargets: 1`、`revisitPolicy` 無し。campaign 設定は本番の写しで、`resources` を 1 対象にし、`selectionPolicyPath` をその方針に向ける。
-- `--campaign` は 40 文字まで。`--repeat 3` は同じ Snapshot に別々の Trial ID を 3 つ作る。
+- `--campaign` は 40 文字まで。1 対象に 1 Trial で、探索 Lab はその Trial だけに付く。同じ Snapshot に複数の Trial を作る `--repeat` は、Lab 無しの Trial でしか使えなかったので 2026-11-05 に削除した。
 - `campaign resume` は `completed` 以外で止まった Root を、同じ Snapshot・同じ runtime profile・残りの制限時間で新しいサンドボックスに再開する。残りが 5 分未満、receipt に `session` が無い、別の run がやり直した後（`superseded`）は `not resumable: <理由>` で終了コード 3。
 - 台帳は `<state>/ledger.sqlite` の `ledger_events`。読み方は [agents/ledger-reading.md](agents/ledger-reading.md)。`node:sqlite` の `DatabaseSync` を `readOnly: true` で開く。
 - `research import` は、別の `--state`（bench など）で終わった Trial の研究 file を、この state の `discovery.priorResearch: same-target` の候補にする（ADR 0049 決定 D）。別の state は読み取り専用で開き、研究の本文は共有の work directory にあるものを digest で参照する。2 回目は何も書かない。

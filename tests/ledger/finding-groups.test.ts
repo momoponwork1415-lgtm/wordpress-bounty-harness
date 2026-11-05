@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -6,12 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { openState } from "../../src/cli/state.js";
-import {
-  canonicalDigest,
-  canonicalJson,
-} from "../../src/infrastructure/canonical-json.js";
-import { deriveWordPressLegacyGroupKeyCache } from "../../src/profiles/wordpress/discovery/finding-group-cache.js";
-import { serializeFindingGroupKeyCache } from "../../src/ledger/finding-group-key-cache.js";
+import { canonicalDigest } from "../../src/infrastructure/canonical-json.js";
 import {
   admitFindingGroup,
   overlapComponents,
@@ -44,67 +39,6 @@ describe("overlapComponents", () => {
 });
 
 describe("finding groups in the ledger", () => {
-  it("does not use a read-time legacy cache to change an admission event on retry", async () => {
-    const root = await mkdtemp(join(tmpdir(), "wbh-ledger-groups-"));
-    directories.push(root);
-    const stateDirectory = join(root, "state");
-    const { ledger, store: artifacts } = await openState(stateDirectory);
-    const artifactDigest = await artifacts.putFiles({
-      "finding.json": canonicalJson({
-        sourceTrace: [{ file: "includes/a.php", function: "handle", line: 2 }],
-      }),
-    });
-    const base = {
-      schemaVersion: 1 as const,
-      snapshotDigest: `sha256:${"a".repeat(64)}`,
-      occurredAt: "2026-10-28T00:00:00Z",
-    };
-    await ledger.append({
-      ...base,
-      campaignId: "old-campaign",
-      identity: "old-finding",
-      type: "finding-recorded",
-      findingId: "old-finding",
-      runId: "old-run",
-      category: "sqli",
-      artifacts: [{ kind: "finding", digest: artifactDigest }],
-    });
-    const cache = await deriveWordPressLegacyGroupKeyCache(ledger, artifacts);
-    const cachePath = join(root, "group-cache.json");
-    await writeFile(cachePath, serializeFindingGroupKeyCache(cache));
-    const cached = await openState(
-      stateDirectory,
-      {},
-      { findingGroupKeyCachePath: cachePath },
-    );
-    const input = {
-      campaignId: "new-campaign",
-      snapshotDigest: base.snapshotDigest,
-      findingId: "new-finding",
-      keys: [canonicalJson(["includes/a.php", "handle"])],
-    };
-    const withCache = admitFindingGroup(cached.ledger, input);
-    const withoutCache = admitFindingGroup(ledger, input);
-    expect(withCache).toEqual(withoutCache);
-    const candidate = {
-      ...base,
-      campaignId: input.campaignId,
-      identity: "new-finding-event",
-      type: "finding-recorded" as const,
-      findingId: input.findingId,
-      runId: "new-run",
-      category: "sqli",
-    };
-    expect(
-      await cached.ledger.append({ ...candidate, group: withCache }),
-    ).toEqual({
-      status: "appended",
-    });
-    expect(await ledger.append({ ...candidate, group: withoutCache })).toEqual({
-      status: "existing",
-    });
-  });
-
   it("keeps public group IDs distinct when campaigns reuse a Finding ID for different keys", async () => {
     const root = await mkdtemp(join(tmpdir(), "wbh-ledger-groups-"));
     directories.push(root);
@@ -144,54 +78,6 @@ describe("finding groups in the ledger", () => {
         canonicalDigest("key-two"),
       ]),
     ).toEqual([first.id, second.id]);
-  });
-
-  it("derives an old Finding's keys from Private Evidence without changing its event", async () => {
-    const root = await mkdtemp(join(tmpdir(), "wbh-ledger-groups-"));
-    directories.push(root);
-    const stateDirectory = join(root, "state");
-    const { ledger, store: artifacts } = await openState(stateDirectory);
-    const artifactDigest = await artifacts.putFiles({
-      "finding.json": canonicalJson({
-        sourceTrace: [{ file: "includes/a.php", function: "handle", line: 2 }],
-      }),
-    });
-    const base = {
-      schemaVersion: 1 as const,
-      campaignId: "old-campaign",
-      snapshotDigest: `sha256:${"a".repeat(64)}`,
-      occurredAt: "2026-10-28T00:00:00Z",
-    };
-    await ledger.append({
-      ...base,
-      identity: "old-finding",
-      type: "finding-recorded",
-      findingId: "old-finding",
-      runId: "old-run",
-      category: "sqli",
-      artifacts: [{ kind: "finding", digest: artifactDigest }],
-    });
-    const before = ledger.funnel("old-campaign");
-    expect(before.unkeyedFindings).toBe(1);
-    const cache = await deriveWordPressLegacyGroupKeyCache(ledger, artifacts);
-    const cachePath = join(root, "group-cache.json");
-    await writeFile(cachePath, serializeFindingGroupKeyCache(cache));
-    const projected = await openState(
-      stateDirectory,
-      {},
-      {
-        readOnly: true,
-        findingGroupKeyCachePath: cachePath,
-      },
-    );
-    expect(projected.ledger.funnel("old-campaign").unkeyedFindings).toBe(0);
-    expect(
-      projected.ledger.readAll({
-        campaignId: "old-campaign",
-        type: "finding-recorded",
-      })[0]?.event,
-    ).not.toHaveProperty("group");
-    expect(cache.get(artifactDigest)).toHaveLength(1);
   });
 
   it("shows one Snapshot group across campaigns and keeps a different Snapshot separate", async () => {
