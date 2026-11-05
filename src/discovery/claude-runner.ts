@@ -7,9 +7,6 @@ export const CLAUDE_RUNNER_DENIALS = {
   childLimit: "At most {n} children can run at once in this Trial.",
 } as const;
 
-export const claudeRunnerChildLimitDenial = (maxChildren: number): string =>
-  CLAUDE_RUNNER_DENIALS.childLimit.replace("{n}", String(maxChildren));
-
 /**
  * Runs inside the disposable gVisor container, never on the host. It drives
  * Claude Code through the Agent SDK pinned in the image: one Root session,

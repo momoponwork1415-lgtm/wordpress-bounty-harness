@@ -80,10 +80,11 @@ export type WordpressScopeAssessment = {
 };
 
 /** Load the dated, versioned decision data from the human-owned policy file. */
-export async function loadWordpressScopePolicy(
-  path: URL | string = new URL("./policy/programme-scope.md", import.meta.url),
-): Promise<WordpressScopePolicy> {
-  const markdown = await readFile(path, "utf8");
+export async function loadWordpressScopePolicy(): Promise<WordpressScopePolicy> {
+  const markdown = await readFile(
+    new URL("./policy/programme-scope.md", import.meta.url),
+    "utf8",
+  );
   const matches = [
     ...markdown.matchAll(/```json scope-policy-v1\n([\s\S]*?)\n```/g),
   ];

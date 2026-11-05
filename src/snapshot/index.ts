@@ -41,7 +41,6 @@ export const sourceManifestSchema = z.strictObject({
     .min(1),
 });
 
-export type SourceManifest = z.infer<typeof sourceManifestSchema>;
 export const sourceAcquisitionFailureKindSchema = z.enum([
   "dns",
   "connect-timeout",
