@@ -142,3 +142,6 @@ Codex の一発 sandbox も既存の役用の 4,096 MiB を使う。子のない
 
 本 ADR で足した決定のうち生きているものは無い。追記 1 の固定一覧だけが file として残り、その置き場と使い方は ADR 0043 が決める。
 
+## 追記 7（2026-11-05）: 制御の読み手と拒否文を削除
+
+所有者の 2026-11-05 の指示（「コードは削除でいい」）を受け、campaign の進み具合（`campaign-progress.ts` の `partitionedTrialOutcomes`）と連続ランナーの batch 判定（`continuous.ts` の `batchFacts`）が区画分配の run を Trial として数える分岐を消した。旧区画分配 campaign をやり直す運用は無い（追記 6）。追記 6 の「`Partitioned mode was removed in #685` で拒む」専用の拒否文も消し、`discovery.mode: "partitioned"` と役の設定は schema の一般拒否（enum の不一致と未知キー）で止める。台帳の event 型、funnel の集計、選定の履歴（`ledger-exclusions.ts` の `enumerate`）は読む側として残す。

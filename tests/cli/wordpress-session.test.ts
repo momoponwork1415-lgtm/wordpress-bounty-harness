@@ -111,7 +111,7 @@ describe("WordPress campaign session", () => {
     expect(session.setupFor(snapshot)).not.toHaveProperty("scenario");
   });
 
-  it("rejects a config that names a Lab scenario removed in #353 before building boundaries", async () => {
+  it("rejects a config with a retired key before building boundaries", async () => {
     const { open, boundaryCalls } = await fixture({
       config: {
         lab: {
@@ -122,7 +122,7 @@ describe("WordPress campaign session", () => {
         },
       },
     });
-    await expect(open()).rejects.toThrow("Lab scenarios were removed in #353");
+    await expect(open()).rejects.toThrow("scenarioId");
     expect(boundaryCalls).toHaveLength(0);
   });
 
@@ -247,16 +247,5 @@ describe("WordPress campaign session", () => {
     expect(session.config.selectionPolicyPath).toBe(override);
     expect(boundaryCalls[0]?.selectionPolicyPath).toBe(override);
     expect((await session.policy()).id).toBe("override-policy");
-  });
-});
-
-describe("discovery skills (ADR 0043, removed in the v26 cleanup)", () => {
-  it("refuses a campaign that names exploration skills", async () => {
-    const { open } = await fixture({
-      config: { discovery: { lab: "none", skills: ["wbh-recon-v3"] } },
-    });
-    await expect(open()).rejects.toThrow(
-      "Exploration skills were removed in the v26 cleanup",
-    );
   });
 });

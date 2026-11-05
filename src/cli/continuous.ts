@@ -633,27 +633,9 @@ export function exploreTrials(
 
 /** Completed Trials, and whether every skipped target was refused. */
 function batchFacts(deps: ContinuousDeps, campaignId: string) {
-  const completedExplore = exploreTrials(deps.ledger, {
+  const completed = exploreTrials(deps.ledger, {
     campaignId,
   }).finished.filter((outcome) => outcome === "completed").length;
-  const enumerated = new Set(
-    readAll(deps.ledger, { campaignId, type: "discovery-run-started" })
-      .filter(
-        (event) =>
-          event.type === "discovery-run-started" &&
-          event.runKind === "enumerate",
-      )
-      .map((event) => event.snapshotDigest),
-  );
-  const completedPartitioned = readAll(deps.ledger, {
-    campaignId,
-    type: "discovery-concluded",
-  }).filter(
-    (event) =>
-      event.type === "discovery-concluded" &&
-      enumerated.has(event.snapshotDigest),
-  ).length;
-  const completed = completedExplore + completedPartitioned;
   const skips = readAll(deps.ledger, { campaignId, type: "target-skipped" });
   const refusedAll =
     completed === 0 &&
