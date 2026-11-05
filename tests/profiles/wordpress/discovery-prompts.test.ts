@@ -21,7 +21,6 @@ import {
   WORDPRESS_TRUST_BOUNDARIES,
   WORDPRESS_TRUST_BOUNDARY,
   wordPressTrustBoundaryId,
-  WORDPRESS_VERIFIER_PROMPT_ID,
 } from "../../../src/profiles/wordpress/prompts/index.js";
 
 const promptsUrl = new URL(
@@ -85,7 +84,6 @@ describe("WordPress prompt table", () => {
     expect(WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS).toEqual([
       "wp2shell-bounty-v26-wide",
     ]);
-    expect(WORDPRESS_VERIFIER_PROMPT_ID).toBe("verifier-v8");
     expect(WORDPRESS_TRUST_BOUNDARY.id).toBe("trust-boundary-v2");
     expect(wordPressTrustBoundaryId("trust-boundary-v2")).toBe(
       "trust-boundary-v2",

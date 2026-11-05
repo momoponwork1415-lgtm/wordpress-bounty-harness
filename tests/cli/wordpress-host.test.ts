@@ -171,9 +171,9 @@ describe("WordPress host entry", () => {
       "--config",
       configPath,
     ]);
-    expect(result.code).toBe(1);
+    expect(result.code).toBe(2);
     expect(result.stderr.join("\n")).toContain(
-      "The legacy Codex Verifier is retired",
+      "review reverify runs only through the verification skill; pass --handoff <dir>",
     );
     expect(calls).toEqual([]);
     await expect(lstat(join(root, "work"))).rejects.toMatchObject({

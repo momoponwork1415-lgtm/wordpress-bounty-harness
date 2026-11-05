@@ -39,7 +39,6 @@ import type {
 import {
   WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS,
   WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS,
-  WORDPRESS_VERIFIER_PROMPT_ID,
   wordPressDiscoveryModeOf,
 } from "../profiles/wordpress/prompts/index.js";
 import type {
@@ -116,9 +115,6 @@ const discoveryLabSchema = z
     maxObservations: maxObservations ?? 20,
     maxLookups: maxLookups ?? 60,
   }));
-
-export const LEGACY_VERIFIER_RETIRED =
-  "The legacy Codex Verifier is retired; a verification skill handoff must be explicitly requested";
 
 /** Human-edited, Git-tracked run configuration. It carries no credentials or keys. */
 const commonCampaignFields = {
@@ -379,8 +375,6 @@ export interface WordPressCampaignBoundaries {
     readonly executor: WordPressCampaignBoundaries["executor"];
   };
   readonly attachments: ProviderAttachmentStore;
-  /** Legacy injected adapters may provide one; the real host no longer does. */
-  readonly verifier?: Verifier<WordPressFinding, WordPressLabHandle>;
   /** `verify next --handoff`: a Verifier that hands the Lab to a skill on the host (#352). */
   readonly handoffVerifier?: (
     handoff: VerifierHandoff,
@@ -533,13 +527,12 @@ function verificationFor(
   boundaries: WordPressCampaignBoundaries,
   handoff: VerifierHandoff | undefined,
 ): WordPressVerification {
-  if (handoff !== undefined && boundaries.handoffVerifier === undefined)
+  // The CLI requires `--handoff` for every verifying command (ADR 0035).
+  if (handoff === undefined)
+    throw new Error("Verification runs only through a skill handoff");
+  if (boundaries.handoffVerifier === undefined)
     throw new Error("This profile has no handoff Verifier");
-  const verifier =
-    handoff === undefined
-      ? boundaries.verifier
-      : boundaries.handoffVerifier!(handoff);
-  if (verifier === undefined) throw new Error(LEGACY_VERIFIER_RETIRED);
+  const verifier = boundaries.handoffVerifier(handoff);
   return new Verification({
     ledger: state.ledger,
     store: state.store,
@@ -553,17 +546,14 @@ function verificationFor(
       recordVideo: process.env.WBH_RECORD_VIDEO === "1",
     }),
     readFinding: readWordPressFinding,
-    // The skill id is the prompt version of a handoff run; the ledger tells the two apart.
-    promptVersion:
-      handoff === undefined
-        ? WORDPRESS_VERIFIER_PROMPT_ID
-        : WBH_VERIFY_SKILL_ID,
+    // The skill id is the prompt version of a handoff run.
+    promptVersion: WBH_VERIFY_SKILL_ID,
     // Whole-site before / after diff around the Verifier run; review material, not proof (#186).
     stateObserver: createWordPressLabStateObserver({
       store: state.store,
       lab: boundaries.lab,
     }),
-    ...(handoff?.egress === undefined ? {} : { labEgress: handoff.egress }),
+    ...(handoff.egress === undefined ? {} : { labEgress: handoff.egress }),
     clock: state.clock,
   });
 }
@@ -599,7 +589,7 @@ export async function openWordPressCampaignSession(
     readonly configPath: string;
     /** Replaces the campaign config's selection policy path in process. */
     readonly selectionPolicyPath?: string;
-    /** Verifies through the handoff transport instead of the Codex Verifier. */
+    /** The skill handoff; `verify next` and `review reverify` always pass one. */
     readonly handoff?: VerifierHandoff;
   },
 ): Promise<WordPressCampaignSession> {
