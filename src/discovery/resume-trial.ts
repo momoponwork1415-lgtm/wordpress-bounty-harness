@@ -417,13 +417,25 @@ export async function assessTrialResume(options: {
       : await readNativeRunReceipt(options.evidence, receiptReference.digest);
   if (receipt === undefined) return refused("receipt-unavailable");
   const chain = segmentChain(starts, options.runId);
-  const session =
+  const own =
     receipt.session ??
     (await claudeSessionOfSealedDiagnostic(
       options.attachments,
       receipt,
       chain.length - 1,
     ));
+  // A resumed segment refused before its model ran (2026-11-06: every Lab
+  // resume, #832) recorded no session of its own; the Trial continues from
+  // the latest earlier segment that did, with that segment's research.
+  const carried =
+    own === undefined && started.resumesRun !== undefined
+      ? await latestRecordedSession(
+          options.evidence,
+          chain.slice(0, -1),
+          finishes,
+        )
+      : undefined;
+  const session = own ?? carried?.session;
   if (session === undefined) return refused("session-unrecorded");
   if (receipt.runtimeProfileDigest !== options.profileDigest)
     return refused("runtime-profile-differs", receipt.runtimeProfileDigest);
@@ -440,7 +452,7 @@ export async function assessTrialResume(options: {
   if (sessions === undefined) return refused("session-evidence-missing");
   const research = await restoreResearch(
     options.attachments,
-    finished.researchArtifact?.digest,
+    (carried?.finished ?? finished).researchArtifact?.digest,
   );
   const original = chain[0] ?? started;
   return {
@@ -490,6 +502,28 @@ export async function assessTrialResume(options: {
         : {}),
     },
   };
+}
+
+/** The session and finish of the latest segment in `earlier` whose receipt recorded a session. */
+async function latestRecordedSession(
+  evidence: Pick<PrivateArtifactStore, "readJson">,
+  earlier: readonly StartedEvent[],
+  finishes: ReadonlyMap<string, FinishedEvent>,
+): Promise<
+  | { readonly session: NativeRunSession; readonly finished: FinishedEvent }
+  | undefined
+> {
+  for (const segment of [...earlier].reverse()) {
+    const finished = finishes.get(segment.runId);
+    const reference = finished?.artifacts.find(
+      (artifact) => artifact.kind === "native-run-receipt",
+    );
+    if (finished === undefined || reference === undefined) continue;
+    const receipt = await readNativeRunReceipt(evidence, reference.digest);
+    if (receipt?.session !== undefined)
+      return { session: receipt.session, finished };
+  }
+  return undefined;
 }
 
 /**
