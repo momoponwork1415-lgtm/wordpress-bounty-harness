@@ -530,6 +530,41 @@ describe("resumability rule (ADR 0036)", () => {
     }
   });
 
+  it("resumes a segment refused before its model ran from the earlier segment's session (#832)", async () => {
+    const stores = await open();
+    const { session } = await recordRun(stores, { runId: "run-1" });
+    await recordRun(stores, {
+      runId: "run-1-resume",
+      trialId: "run-1",
+      resumesRun: "run-1",
+      resumeSegment: 1,
+      session: "none",
+      research: false,
+      reason: "schema",
+      reasonDetail: "policy",
+      wallTimeMs: 0,
+    });
+    const assessment = await assess(stores, { runId: "run-1-resume" });
+    expect(assessment).toMatchObject({
+      status: "resumable",
+      plan: {
+        originalRunId: "run-1",
+        resumesRun: "run-1-resume",
+        segment: 2,
+        consumedWallMs: 10 * 60_000,
+        resume: { threadId: session!.rootThreadId, segment: 2 },
+        researchRestored: true,
+      },
+    });
+    // An original run without a session stays unresumable.
+    const legacy = await open();
+    await recordRun(legacy, { runId: "run-1", session: "none" });
+    expect(await assess(legacy)).toMatchObject({
+      status: "refused",
+      reason: "session-unrecorded",
+    });
+  });
+
   it("refuses an unknown run, a prompt without the resume paragraph, and a run already resumed", async () => {
     const stores = await open();
     expect(await assess(stores, { runId: "missing" })).toMatchObject({
