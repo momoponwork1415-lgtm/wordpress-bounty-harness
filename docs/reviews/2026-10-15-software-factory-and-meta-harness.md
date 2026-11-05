@@ -46,9 +46,9 @@
 | 逆圧（back-pressure） | 人間レビュー batch は上限 3 件（最終設計）。runner は `no-progress` / `errors` 等 7 種で止まる。**開発側の PR 待ち数には上限が無い**（2026-10-14 は 1 日で #248〜#260 の 13 本） | #238 comment、#242 |
 | monitor | 週末に見る数字（DEVELOPMENT 第 7 節）。設計レビューは手動で `docs/reviews/` に置き、#270 のように Issue へ戻す。**定期の形にはなっていない** | [#270](https://github.com/momoponwork1415-lgtm/wordpress-bounty-harness/issues/270) |
 | tune（制約の変更は提案だけ） | 報告 → 所有者の決定 → ADR → PR の順。ADR は週 1 本まで。止めた案は PARKING に 1 行 | DEVELOPMENT 第 6 節、[PARKING](../PARKING.md) |
-| 評価集合（score ＋ trace） | 既知 7 件の再発見 catalog、TranslatePress 開発セット、週次の実 Lab smoke（3.3.1 ATO 1 件）。台帳の funnel / usage / 停止理由 | [docs/evaluation/](../evaluation/README.md)、[OPERATIONS 第 2 節](../OPERATIONS.md) |
+| 評価集合（score ＋ trace） | 既知 7 件の再発見 catalog、TranslatePress 開発セット、週次の実 Lab smoke（3.3.1 ATO 1 件）。台帳の funnel / usage / 停止理由 | [docs/evaluation/](../../history/evaluation/README.md)、[OPERATIONS 第 2 節](../OPERATIONS.md) |
 | 1 変更 1 実験、holdout | 「週の問い 1 つ、PR 1 本」。実験軸は opt-in 設定 1 つと profile file 1 つに閉じる。holdout に相当するのは**翌週の本番**しか無い | DEVELOPMENT 第 3・5 節 |
-| 失敗から学ぶ | LESSONS 13 項、experiments.md に世代横断で 1 行ずつ | [LESSONS](../LESSONS.md)、[experiments.md](../knowledge/experiments.md) |
+| 失敗から学ぶ | LESSONS 13 項、experiments.md に世代横断で 1 行ずつ | [LESSONS](../LESSONS.md)、[experiments.md](../../history/knowledge/experiments.md) |
 
 結論: software factory の 5 要素のうち 4 つは名前が違うだけで既にある。無いのは「開発側の逆圧」と「monitor / tune を定期の工程として持つこと」。meta-harness の 4 要素のうち「評価集合」と「1 変更 1 実験」は粗い形であり、「安価な評価」と「holdout」が無い。
 

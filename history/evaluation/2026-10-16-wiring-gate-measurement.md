@@ -41,4 +41,4 @@ Root wall は台帳の `wallTimeMs`。子 3 run はどの case も Root より�
 
 - PR #263 #264 #266 #267 #269 の「測った数字」にこの表を貼る。#266 #267 #269 は #265 と #268 の修正（Codex、2026-10-16 の依頼文）を取り込んだ後に merge する。
 - 再発見の評価は #127 に comment。公開記録との照合は所有者が `review inspect` で行い、`publicRecordMatch` を更新する。
-- 手順は [docs/agents/measurement.md](../agents/measurement.md)。
+- 手順は [docs/agents/measurement.md](../../docs/agents/measurement.md)。

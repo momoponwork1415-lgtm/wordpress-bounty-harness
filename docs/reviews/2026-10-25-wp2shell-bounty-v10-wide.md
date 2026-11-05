@@ -8,7 +8,7 @@
 - digest: `sha256:b886625bc576196e38879b3dd85bd25bc5d75e5e960c79b4d8aaec8c1e494a18`
 - 出力契約: Harness 生成の v4 節（v10 と同じ、ADR 0019）
 
-出典: v10 の本文（[v10 の文書](2026-10-25-wp2shell-bounty-v10.md)）と、[出典対照表](2026-10-13-prompt-source-comparison.md) 第 2 節の W1（所有者改良の wp2shell 雛形、[取り込んだ原本](../knowledge/imported/wp2shell/PROMPT.template.txt)）と P1（whitebox v1.7）の列。出力契約、trust 境界、Programme Boundary、source の場所、研究 notes の場所は、v10 と同じく Harness が別節として渡す。
+出典: v10 の本文（[v10 の文書](2026-10-25-wp2shell-bounty-v10.md)）と、[出典対照表](2026-10-13-prompt-source-comparison.md) 第 2 節の W1（所有者改良の wp2shell 雛形、[取り込んだ原本](../../history/knowledge/imported/wp2shell/PROMPT.template.txt)）と P1（whitebox v1.7）の列。出力契約、trust 境界、Programme Boundary、source の場所、研究 notes の場所は、v10 と同じく Harness が別節として渡す。
 
 ## 0. v10 との差分
 
@@ -119,7 +119,7 @@ Harness が生成して渡す節（出力契約 v4、trust 境界、Programme Bo
 - 種別別の候補数
 - Programme 外（parked）の比率
 
-本番の数字は、まとまった時点で [docs/knowledge/experiments.md](../knowledge/experiments.md) へ行を足す。この PR では足さない。
+本番の数字は、まとまった時点で [docs/knowledge/experiments.md](../../history/knowledge/experiments.md) へ行を足す。この PR では足さない。
 
 ## 5. 戻し方
 

@@ -4,10 +4,10 @@
 
 ## 事実
 
-- v8 は Root が分担・統合し、子は独立した着眼点から source を調べ、具体的な経路を反証する。子の Finding と Lead は Root の最終報告と独立に保存される。[目的文](../../src/profiles/wordpress/prompts/wp2shell-bounty-v8.md)、[SPEC §6](../SPEC.md)
-- v8 の5対象はすべて Root・子とも `gpt-6-sol`。1対象が `high`、4対象が `xhigh` で、子だけ別モデルの比較はない。子4体を含む全 agent の観測読取は2,191〜4,314回、Root は377〜651回だった。この数字は読取の延べ回数で、成果の質ではない。[v8 評価](../evaluation/2026-10-19-v8-five-target-rediscovery.md)
-- 旧配線 Trial では、Root が時間切れになっても子の Finding 1件が後続の判定器で `runtime-confirmed` になった。子は単なる索引係ではない。[配線計測](../evaluation/2026-10-16-wiring-gate-measurement.md)
-- 過去の安価モデル実験には既知事例の部分的な再発見があるが、v8 の子だけ Luna にする案や未知脆弱性の発見率は測っていない。[実験一覧](../knowledge/experiments.md)
+- v8 は Root が分担・統合し、子は独立した着眼点から source を調べ、具体的な経路を反証する。子の Finding と Lead は Root の最終報告と独立に保存される。[目的文](../../history/prompts/objectives/wp2shell-bounty-v8.md)、[SPEC §6](../SPEC.md)
+- v8 の5対象はすべて Root・子とも `gpt-6-sol`。1対象が `high`、4対象が `xhigh` で、子だけ別モデルの比較はない。子4体を含む全 agent の観測読取は2,191〜4,314回、Root は377〜651回だった。この数字は読取の延べ回数で、成果の質ではない。[v8 評価](../../history/evaluation/2026-10-19-v8-five-target-rediscovery.md)
+- 旧配線 Trial では、Root が時間切れになっても子の Finding 1件が後続の判定器で `runtime-confirmed` になった。子は単なる索引係ではない。[配線計測](../../history/evaluation/2026-10-16-wiring-gate-measurement.md)
+- 過去の安価モデル実験には既知事例の部分的な再発見があるが、v8 の子だけ Luna にする案や未知脆弱性の発見率は測っていない。[実験一覧](../../history/knowledge/experiments.md)
 - OpenAI Docs は Luna を範囲の明確な反復作業向け、Sol を複雑な技術作業向けの出発点とし、同じ入力で比較して品質基準を満たす最も軽い設定を選ぶよう勧める。これは本 Harness の子の適格性を保証するものではない。[モデル選択](https://developers.openai.com/api/docs/guides/model-selection)、[reasoning effort](https://developers.openai.com/api/docs/guides/deployment-checklist)
 - 現行の本番協調 profile は `gpt-6-sol` と Daybreak Blue を要求し、Root・子の model と effort の一致も admission と実行後の検査で要求する。子だけ Luna は設定値の変更だけでは実行できない。[profile](../../src/discovery/agent-runtime-profile.ts)、[子の検査](../../src/discovery/codex-native-agent-runtime.ts)、[SPEC §6](../SPEC.md)
 - 費用は現状 Codex CLI の月額サブスクリプション経由。子を Luna にしても直ちに API 請求が減るわけではない。比較すべき便益は quota、provider 上限、遅延、単位時間当たりの確認済み成果である。[SPEC §14](../SPEC.md)

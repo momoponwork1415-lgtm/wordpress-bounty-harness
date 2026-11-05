@@ -23,7 +23,7 @@
 
 ベンチマークは、所有者が発見者になっている公開 7 件だけである（ADR 0027、所有者決定 2026-10-16）。これを入れた開発セットが 6 case ある。brizy 2.8.11、relevanssi 4.28.3、simply-schedule-appointments 1.6.10.0（ssa）、translatepress-multilingual 3.2.6（tp326）、custom-facebook-feed 4.13.0（cff）、unlimited-elements-for-elementor 2.0.16（ue）。所有者の OK 基準（2026-10-26）は「scope 内 Finding が 1 件以上の case の数」で、公開経路一致の数を併記する。PR テンプレートは M1〜M6 の名前で数字を出すよう求めている（#560）。
 
-開発セットの版ごとの結果は次のとおり。v8 は [docs/evaluation/2026-10-19-v8-five-target-rediscovery.md](../evaluation/2026-10-19-v8-five-target-rediscovery.md)、wide は開発台帳から取った。
+開発セットの版ごとの結果は次のとおり。v8 は [docs/evaluation/2026-10-19-v8-five-target-rediscovery.md](../../history/evaluation/2026-10-19-v8-five-target-rediscovery.md)、wide は開発台帳から取った。
 
 | 版（mode） | run | brizy | relevanssi | ssa | tp326 | cff | ue | 1 件以上 | 公開経路一致 | Finding（group） | common-usage | Root wall |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- | --- | --- |
@@ -73,7 +73,7 @@ prompt の採否に使う閾値を、次のように段に分けて置く。ど�
 
 ### C.1 数字
 
-Trial は `trialId`、Root run は `runKind != child` の run、子は `parentRunId` で数えた。「子の読取」は、Trial の子 run の `observed.filesRead` を足したもので、読んだ延べ回数の下限である。Claude の Root の読取は観測できていない（[docs/evaluation/2026-10-20-child-agent-shape-by-runtime.md](../evaluation/2026-10-20-child-agent-shape-by-runtime.md)）。
+Trial は `trialId`、Root run は `runKind != child` の run、子は `parentRunId` で数えた。「子の読取」は、Trial の子 run の `observed.filesRead` を足したもので、読んだ延べ回数の下限である。Claude の Root の読取は観測できていない（[docs/evaluation/2026-10-20-child-agent-shape-by-runtime.md](../../history/evaluation/2026-10-20-child-agent-shape-by-runtime.md)）。
 
 | 系統と場所 | Trial | completed | Trial wall 中央値 | 子の数 / Trial（中央値、最大） | 子の読取 / Trial（中央値） | Finding | Finding が出た Trial |
 | --- | ---: | ---: | --- | --- | ---: | ---: | ---: |

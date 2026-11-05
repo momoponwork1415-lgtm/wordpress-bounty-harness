@@ -24,13 +24,13 @@ Codex CLI と provider が内部で持つ system prompt、Root が実行中に�
 
 | 設定 ID / 表示名 | 英語原文 | 全文の日本語訳 |
 | --- | --- | --- |
-| `wbh-audit-v2` / `wbh-audit` | [`SKILL.md`](../../src/profiles/wordpress/prompts/skills/experimental/wbh-audit-v2/SKILL.md) | [境界、depth、六段階](2026-11-04-cloudflare-audit-gate-v2.md#L230) |
-| 同スキルの偵察 | [`reconnaissance.md`](../../src/profiles/wordpress/prompts/skills/experimental/wbh-audit-v2/reconnaissance.md) | [偵察と REGISTRY](2026-11-04-cloudflare-audit-gate-v2.md#L270) |
-| 同スキルの探索 | [`hunting.md`](../../src/profiles/wordpress/prompts/skills/experimental/wbh-audit-v2/hunting.md) | [hunter と漏れ点検](2026-11-04-cloudflare-audit-gate-v2.md#L308) |
-| 同スキルの WordPress 類型 | [`wordpress-classes.md`](../../src/profiles/wordpress/prompts/skills/experimental/wbh-audit-v2/wordpress-classes.md) | [保存後の出力、SQL、その他の類型](2026-11-04-cloudflare-audit-gate-v2.md#L349) |
-| 同スキルの点検・報告 | [`validation-and-reporting.md`](../../src/profiles/wordpress/prompts/skills/experimental/wbh-audit-v2/validation-and-reporting.md) | [反証、草稿、最終点検、報告](2026-11-04-cloudflare-audit-gate-v2.md#L385) |
-| `wbh-setup-v1` / `wbh-setup` | [`SKILL.md`](../../src/profiles/wordpress/prompts/skills/wbh-setup-v1/SKILL.md) | [通常利用の Lab setup の全文訳](2026-11-01-exploration-skills-wbh-setup-v1.md#L56) |
-| `wbh-lab-v1` / `wbh-lab` | [`SKILL.md`](../../src/profiles/wordpress/prompts/skills/wbh-lab-v1/SKILL.md) | [marker、Find / Query / Trace / Observe の全文訳](2026-11-02-exploration-skills-wbh-lab-v1.md#L68) |
+| `wbh-audit-v2` / `wbh-audit` | [`SKILL.md`](../../history/skills/experimental/wbh-audit-v2/SKILL.md) | [境界、depth、六段階](2026-11-04-cloudflare-audit-gate-v2.md#L230) |
+| 同スキルの偵察 | [`reconnaissance.md`](../../history/skills/experimental/wbh-audit-v2/reconnaissance.md) | [偵察と REGISTRY](2026-11-04-cloudflare-audit-gate-v2.md#L270) |
+| 同スキルの探索 | [`hunting.md`](../../history/skills/experimental/wbh-audit-v2/hunting.md) | [hunter と漏れ点検](2026-11-04-cloudflare-audit-gate-v2.md#L308) |
+| 同スキルの WordPress 類型 | [`wordpress-classes.md`](../../history/skills/experimental/wbh-audit-v2/wordpress-classes.md) | [保存後の出力、SQL、その他の類型](2026-11-04-cloudflare-audit-gate-v2.md#L349) |
+| 同スキルの点検・報告 | [`validation-and-reporting.md`](../../history/skills/experimental/wbh-audit-v2/validation-and-reporting.md) | [反証、草稿、最終点検、報告](2026-11-04-cloudflare-audit-gate-v2.md#L385) |
+| `wbh-setup-v1` / `wbh-setup` | [`SKILL.md`](../../history/skills/wbh-setup-v1/SKILL.md) | [通常利用の Lab setup の全文訳](2026-11-01-exploration-skills-wbh-setup-v1.md#L56) |
+| `wbh-lab-v1` / `wbh-lab` | [`SKILL.md`](../../history/skills/wbh-lab-v1/SKILL.md) | [marker、Find / Query / Trace / Observe の全文訳](2026-11-02-exploration-skills-wbh-lab-v1.md#L68) |
 
 任意の `wbh-tools-v1` を追加する Trial の全文訳は [wbh-tools-v1 の記録](2026-10-30-exploration-skills-wbh-tools-v1.md) にある。`wbh-recon-v3` は v25 と同居を拒否するため、この入力一式に含めない。`upstream-license.txt` はライセンス表示で監査手順ではない。原文と参照用の訳は [gate v2 の記録](2026-11-04-cloudflare-audit-gate-v2.md#L477) にある。
 

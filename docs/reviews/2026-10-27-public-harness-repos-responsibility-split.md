@@ -15,7 +15,7 @@
 | [2026-10-23 横断調査](2026-10-23-public-vulnerability-harness-landscape.md) | 公開コードと運用の全体像 | Visa VVAH、VulnHunter、Shannon、Crucible、GCP reference-harness など。今回は触れない |
 | [2026-10-24 Intruder 以降の構成](2026-10-24-recent-ai-security-discovery-architectures.md)、[2026-10-24 候補選別の分担](2026-10-24-validation-screening-patterns.md) | model 分担と選別の位置 | Shopify、AVDH、Night-Wolf、Quarkslab、HackerOne、AWS。Shopify と AVDH は今回一次資料を読み直した |
 
-前世代の知識（[reference-harness-observability.md](../knowledge/imported/09-wordpress-harness/knowledge/reference-harness-observability.md)、2026-09）も同じ 3 repo を読んでいる。
+前世代の知識（[reference-harness-observability.md](../../history/knowledge/imported/09-wordpress-harness/knowledge/reference-harness-observability.md)、2026-09）も同じ 3 repo を読んでいる。
 
 ## 1. 結論
 

@@ -162,7 +162,7 @@ Issue #528（2026-10-25）は方向を PRISM 型（幅優先）に固定し、Ar
 | runtime | `run.lab{endpoint, networkName, internalIp, database}` を受け、broker の grant を Lab の network に置き、sandbox に `--add-host wordpress:<ip>` を渡す配線が両 runtime に残る | [`codex-native-agent-runtime.ts:349-353, 1341, 1758`](../../src/discovery/codex-native-agent-runtime.ts)、[`claude-native-agent-runtime.ts:362-364, 458-460`](../../src/discovery/claude-native-agent-runtime.ts)、[`codex-gvisor-sandbox.ts:1004-1011`](../../src/discovery/codex-gvisor-sandbox.ts) |
 | prompt | `## Lab` 節（endpoint、account、RO DB）の生成が残る | [`wordpress.ts:471-484`](../../src/cli/wordpress.ts) |
 | 台帳 | `labAttached`、`labAccess`、`lab-provisioned{purpose:"discovery"}` | [`ledger/index.ts:58, 72-73, 126-128`](../../src/ledger/index.ts) |
-| 実測 | Lab 付きの旧 Trial は Lab 要求 0、DB query 0（Unlimited Elements r2） | [10-19 再発見](../evaluation/2026-10-19-v8-five-target-rediscovery.md) |
+| 実測 | Lab 付きの旧 Trial は Lab 要求 0、DB query 0（Unlimited Elements r2） | [10-19 再発見](../../history/evaluation/2026-10-19-v8-five-target-rediscovery.md) |
 | 規則 | ADR 0003 は accepted のまま。SPEC §6「許可する操作: 固定 source の読み取り、Lab への HTTP、Lab DB の RO account」 | [ADR 0003](../adr/0003-discovery-may-execute-target-inside-lab.md)、[SPEC §6](../SPEC.md) |
 
 「Lab を付けても使われなかった」は、v5〜v8 の目的文が Lab の使い方を一切書かず、`## Lab` 節も endpoint と account を列挙するだけだったことと切り離せない。D の設計では、Lab の使い方の指示を Harness 生成の節に置く（§6.4）。

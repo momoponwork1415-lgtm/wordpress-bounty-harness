@@ -12,12 +12,12 @@
 
 | 記録時点 | 観測 | 読み方 |
 | --- | --- | --- |
-| v8 の公開済み開発対象 5 Trial（10/18–19） | 4 件が正常完了し、Finding 14 件、Lead 12 件。TranslatePress の候補 3 件が後続判定器で `runtime-confirmed` | 探索と判定器の配線・候補生成能力を示す。未知の発見率も公開事例との経路一致率も示さない。[評価記録](../evaluation/2026-10-19-v8-five-target-rediscovery.md) |
+| v8 の公開済み開発対象 5 Trial（10/18–19） | 4 件が正常完了し、Finding 14 件、Lead 12 件。TranslatePress の候補 3 件が後続判定器で `runtime-confirmed` | 探索と判定器の配線・候補生成能力を示す。未知の発見率も公開事例との経路一致率も示さない。[評価記録](../../history/evaluation/2026-10-19-v8-five-target-rediscovery.md) |
 | 10/18–20 の本番の切片 | Finding 42 件、Lead 465 件。旧自動検証 40 試行は confirmed 0、handoff 22 試行は confirmed 3。review の決定は 0 | この時点の主な滞留は探索の後ろにあった。現在の live 件数とは扱わない。[設計課題の記録](2026-10-20-design-issues-from-production-results.md) |
 | 10/21 の本番確認 | 選定 136 対象中 130 対象が Root に到達。正常完了 116 Trial、Finding 69 件、Lead 714 件。provider 拒否と quota が残課題 | 選定から探索は継続可能。Finding 生件数は重複排除・検証・提出の成果ではない。[安定性の確認](2026-10-21-selection-to-discovery-check.md) |
-| 子モデルの 7 対象比較（10/21） | Root Opus＋子 Sonnet と子 Haiku は両方 6/7 完了。Sonnet は Finding 25・出力 3.62M token、Haiku は Finding 21・出力 7.90M token | 各対象 1 Trial で重複排除と検証は未実施。小さいモデルが節約になるとの判断はできず、所有者は子 Sonnet を採用した。[実験記録](../evaluation/2026-10-21-child-model-experiment.md) |
+| 子モデルの 7 対象比較（10/21） | Root Opus＋子 Sonnet と子 Haiku は両方 6/7 完了。Sonnet は Finding 25・出力 3.62M token、Haiku は Finding 21・出力 7.90M token | 各対象 1 Trial で重複排除と検証は未実施。小さいモデルが節約になるとの判断はできず、所有者は子 Sonnet を採用した。[実験記録](../../history/evaluation/2026-10-21-child-model-experiment.md) |
 
-`filesRead` は Claude の Read ツールを十分に数えず、Claude の入力の大半が `cachedInputTokens` に入る。したがって runtime をまたぐ「読んだファイル数」や非 cache 入力 token の単純比較で探索効率を決めない。[子 agent 形状の評価](../evaluation/2026-10-20-child-agent-shape-by-runtime.md)。また v8 のほとんどの正常 Trial は 60–70 分で終了しており、最低時間の後に増えた有効な経路数はまだ測れていない。[本番設計課題](2026-10-20-design-issues-from-production-results.md)。
+`filesRead` は Claude の Read ツールを十分に数えず、Claude の入力の大半が `cachedInputTokens` に入る。したがって runtime をまたぐ「読んだファイル数」や非 cache 入力 token の単純比較で探索効率を決めない。[子 agent 形状の評価](../../history/evaluation/2026-10-20-child-agent-shape-by-runtime.md)。また v8 のほとんどの正常 Trial は 60–70 分で終了しており、最低時間の後に増えた有効な経路数はまだ測れていない。[本番設計課題](2026-10-20-design-issues-from-production-results.md)。
 
 ## 外部資料が示すこと
 
@@ -66,7 +66,7 @@
 | いま | v8 の本番探索を新規対象で続け、ADR 0038 の 6 段を 1 Finding で最後まで通す | どの段に何分・何件滞留するか。判定器の `incomplete` も観測を添えてレビューへ届ける。外部送信は正確な候補・文案・送信先への承認に結び付ける。 |
 | いま、読み取り専用 | 既存の台帳と封印済み出力から Trial の完走率・停止理由、重複を除いた source 経路、各段への到達、operator の所要時間、wall、出力・cache token、provider 利用を同じ cohort で集計する | 現状の `filesRead` と非 cache 入力 token は runtime 間の比較に使えない。子同士の仮説重複、60 分以降に増えた経路、Lead が Finding に育った割合は未測定。経路の意味上の重複や発見時刻は台帳メタデータだけでは判定できず、必要なら Private Evidence 内の transcript を標本確認する。未公開本文はこの文書へ転記しない。[SPEC §10](../SPEC.md)。 |
 | 6 段の通過後 | **探索の最初の 1 軸は、重複・根拠不足が主因なら prompt の source 経路追跡を検討する。** 旧 `bounded-wp2shell/v1.7` にあった前方・後方・保存先をまたぐ追跡を、現在の v8 と対照する。ただし事前索引、対象固有名、脆弱性が必ずあるという前提は足さない。 | 旧版の成功例は対象・時期・runtime が異なり、改善の因果根拠ではない。[過去の出典比較](2026-10-13-prompt-source-comparison.md)、[LESSONS 1–2, 14](../LESSONS.md)。prompt を変えるなら版と digest を上げ、出典対照表を作る。 |
-| 6 段の通過後 | token / quota が主因なら、既存の子 model 構成または同一 Trial 内の異質な役割を **別の 1 軸**として比較する。Strix を別 run として同じ対象に重ねる案は、追加予算と現在の 1 Trial 規則の改訂を要する。 | Sonnet / Haiku の既存比較では小さい子の節約効果が出ていない。[子モデル実験](../evaluation/2026-10-21-child-model-experiment.md)。別 model・別 Harness を併用するときは、独立したユニーク経路の増分と検証・レビューへの到達を費用込みで見る。 |
+| 6 段の通過後 | token / quota が主因なら、既存の子 model 構成または同一 Trial 内の異質な役割を **別の 1 軸**として比較する。Strix を別 run として同じ対象に重ねる案は、追加予算と現在の 1 Trial 規則の改訂を要する。 | Sonnet / Haiku の既存比較では小さい子の節約効果が出ていない。[子モデル実験](../../history/evaluation/2026-10-21-child-model-experiment.md)。別 model・別 Harness を併用するときは、独立したユニーク経路の増分と検証・レビューへの到達を費用込みで見る。 |
 
 探索変更を試す際は、[DEVELOPMENT §5](../DEVELOPMENT.md) の異なる対象の初回 Trial 最低 3 件というゲートを守る。方式間の比較が承認されたら、各対象の比較条件で Snapshot・runtime・制限時間・出力契約を揃え、変える軸を一つにする。既知事例の評価には答え・PoC・修正差分を agent に渡さない。主要な結果は **重複を除いた scope 内の有効な経路が検証・人間レビュー・提出判断まで進んだ数／費用と時間**とし、生の Finding 数は診断値にする。候補 0 件や `incomplete` を成果ゼロと混ぜない。比較のために 2 回目以降の Trial が必要なら、先に現在の主経路との整合を設計・承認する。[SPEC §6, §10](../SPEC.md)、[ADR 0032](../adr/0032-owner-decisions-on-constraints-2026-10-13.md)。
 

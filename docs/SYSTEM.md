@@ -194,6 +194,6 @@ ADR 0045 で凍結した。提案も出さない。
 | Private Evidence（Finding 本文、捕捉、報告書、診断） | `<state>/private-evidence/<digest>/`（Git 外） | Harness とスキル |
 | ランナーの状態 | `<state>/continuous-<prefix>.{pid,json,stop}`、`<state>/continuous.concurrency*` | Harness と操作者 |
 | 調べて報告した文書 | `docs/reviews/`（正本ではない） | AI |
-| 過去 4 世代の知識 | `docs/knowledge/` | 取り込み済み。足さない |
+| 過去 4 世代の知識、旧目的文・旧スキル・実験記録 | `history/`（見返す用。Harness は読まない） | 移し終えた。足さない |
 
 探索の失敗（制限時間、provider、broker、スキーマ）は理由付きの `incomplete` で、候補 0 件には数えない。検証の失敗も `incomplete` で、`contradicted` にも棄却にもしない。どちらも台帳に理由が残り、`ledger funnel --campaign <id>` で段ごとの数を読める。

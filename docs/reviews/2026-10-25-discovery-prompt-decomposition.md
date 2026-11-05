@@ -26,7 +26,7 @@
 
 | 節 | 出どころ | 版と digest |
 | --- | --- | --- |
-| 目的文 | [`wp2shell-bounty-v8.md`](../../src/profiles/wordpress/prompts/wp2shell-bounty-v8.md)、27 行 | `promptDigest` |
+| 目的文 | [`wp2shell-bounty-v8.md`](../../history/prompts/objectives/wp2shell-bounty-v8.md)、27 行 | `promptDigest` |
 | Finding / Lead の出力契約 | Harness が Zod schema から生成（[ADR 0019](../adr/0019-generated-output-contract.md)、[`output-contract.ts`](../../src/profiles/wordpress/discovery/output-contract.ts)） | `contractDigest` |
 | trust 境界 | 人間が書いた `trust-boundary-v1` | 固定 digest |
 | Programme Boundary | 方針の写し | 方針の版 |
@@ -62,7 +62,7 @@ Codex CLI には子ごとの turn・時間・token の上限も one-shot の選�
 
 ### 1.4 `filesRead` の限界
 
-Claude の `filesRead` は Read tool を十分に数えておらず、Root は 0 のままの run がある（[子 agent 形状の評価](../evaluation/2026-10-20-child-agent-shape-by-runtime.md)）。読取数を理解の深さや網羅率と呼ばない。
+Claude の `filesRead` は Read tool を十分に数えておらず、Root は 0 のままの run がある（[子 agent 形状の評価](../../history/evaluation/2026-10-20-child-agent-shape-by-runtime.md)）。読取数を理解の深さや網羅率と呼ばない。
 
 ## 2. 公開ハーネスの分解の仕方（一次資料、2026-10-25 に repo の file を直接読んだ）
 
@@ -202,7 +202,7 @@ Codex は subscription 認証なので、Luna への変更を API 料金の削�
 
 **Luna を使うための制約（コード）。** [`admitCooperativeRuntimeProfile`](../../src/discovery/agent-runtime-profile.ts) は、子を持つ run の Root を `codexModelCatalog.production`（`gpt-6-sol`）に固定し、`daybreak_blue` を要求し、子の model と effort が Root と同じことを要求する。したがって、Root Luna も、Root Sol + 子 Luna も、設定だけでは通らない。effort の `high → medium` は設定だけで変えられる。Codex 側の Root / 子の分離は PARKING（2026-10-21）に「6 段が通った後、token を下げる問いを 1 つ定めたとき」として置かれている。Luna と Daybreak Blue の併用可否は preflight が要る（監査 第 7 節 段階 1）。
 
-**この文書の提案。** Claude 側で子を Sonnet に下げても Finding 数は落ちなかった（[子 model 実験](../evaluation/2026-10-21-child-model-experiment.md)。7 対象、各 1 Trial、検証未実施）。同じ形の問いを Codex に立てるなら、変える軸は 1 つずつにする。
+**この文書の提案。** Claude 側で子を Sonnet に下げても Finding 数は落ちなかった（[子 model 実験](../../history/evaluation/2026-10-21-child-model-experiment.md)。7 対象、各 1 Trial、検証未実施）。同じ形の問いを Codex に立てるなら、変える軸は 1 つずつにする。
 
 | 順 | arm | 変更 | 測るもの |
 | --- | --- | --- | --- |

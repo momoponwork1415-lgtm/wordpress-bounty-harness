@@ -26,7 +26,7 @@
 
 これは**現行の Claude Code / Opus の子が実際に短い**ことを示す。Opus というモデルの性質だけで短くなったことは示さない。runtime、Root の委譲、対象、時期、provider が揃っていない比較であり、両群の後続検証にはまだ `runtime-confirmed` の比較材料がない。`incomplete` を陰性として数えない。[SPEC §6](../SPEC.md)
 
-過去に取り込んだ [WP2Shell の原文](../knowledge/imported/wp2shell/PROMPT.template.txt) は子を 80 tool call 以下にし、状態を記録して引き継ぐよう明示する。現行 [v8 目的文](../../src/profiles/wordpress/prompts/wp2shell-bounty-v8.md) は Root が wave を繰り返すが、子の寿命を数値で固定していない。したがって本番の短い子は v8 が「80 call 上限」を実施した結果ではない。
+過去に取り込んだ [WP2Shell の原文](../../history/knowledge/imported/wp2shell/PROMPT.template.txt) は子を 80 tool call 以下にし、状態を記録して引き継ぐよう明示する。現行 [v8 目的文](../../history/prompts/objectives/wp2shell-bounty-v8.md) は Root が wave を繰り返すが、子の寿命を数値で固定していない。したがって本番の短い子は v8 が「80 call 上限」を実施した結果ではない。
 
 ## 判断と比較順
 

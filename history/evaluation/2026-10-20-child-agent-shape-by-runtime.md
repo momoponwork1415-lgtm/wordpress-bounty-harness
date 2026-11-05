@@ -1,6 +1,6 @@
 # 探索の子 agent の形は runtime で何が違うか（2026-10-20）
 
-本番台帳 `~/.local/state/wordpress-bounty-harness/ledger.sqlite` の 2026-10-18T16:00Z〜2026-10-20T04:30Z を読んだ実験記録。prompt は両 runtime とも `wp2shell-bounty-v8` で同じ。Root と子のモデル・effort は host 設定の `runtimeProfile` で、Codex が `gpt-6-sol` / `high`（子も同じ）、Claude が `claude-opus-5-5` / `high`（子も同じ）。本文、payload、手順は読んでいない。台帳の件数と観測値だけである。設計課題の全体は [reviews/2026-10-20-design-issues-from-production-results.md](../reviews/2026-10-20-design-issues-from-production-results.md)。
+本番台帳 `~/.local/state/wordpress-bounty-harness/ledger.sqlite` の 2026-10-18T16:00Z〜2026-10-20T04:30Z を読んだ実験記録。prompt は両 runtime とも `wp2shell-bounty-v8` で同じ。Root と子のモデル・effort は host 設定の `runtimeProfile` で、Codex が `gpt-6-sol` / `high`（子も同じ）、Claude が `claude-opus-5-5` / `high`（子も同じ）。本文、payload、手順は読んでいない。台帳の件数と観測値だけである。設計課題の全体は [reviews/2026-10-20-design-issues-from-production-results.md](../../docs/reviews/2026-10-20-design-issues-from-production-results.md)。
 
 ## 1. 問い
 
@@ -43,7 +43,7 @@ Codex では Finding の 4 割、Claude では 3 分の 2 が子から出た。s
 | | Codex | Claude |
 | --- | --- | --- |
 | 子の実体 | Codex ネイティブの `thread_spawn`。常駐するスレッドで、Root が後から続けさせられる | Claude Code 組み込みの汎用 `Agent` ツール。1 回の依頼に 1 回答えて終わる |
-| 続行 | できる | できない。Opus runtime を入れたとき、子への `SendMessage` 続行と専用 worker の説明文は「agent に渡る文章が増える」ので外した（[reviews/2026-10-19-opus-runtime-plan.md](../reviews/2026-10-19-opus-runtime-plan.md)「捨てるもの」） |
+| 続行 | できる | できない。Opus runtime を入れたとき、子への `SendMessage` 続行と専用 worker の説明文は「agent に渡る文章が増える」ので外した（[reviews/2026-10-19-opus-runtime-plan.md](../../docs/reviews/2026-10-19-opus-runtime-plan.md)「捨てるもの」） |
 | 文脈 | 子は Trial の間ずっと自分の文脈を持つ | 子は毎回まっさらで始まり、答えたら消える |
 | 「同時 4 体」の効き方 | 常駐なので総数も 4 | 1 体が 3 分で返るたびに枠が空くので、同じ上限で総数が 20 を超える（`src/discovery/claude-runner.ts` の `MAX_CHILDREN` は同時数） |
 

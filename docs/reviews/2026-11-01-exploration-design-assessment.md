@@ -35,7 +35,7 @@ Finding の本文、payload、URL、関数名は書かない。数字はすべ�
 | Lab で成立した 20 件の型 | A 1 / B 11 / C 8 | noticing-vs-reasoning 問い 1 |
 | 成立した B の性質 | 14/20 が WordPress 本体の保存欄（コメント、表示名、User-Agent など）を入口にする。12/20 が「エスケープはあるが文脈か順序が違う」 | 同上 |
 | 他人が同じ版で公開した見逃し 13 件 | 開いていない 3、開いたが何も無い 6（うち C 5）、Lead 止まり 4（全部 B） | 同 問い 2 |
-| 探索 Lab を付けた腕（v14、6 Trial） | Lab は立ったが要求 0。Root は 12〜33 分で閉じた | [Lab arm v14](../evaluation/2026-10-26-exploration-lab-arm-v14.md) |
+| 探索 Lab を付けた腕（v14、6 Trial） | Lab は立ったが要求 0。Root は 12〜33 分で閉じた | [Lab arm v14](../../history/evaluation/2026-10-26-exploration-lab-arm-v14.md) |
 | 子の sink 分類別の産出（bench30 v1） | html 23 F / identity 1 F / sql 2 F。identity の子は平均 2.4 分で返る | bench30 v1 §5 |
 | 列挙 script の再現率（既存 CVE 19 件） | 入口 17/19、出口 12/19。落ちた 7 件は 4 つの型 | [列挙の再現率](2026-10-30-enumeration-recall-cve-bench.md) |
 | semgrep / psalm の実行 | 0 / 48 Trial（sandbox に入っているかは記録から判らない） | bench30 v1 §7 |
@@ -177,7 +177,7 @@ v19 が中途半端に感じられる理由はこの表で説明できる。子�
 - [2026-10-30-enumeration-recall-cve-bench.md](2026-10-30-enumeration-recall-cve-bench.md)
 - [2026-10-27-public-harness-repos-responsibility-split.md](2026-10-27-public-harness-repos-responsibility-split.md)
 - [2026-10-25-wordpress-bug-hunter-methods.md](2026-10-25-wordpress-bug-hunter-methods.md)
-- [../evaluation/2026-10-26-exploration-lab-arm-v14.md](../evaluation/2026-10-26-exploration-lab-arm-v14.md)
-- [../evaluation/bench30-2026-11.md](../evaluation/bench30-2026-11.md)
+- [../evaluation/2026-10-26-exploration-lab-arm-v14.md](../../history/evaluation/2026-10-26-exploration-lab-arm-v14.md)
+- [../evaluation/bench30-2026-11.md](../../history/evaluation/bench30-2026-11.md)
 - ADR 0043、0044、0045。Issue #724、#686、#714。
 - 現行の目的文 `wp2shell-bounty-v19-wide`、スキル `wbh-recon-v1`、`wbh-tools-v1`、`core-fixed-list-v1.md`、出力契約 `finding.ts` / `lead.ts`（origin/main、2026-11-01）。

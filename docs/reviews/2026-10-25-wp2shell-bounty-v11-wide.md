@@ -123,7 +123,7 @@ Harness が生成して渡す節（出力契約 v4、trust 境界、Programme Bo
 - Programme 外（parked）の比率
 - 専門エージェントが入口を一通り終えて止まった Trial と、wall で止まった Trial の比
 
-これとは別に、所有者が承認した確認として、開発セットで公開済み 7 件の再発見を v11-wide で回す。これは配線と目的文の到達範囲の確認であり、未知の発見率は示さない（AGENTS.md）。結果はまだ無い。数字がまとまった時点で [docs/knowledge/experiments.md](../knowledge/experiments.md) へ行を足す。この PR では足さない。
+これとは別に、所有者が承認した確認として、開発セットで公開済み 7 件の再発見を v11-wide で回す。これは配線と目的文の到達範囲の確認であり、未知の発見率は示さない（AGENTS.md）。結果はまだ無い。数字がまとまった時点で [docs/knowledge/experiments.md](../../history/knowledge/experiments.md) へ行を足す。この PR では足さない。
 
 ## 5. 戻し方
 
