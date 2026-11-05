@@ -3,8 +3,8 @@ import { readFile } from "node:fs/promises";
 
 /**
  * One row per agent-facing text under this directory. The `.md` file is
- * `${id}.md`; the digest pins its exact bytes so past Trials can be matched.
- * Old versions stay here for digest matching only (ADR 0029).
+ * `${id}.md` unless a versioned experimental path is recorded; the digest
+ * pins its exact bytes so past Trials can be matched (ADR 0029).
  */
 interface WordPressPromptRecord {
   readonly id: string;
@@ -50,6 +50,8 @@ export interface WordPressDiscoveryPromptRecord extends WordPressPromptRecord {
   readonly outputContract: WordPressOutputContractVersion | null;
   /** Required on a `current` or `candidate` row: the campaign mode that launches it. */
   readonly mode?: WordPressDiscoveryMode;
+  /** Historical experimental body location; the id and digest do not change. */
+  readonly sourceFile?: `experimental/${string}.md`;
   /**
    * The body is composed from these files in order. The composition is
    * byte-identical to `${id}.md`, which stays as the reference copy, so
@@ -484,7 +486,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:678595d377ce7b238b82ad5201e57eed35c2a66b75dc10049b15df36615a4d7c",
     outputContract: "v4",
-    status: "current",
+    status: "candidate",
     mode: "wide",
     // v21-wide with four deletions and nothing added (ADR 0049 decision E,
     // ADR 0039 addendum 21; ADR 0045 allows deletions only): the whole
@@ -504,9 +506,11 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     outputContract: "v4",
     status: "candidate",
     mode: "wide",
+    sourceFile: "experimental/wp2shell-bounty-v23-wide.md",
     // Owner decision 2026-11-04, ADR 0050: the purpose remains here, while
     // the WordPress audit loop and its research records move to wbh-audit.
-    // v22 remains the default until production comparison accepts v23.
+    // Retained as an opt-in experimental comparison after the 2026-11-05
+    // decision to use v26 as the repository default.
   },
   {
     id: "wp2shell-bounty-v24-wide",
@@ -514,6 +518,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
       "sha256:8822e7516329d4b142422d68b6f82ada9b02923f13e4b454edfcbb532d5ac63a",
     outputContract: "v6",
     status: "archived",
+    sourceFile: "experimental/wp2shell-bounty-v24-wide.md",
     // v23 objective with the versioned wbh-audit-v2 skill named explicitly.
     // Its generated contract carries independent Phase 5 child checks.
   },
@@ -524,6 +529,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     outputContract: "v6",
     status: "candidate",
     mode: "wide",
+    sourceFile: "experimental/wp2shell-bounty-v25-wide.md",
     // v24 with the CLI-visible skill name and the one-edge Lead handoff clear.
   },
   {
@@ -531,9 +537,9 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
     digest:
       "sha256:5524803320490e0ce15f3fed4253a13216cf8c37a3545b26a27c162bfd6939e4",
     outputContract: "v4",
-    status: "candidate",
+    status: "current",
     mode: "wide",
-    // Versioned candidate based on the exact 2026-07-30 TranslatePress
+    // Current wide objective based on the exact 2026-07-30 TranslatePress
     // direct-discovery contract. The Root owns a class-neutral portfolio,
     // adversarial review and on-demand Lab questions. The historical source
     // and this current-Harness adaptation have distinct digests.
@@ -547,7 +553,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
   },
 ] as const satisfies readonly WordPressDiscoveryPromptRecord[];
 
-/** Human-written trust declarations; opt-in comparisons v25/v26 use v2. */
+/** Human-written trust declarations; v25 and current v26 use v2. */
 export const WORDPRESS_TRUST_BOUNDARIES = [
   {
     id: "trust-boundary-v1",
@@ -609,7 +615,7 @@ function currentOf<const Row extends WordPressPromptRecord>(
 /** The existing default declaration for deep and wide production Trials. */
 export const WORDPRESS_TRUST_BOUNDARY = currentOf(WORDPRESS_TRUST_BOUNDARIES);
 
-/** Opt-in comparison objectives receive the corrected declaration. */
+/** v25 and current v26 receive the corrected declaration. */
 export function wordPressTrustBoundaryForObjective(
   objectiveId: WordPressDiscoveryPromptId,
 ): (typeof WORDPRESS_TRUST_BOUNDARIES)[number]["id"] {
@@ -708,13 +714,14 @@ const sha256 = (bytes: Uint8Array | string): `sha256:${string}` =>
 
 async function readPromptFile<Id extends string>(
   id: Id,
+  sourceFile: string = `${id}.md`,
 ): Promise<{
   readonly id: Id;
   readonly sourceUrl: URL;
   readonly text: string;
   readonly digest: `sha256:${string}`;
 }> {
-  const sourceUrl = new URL(`./${id}.md`, import.meta.url);
+  const sourceUrl = new URL(`./${sourceFile}`, import.meta.url);
   const bytes = await readFile(sourceUrl);
   return {
     id,
@@ -767,7 +774,8 @@ export async function loadWordPressDiscoveryAsset(
     return asset;
   }
   const record = wordPressDiscoveryPrompt(id);
-  if (record.fragments === undefined) return readPromptFile(id);
+  if (record.fragments === undefined)
+    return readPromptFile(id, record.sourceFile);
   const texts = await Promise.all(record.fragments.map(readFragment));
   const text = composeFragments(texts);
   const digest = sha256(text);
@@ -784,7 +792,7 @@ export async function loadWordPressDiscoveryAsset(
   }
   return {
     id,
-    sourceUrl: new URL(`./${id}.md`, import.meta.url),
+    sourceUrl: new URL(`./${record.sourceFile ?? `${id}.md`}`, import.meta.url),
     text,
     digest,
     sectionDigests,

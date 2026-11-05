@@ -8,7 +8,7 @@ import {
 
 /**
  * The exploration skills a cooperative Trial may receive (ADR 0043): one
- * `SKILL.md` per id under `skills/<id>/`, staged into the agent CLI's home
+ * `SKILL.md` per id under `skills/<id>/` or `skills/experimental/<id>/`, staged into the agent CLI's home
  * so the CLI lists it to the Root and its children. A campaign names the ids
  * in `discovery.skills`; absent, no skill is staged and the Trial is the one
  * every earlier decision describes. Each file is pinned by digest like every
@@ -17,6 +17,8 @@ import {
  */
 interface WordPressDiscoverySkillRecord {
   readonly id: string;
+  /** Source-only grouping; the staged skill name and digest stay unchanged. */
+  readonly sourceDirectory?: "experimental";
   /** The front matter `name`: what the CLI lists and the agent invokes. */
   readonly name: string;
   /** sha256 of `SKILL.md`. */
@@ -109,6 +111,7 @@ export const WORDPRESS_DISCOVERY_SKILLS = [
   },
   {
     id: "wbh-audit-v1",
+    sourceDirectory: "experimental",
     name: "wbh-audit",
     digest:
       "sha256:0b7503134dc9635878a40e916ac4a80d6addabb2d133a603a300a23ccc1db579",
@@ -143,6 +146,7 @@ export const WORDPRESS_DISCOVERY_SKILLS = [
   },
   {
     id: "wbh-audit-v2",
+    sourceDirectory: "experimental",
     name: "wbh-audit",
     digest:
       "sha256:35a8a57b7c11866c3a8daaf117b8ab47269f4f41b961d237e03cd2ed0f880039",
@@ -213,7 +217,11 @@ export async function loadWordPressDiscoverySkill(
   const record = wordPressDiscoverySkillRecord(id);
   if (record === undefined)
     throw new Error("Unknown WordPress discovery skill");
-  const sourceUrl = new URL(`./skills/${id}/SKILL.md`, import.meta.url);
+  const pinned: WordPressDiscoverySkillRecord = record;
+  const sourceUrl = new URL(
+    `./skills/${pinned.sourceDirectory ? `${pinned.sourceDirectory}/` : ""}${id}/SKILL.md`,
+    import.meta.url,
+  );
   const text = new TextDecoder("utf-8", { fatal: true }).decode(
     await readFile(sourceUrl),
   );
@@ -222,7 +230,6 @@ export async function loadWordPressDiscoverySkill(
     throw new Error("Skill definition differs from its pinned digest");
   if (definition.frontMatter.name !== record.name)
     throw new Error("Skill definition names another skill");
-  const pinned: WordPressDiscoverySkillRecord = record;
   const files = await Promise.all(
     (pinned.files ?? []).map(async (file) => {
       const content = await readFile(new URL(file.name, sourceUrl));

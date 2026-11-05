@@ -31,10 +31,10 @@
 - **探索と検証の中身はプロンプトとスキルが受け持つ。** どこを読むか、どの順で仮説を立てるか、どう再現するか、前提をどう作るかは、エージェントの仕事である。確定は、Lab で観測した人間の記録だけで行う。
 - **移す合図。** Harness のコードに「エージェントにこう探させる」「この前提ならこのシナリオ」のような判断が現れたら、プロンプトかスキルへ移す。エージェントの自己申告を Harness が根拠にするコードが現れたら、観測器の記録へ移すか、人間の観測に回す。観測（読んだファイル、経過時間、トークン、出力）は Harness が取る。舵取りは取らない。
 
-## いまの運用（2026-11-01）
+## いまの運用（2026-11-05）
 
-- **凍結 5 項目**（ADR 0045）: 不変条件、Harness と AI の責務、単一協調 Trial、人間の観測による確定、本番をベンチにすること。設計の変更は月 1 回までで、目的文の新版を言い換えで増やさない。7 月 30 日方式の版付き比較候補は所有者が決めた限定例外である（ADR 0051）。
-- **探索**: campaign 設定の `discovery.mode` で `deep` か `wide` を選ぶ（ADR 0039）。既定の目的文は `wide` が `wp2shell-bounty-v22-wide`、`deep` が `wp2shell-bounty-v11`。v25-wide は `wbh-audit-v2` の六段階、v26-wide は 7 月 30 日方式の単一目的文による名指しの比較候補である。旧版は過去 Trial の照合用に残す。対象ごとに Root と子が協調する Trial を既定で 1 回行い、子の上限は `discovery.maxChildren`（既定 4、1〜8）、制限時間は 120 分。どちらの mode も既定の最低時間は 0 で、早い最終報告の後も続ける場合だけ `minimumActiveMinutes` を名指す。時間と子の上限は Harness が生成する `## Run parameters` 節で Root に伝える。v22 / v25 の手順は設定したスキルが、v26 の手順は目的文が受け持つ（ADR 0043、0050、0051）。
+- **凍結 5 項目**（ADR 0045）: 不変条件、Harness と AI の責務、単一協調 Trial、人間の観測による確定、本番をベンチにすること。設計の変更は月 1 回までで、目的文の新版を言い換えで増やさない。7 月 30 日方式の版付き目的文は所有者が決めた限定例外である（ADR 0051）。
+- **探索**: campaign 設定の `discovery.mode` で `deep` か `wide` を選ぶ（ADR 0039）。リポジトリの既定の目的文は `wide` が `wp2shell-bounty-v26-wide`、`deep` が `wp2shell-bounty-v11`。v26 は 7 月 30 日方式の単一目的文で、探索の順序と子の使い方は Root が決める。v23 / v24 / v25-wide と `wbh-audit-v1/v2` の六段階探索方式は `experimental/` に置き、起動可能な版は campaign で名指ししたときだけ使う。v22-wide も比較・過去 Trial の照合用に残す。対象ごとに Root と子が協調する Trial を既定で 1 回行い、子の上限は `discovery.maxChildren`（基底の既定 4、1〜8。リポジトリの wide 方針は 3）、制限時間の上限は 120 分。`minimumActiveMinutes` の基底の既定は 0 で、リポジトリの wide 方針は v26 に 60 分を指定する。時間と子の上限は Harness が生成する `## Run parameters` 節で Root に伝える。別 Snapshot の研究記録はリポジトリの wide 方針で `priorResearch: same-target` として渡す。同一 Snapshot の自動再探索は `followUp: none` として止める。稼働中のランナーが使う Git 外の設定は別に確認する（ADR 0043、0048、0050、0051）。
 - **止まった Trial**: 制限時間・provider・broker・スキーマの失敗は理由付き `incomplete` にし、正常な候補 0 件に数えない（ADR 0033）。Codex の `provider-limited` と持ち主の死んだ `interrupted` はランナーが自動で再開し、それ以外は操作者が `campaign resume --run <runId>` で名指しして再開する。再開は新しいサンドボックス、同じ Snapshot、残りの制限時間で行い、同じ Trial の再開区間として数える。プロンプトの言い換えはしない（ADR 0036）。
 - **選定**: WordPress.org の人気順から、インストール数 5,000 以上、180 日以内更新の対象を 1 バッチ 10 件選ぶ。順序は `install-band-then-published`（帯 100 万 / 10 万 / 1 万の高い帯を先に、帯の中は stable 版の公開日が新しい順。ADR 0037 追記 4）。同じ版の Trial は 1 回で、版が上がれば戻す。探索の方法を変えて再開したときは、方針の `revisitPolicy.countTrialsFrom` に再開時刻を入れ、それより前の Trial を探索済みに数えない（追記 6）。凍結が `deferred` で止まった版は 7 日で再試行する（追記 5）。
 - **Snapshot**: 対象プラグイン、WordPress 本体（Lab image の最新安定版）、実行イメージに対応する PHP ソース、依存プラグインを版と digest で固定する。依存は `Requires Plugins`、WooCommerce の版ヘッダ、選定方針の明示指定から決める。依存の欠落を黙って無視しない。

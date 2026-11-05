@@ -17,3 +17,13 @@ amends: 0045（目的文の凍結の限定例外）、0050（探索方式の主�
 同一 Snapshot の条件付き 2・3 回目、4 回目以降の手動起動、同一 Snapshot と版をまたぐ研究・Finding・Lead の構造化再利用は、今回の Trial の結果を見て受け渡し契約を別に定める。新しい保存基盤を先に作らない。
 
 採否は同じ選定帯で旧版と新版を Lab 条件を揃えて交互に走らせ、DEVELOPMENT.md 第 5 節の本番計測で決める。[agent に渡る全文と日本語訳](../reviews/2026-11-05-july30-single-prompt-ja.md)、[元の `DISCOVERY.md`](../knowledge/imported/08-whitebox/DISCOVERY-2026-07-30-translatepress-original-run.md) と digest、今回の差分を残す。戻すときは新規 Trial の prompt ID を旧版へ戻し、記録済みの Trial と Private Evidence は読み続ける。
+
+## 2026-11-05 追記: リポジトリの探索方式
+
+所有者は独立 Trial の実行中に、7 月 30 日方式の v26-wide をリポジトリの主経路に戻し、Cloudflare 派生の六段階探索方式を実験用に分けるよう指示した。リポジトリの wide 方針は v26-wide、探索 Lab、最低 60 分、子の上限 3 を指定する。v23 / v24 / v25-wide の目的文と `wbh-audit-v1/v2` のスキル本文は、内容と digest を変えずに `experimental/` に移す。v24-wide は archived のまま、起動可能な実験版は明示した campaign だけで走る。段 5 の提出前検証の六段のスキルはこの移動の対象ではない。
+
+先行 Trial では Event Tickets 5.31.0 と Booking Calendar 12.0 が Finding 0 件で終わり、Booking Calendar の Lead も 0 件だった。UsersWP 1.2.81 は Finding 0 件、Lead 記録 6 件（経路は 2 群）で、追加の同一 Snapshot Trial に渡すだけの未解決経路は残らなかった。WP Data Access 5.5.91 の候補は AI が Lab で観測した段階で、人間の新しい review Lab の観測を待っている。Fluent Booking 2.6.0 の Trial はこの追記時点で実行中であり、結果は未確定である。これらは探索の挙動を見る pilot であり、脆弱性の確定や旧版との対で行う本番採否の数字ではない。
+
+同一 Snapshot の再探索は、Lead の生の件数だけを条件に自動起動しないよう、リポジトリの wide 方針で `followUp: none` を指定する。所有者が望む、未解決経路があるときだけ 2・3 回目を自動で行い、4 回目以降は手動で起動する規則は、別の受け渡し契約と実装が必要である。別 Snapshot の研究 file は `priorResearch: same-target` で既存の読み取り経路から渡す。過去の Finding / Lead の版をまたぐ再利用は既存の台帳・レビュー経路で参照し、同一 Snapshot の研究 file 全体の再利用はまだ実装しない。
+
+この変更は探索方式の主従を切り替える所有者の決定である。DEVELOPMENT.md 第 5 節の旧版・新版を交互に走らせる本番比較、人間の観測、PR の `owner-approved` 等のマージ条件を満たしたとは扱わない。稼働中の本番ランナーの Git 外設定も、このリポジトリの方針ファイルを書き換えただけでは切り替わらない。

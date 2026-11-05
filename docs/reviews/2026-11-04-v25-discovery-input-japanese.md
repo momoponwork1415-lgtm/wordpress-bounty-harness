@@ -10,7 +10,7 @@ Codex CLI と provider が内部で持つ system prompt、Root が実行中に�
 
 | 順序 | 英語原文 | 日本語訳 |
 | --- | --- | --- |
-| 1 目的文 | [`wp2shell-bounty-v25-wide.md`](../../src/profiles/wordpress/prompts/wp2shell-bounty-v25-wide.md) | [v25 目的文の全文訳](2026-11-04-cloudflare-audit-objective-v25.md#L19) |
+| 1 目的文 | [`wp2shell-bounty-v25-wide.md`](../../src/profiles/wordpress/prompts/experimental/wp2shell-bounty-v25-wide.md) | [v25 目的文の全文訳](2026-11-04-cloudflare-audit-objective-v25.md#L19) |
 | 2 Finding / Lead / check の出力契約 v6 | [`output-contract.ts`](../../src/profiles/wordpress/discovery/output-contract.ts) の `wordPressDiscoveryOutputContractV6` | [契約全文と schema の訳](2026-11-04-cloudflare-audit-gate-v2.md#L443)。field 名と enum は英語のまま使う |
 | 3 実行値 | [`run-parameters.ts`](../../src/discovery/run-parameters.ts) | 下の第 3 節 |
 | 4 任意の過去 Lead / 過去研究 | [`prior-leads.ts`](../../src/discovery/prior-leads.ts)、[`prior-research.ts`](../../src/discovery/prior-research.ts) | 下の第 4 節。入力を設定しなければ節ごと無い |
@@ -24,11 +24,11 @@ Codex CLI と provider が内部で持つ system prompt、Root が実行中に�
 
 | 設定 ID / 表示名 | 英語原文 | 全文の日本語訳 |
 | --- | --- | --- |
-| `wbh-audit-v2` / `wbh-audit` | [`SKILL.md`](../../src/profiles/wordpress/prompts/skills/wbh-audit-v2/SKILL.md) | [境界、depth、六段階](2026-11-04-cloudflare-audit-gate-v2.md#L230) |
-| 同スキルの偵察 | [`reconnaissance.md`](../../src/profiles/wordpress/prompts/skills/wbh-audit-v2/reconnaissance.md) | [偵察と REGISTRY](2026-11-04-cloudflare-audit-gate-v2.md#L270) |
-| 同スキルの探索 | [`hunting.md`](../../src/profiles/wordpress/prompts/skills/wbh-audit-v2/hunting.md) | [hunter と漏れ点検](2026-11-04-cloudflare-audit-gate-v2.md#L308) |
-| 同スキルの WordPress 類型 | [`wordpress-classes.md`](../../src/profiles/wordpress/prompts/skills/wbh-audit-v2/wordpress-classes.md) | [保存後の出力、SQL、その他の類型](2026-11-04-cloudflare-audit-gate-v2.md#L349) |
-| 同スキルの点検・報告 | [`validation-and-reporting.md`](../../src/profiles/wordpress/prompts/skills/wbh-audit-v2/validation-and-reporting.md) | [反証、草稿、最終点検、報告](2026-11-04-cloudflare-audit-gate-v2.md#L385) |
+| `wbh-audit-v2` / `wbh-audit` | [`SKILL.md`](../../src/profiles/wordpress/prompts/skills/experimental/wbh-audit-v2/SKILL.md) | [境界、depth、六段階](2026-11-04-cloudflare-audit-gate-v2.md#L230) |
+| 同スキルの偵察 | [`reconnaissance.md`](../../src/profiles/wordpress/prompts/skills/experimental/wbh-audit-v2/reconnaissance.md) | [偵察と REGISTRY](2026-11-04-cloudflare-audit-gate-v2.md#L270) |
+| 同スキルの探索 | [`hunting.md`](../../src/profiles/wordpress/prompts/skills/experimental/wbh-audit-v2/hunting.md) | [hunter と漏れ点検](2026-11-04-cloudflare-audit-gate-v2.md#L308) |
+| 同スキルの WordPress 類型 | [`wordpress-classes.md`](../../src/profiles/wordpress/prompts/skills/experimental/wbh-audit-v2/wordpress-classes.md) | [保存後の出力、SQL、その他の類型](2026-11-04-cloudflare-audit-gate-v2.md#L349) |
+| 同スキルの点検・報告 | [`validation-and-reporting.md`](../../src/profiles/wordpress/prompts/skills/experimental/wbh-audit-v2/validation-and-reporting.md) | [反証、草稿、最終点検、報告](2026-11-04-cloudflare-audit-gate-v2.md#L385) |
 | `wbh-setup-v1` / `wbh-setup` | [`SKILL.md`](../../src/profiles/wordpress/prompts/skills/wbh-setup-v1/SKILL.md) | [通常利用の Lab setup の全文訳](2026-11-01-exploration-skills-wbh-setup-v1.md#L56) |
 | `wbh-lab-v1` / `wbh-lab` | [`SKILL.md`](../../src/profiles/wordpress/prompts/skills/wbh-lab-v1/SKILL.md) | [marker、Find / Query / Trace / Observe の全文訳](2026-11-02-exploration-skills-wbh-lab-v1.md#L68) |
 

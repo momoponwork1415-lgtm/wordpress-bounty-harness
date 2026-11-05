@@ -3122,7 +3122,7 @@ describe("harness CLI vertical slice", () => {
       wordpressCampaignConfigSchema.parse({ ...base, discovery: wide }),
     ).toMatchObject({
       discovery: { mode: "wide", minimumActiveMinutes: 0 },
-      promptId: "wp2shell-bounty-v22-wide",
+      promptId: "wp2shell-bounty-v26-wide",
       runWallTimeMinutes: 120,
     });
     expect(
@@ -3139,8 +3139,8 @@ describe("harness CLI vertical slice", () => {
         runWallTimeMinutes: 20,
       }).runWallTimeMinutes,
     ).toBe(20);
-    // An archived version cannot be named (ADR 0039 addendum 18: no wide
-    // candidate since 2026-11-01; addendum 21: v21-wide retired on 2026-11-02).
+    // An archived version cannot be named (ADR 0039 addendum 21:
+    // v21-wide retired on 2026-11-02).
     for (const archived of [
       "wp2shell-bounty-v15-wide",
       "wp2shell-bounty-v21-wide",
@@ -3237,7 +3237,7 @@ describe("harness CLI vertical slice", () => {
     expect(transportRuns[0]?.maxChildren).toBe(6);
     expect(transportRuns[0]?.resumePrompt?.startsWith("Stop when")).toBe(true);
     expect(prompts[0]).toContain(transportRuns[0]?.resumePrompt);
-    expect(prompts[0]).toContain("# WordPress trust boundary template v1");
+    expect(prompts[0]).toContain("# WordPress trust boundary template v2");
     // A zero floor is stated explicitly, with the ceiling and the 120-minute wall.
     expect(prompts[0]).toContain(
       [
@@ -3260,8 +3260,8 @@ describe("harness CLI vertical slice", () => {
     expect(started[0]?.event.type).toBe("discovery-run-started");
     if (started[0]?.event.type === "discovery-run-started")
       expect(started[0].event.configuration).toMatchObject({
-        promptVariant: "wp2shell-bounty-v22-wide",
-        trustBoundaryVersion: "trust-boundary-v1",
+        promptVariant: "wp2shell-bounty-v26-wide",
+        trustBoundaryVersion: "trust-boundary-v2",
         mode: "wide",
         wallMinutes: 120,
         minimumActiveMinutes: 0,

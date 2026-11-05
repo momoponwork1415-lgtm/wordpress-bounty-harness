@@ -33,10 +33,15 @@ import {
   WORDPRESS_VERIFIER_PROMPTS,
 } from "../../../src/profiles/wordpress/prompts/index.js";
 
+const promptFile = (id: string) => {
+  const record = WORDPRESS_DISCOVERY_PROMPTS.find((row) => row.id === id);
+  return record && "sourceFile" in record ? record.sourceFile : `${id}.md`;
+};
+
 const promptBytes = (id: string) =>
   readFile(
     new URL(
-      `../../../src/profiles/wordpress/prompts/${id}.md`,
+      `../../../src/profiles/wordpress/prompts/${promptFile(id)}`,
       import.meta.url,
     ),
   );
@@ -98,7 +103,7 @@ describe("WordPress prompt table", () => {
     ).toHaveLength(WORDPRESS_DISCOVERY_MODES.length);
     expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_IDS).toEqual({
       deep: "wp2shell-bounty-v11",
-      wide: "wp2shell-bounty-v22-wide",
+      wide: "wp2shell-bounty-v26-wide",
     });
     expect(WORDPRESS_CURRENT_DISCOVERY_PROMPT_ID).toBe("wp2shell-bounty-v11");
     // Archived rows carry no mode, so only a current row launches (ADR 0039).
@@ -111,9 +116,9 @@ describe("WordPress prompt table", () => {
         (row) => (row.status as string) === "candidate",
       ).map((row) => row.id),
     ).toEqual([
+      "wp2shell-bounty-v22-wide",
       "wp2shell-bounty-v23-wide",
       "wp2shell-bounty-v25-wide",
-      "wp2shell-bounty-v26-wide",
     ]);
     expect(WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS).toEqual([
       "wp2shell-bounty-v11",
@@ -337,7 +342,7 @@ describe("WordPress discovery prompt assets", () => {
     expect(v25.text).toContain("one unresolved edge");
   });
 
-  it("keeps the July 30 candidate independent from the six-phase skill and records open routes", async () => {
+  it("keeps the July 30 objective independent from the six-phase skill and records open routes", async () => {
     const candidate = await loadWordPressDiscoveryAsset(
       "wp2shell-bounty-v26-wide",
     );
@@ -711,7 +716,11 @@ describe("WordPress discovery prompt assets", () => {
       WORDPRESS_DISCOVERY_PROMPTS.find(
         (row) => row.id === "wp2shell-bounty-v22-wide",
       ),
-    ).toMatchObject({ status: "current", mode: "wide", outputContract: "v4" });
+    ).toMatchObject({
+      status: "candidate",
+      mode: "wide",
+      outputContract: "v4",
+    });
     expect(
       WORDPRESS_DISCOVERY_PROMPTS.find(
         (row) => row.id === "wp2shell-bounty-v22-wide",
