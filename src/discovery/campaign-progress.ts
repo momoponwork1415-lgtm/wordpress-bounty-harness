@@ -114,9 +114,7 @@ export type ResumeProgress = {
 };
 
 /** Every `discovery-run-finished` of the target, by run id. */
-export function readFinishedRuns(
-  target: CampaignTarget,
-): Map<string, FinishedEvent> {
+function readFinishedRuns(target: CampaignTarget): Map<string, FinishedEvent> {
   const finishes = new Map<string, FinishedEvent>();
   for (const { event } of target.ledger.readAll({
     campaignId: target.campaignId,

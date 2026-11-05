@@ -17,7 +17,7 @@ import { z } from "zod";
  * It is not a lock: nothing waits on it and any number of Labs may run (#432).
  * It only tells a broad cleanup which Labs still have a living owner.
  */
-export const LAB_OWNER_DIRECTORY = join(
+const LAB_OWNER_DIRECTORY = join(
   homedir(),
   ".local",
   "state",

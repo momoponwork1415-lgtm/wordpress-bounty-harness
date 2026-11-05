@@ -132,7 +132,7 @@ export function observationAttempt(
 }
 
 /** A later attempt or a newer derived Finding cannot reuse this Lab. */
-export function currentObservationVerification(
+function currentObservationVerification(
   ledger: Ledger,
   ref: ReviewRef,
 ): FinishedVerification | null {

@@ -25,7 +25,7 @@ const listingSchema = z.object({
     .max(50),
 });
 
-export interface WordPressOrgCandidate {
+interface WordPressOrgCandidate {
   readonly slug: string;
   readonly sourceKind: "popular" | "tag";
   readonly sourceTag?: string;

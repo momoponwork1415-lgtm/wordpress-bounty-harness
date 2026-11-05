@@ -41,7 +41,7 @@ export const setupSchema = z.strictObject({
   scenario: z.strictObject({ id: z.string(), digest }).optional(),
 });
 export type WordPressLabSetup = z.input<typeof setupSchema>;
-export type ParsedWordPressLabSetup = z.output<typeof setupSchema>;
+type ParsedWordPressLabSetup = z.output<typeof setupSchema>;
 export const WORDPRESS_CORE_IDENTITY = "wordpress-core";
 
 type PluginDirectory = { readonly slug: string; readonly directory: string };

@@ -169,7 +169,7 @@ function assertPlannedForInput(
     throw new Error("Planned run differs from the CampaignInput");
 }
 
-export type Cancellation<Result = DiscoveryTransportResult> = {
+type Cancellation<Result = DiscoveryTransportResult> = {
   readonly signal: AbortSignal;
   /** Resolves with a synthetic result once a cancelled transport stays silent. */
   readonly fallback: Promise<Result>;
@@ -183,7 +183,7 @@ export type Cancellation<Result = DiscoveryTransportResult> = {
  * transport that ignores its cancellation is answered after a grace period so
  * the ledger still receives a finish.
  */
-export function armCancellation<
+function armCancellation<
   Result extends { readonly receipt: NativeRunReceipt },
 >(options: {
   readonly operator: AbortSignal | undefined;
@@ -232,9 +232,7 @@ export function armCancellation<
 }
 
 /** A transport receipt that ended short of completion names the failure. */
-export function failureOf(
-  receipt: NativeRunReceipt,
-): ReportFailure | undefined {
+function failureOf(receipt: NativeRunReceipt): ReportFailure | undefined {
   if (receipt.terminal !== "incomplete" || receipt.reason === "unavailable")
     return undefined;
   return {

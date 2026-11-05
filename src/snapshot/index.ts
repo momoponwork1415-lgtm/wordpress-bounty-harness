@@ -41,7 +41,7 @@ export const sourceManifestSchema = z.strictObject({
     .min(1),
 });
 
-export const sourceAcquisitionFailureKindSchema = z.enum([
+const sourceAcquisitionFailureKindSchema = z.enum([
   "dns",
   "connect-timeout",
   "request-timeout",
@@ -135,7 +135,7 @@ async function seal(source: AcquiredSource): Promise<{
   };
 }
 
-export type SnapshotLoad =
+type SnapshotLoad =
   | { readonly status: "loaded"; readonly snapshot: Snapshot }
   | {
       readonly status: "unavailable";

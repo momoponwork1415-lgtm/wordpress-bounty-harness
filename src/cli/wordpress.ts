@@ -111,7 +111,6 @@ import { importWordPressResearch } from "./wordpress-research-import.js";
 export {
   wordpressCampaignConfigSchema,
   type WordPressCampaignBoundaries,
-  type WordPressCampaignConfig,
   type WordPressCliProfileOptions,
 } from "./wordpress-session.js";
 

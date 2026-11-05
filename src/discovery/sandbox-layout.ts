@@ -5,7 +5,7 @@ import { z } from "zod";
  * Trial notes are the sandbox's own contract; every other read-only tree is a
  * dependency mount the profile declares and the run carries as input.
  */
-export const SANDBOX_WORKSPACE_ROOT = "/workspace";
+const SANDBOX_WORKSPACE_ROOT = "/workspace";
 /** The fixed target source, read-only; also the agent's working directory. */
 export const SANDBOX_SOURCE_MOUNT_PATH = "/workspace/main";
 /** The Trial-local writable notes directory of a cooperative run. */

@@ -13,7 +13,7 @@ import type { WordPressLabSession } from "./lab-session.js";
  * gVisor configures its interfaces at boot and ignores networks connected to
  * a running sandbox.
  */
-export const HOST_GATEWAY_SCRIPT = `const net = require("net");
+const HOST_GATEWAY_SCRIPT = `const net = require("net");
 const forward = (listenPort, host, port) =>
   net.createServer((client) => {
     const upstream = net.connect(port, host);

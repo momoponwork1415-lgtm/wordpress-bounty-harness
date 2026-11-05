@@ -12,7 +12,7 @@ import {
 } from "./manual-observation.js";
 
 /** Opt-in extension: existing strict review-export/v1 consumers keep their contract. */
-export const REVIEW_EXPORT_V2_SCHEMA_ID = "review-export/v2";
+const REVIEW_EXPORT_V2_SCHEMA_ID = "review-export/v2";
 export const reviewExportV2Schema = z.strictObject({
   ...reviewExportV1Schema.shape,
   schema: z.literal(REVIEW_EXPORT_V2_SCHEMA_ID),

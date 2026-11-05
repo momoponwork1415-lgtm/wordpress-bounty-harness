@@ -8,12 +8,12 @@ import { z } from "zod";
  * those destinations; it carries no credential and no wildcard. The
  * Harness never reads the plan's reason; it is for the record.
  */
-export const MAX_LAB_EGRESS_DESTINATIONS = 4;
+const MAX_LAB_EGRESS_DESTINATIONS = 4;
 
 const HOSTNAME =
   /^(?=.{1,253}$)(?!-)[a-z0-9-]{1,63}(?<!-)(?:\.(?!-)[a-z0-9-]{1,63}(?<!-))+$/u;
 
-export const labEgressDestinationSchema = z.strictObject({
+const labEgressDestinationSchema = z.strictObject({
   /** A lowercase DNS name with at least one dot; no wildcard, no address literal. */
   host: z
     .string()

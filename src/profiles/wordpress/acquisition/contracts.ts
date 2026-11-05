@@ -85,7 +85,7 @@ export const manualTargetIntakeRequestSchema = z.strictObject({
   policy: targetIntakePolicySchema,
 });
 
-export const targetIntakeReasonSchema = z.enum([
+const targetIntakeReasonSchema = z.enum([
   "source-not-directory",
   "link-entry",
   "hardlink-entry",
@@ -161,7 +161,7 @@ export const targetIntakePacketSchema = z.strictObject({
   policy: immutableArtifactRefSchema,
 });
 
-export const intakeReceiptSchema = z.strictObject({
+const intakeReceiptSchema = z.strictObject({
   kind: z.literal("target-intake-receipt"),
   schemaVersion: z.literal(1),
   id: identifierSchema,
@@ -177,7 +177,7 @@ const dispositionBase = {
   receiptRef: immutableArtifactRefSchema,
 };
 
-export const readyIntakeDispositionSchema = z.strictObject({
+const readyIntakeDispositionSchema = z.strictObject({
   status: z.literal("ready"),
   ...dispositionBase,
   packet: targetIntakePacketSchema,

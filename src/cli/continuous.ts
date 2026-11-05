@@ -28,23 +28,23 @@ import {
 import type { CampaignSummary, TargetLimit } from "./pipeline.js";
 
 // Final design P6. Constants, not settings.
-export const BACKOFF_RATE_LIMIT_MINUTES = [5, 10, 20, 40, 60] as const;
-export const BACKOFF_QUOTA_MINUTES = [30, 60] as const;
-export const QUOTA_LONG_SLEEP_HOURS = 6;
-export const MAX_CONSECUTIVE_ERROR_BATCHES = 3;
-export const ERROR_GAP_MINUTES = 10;
-export const REFUSAL_HOLD_MINUTES = 60;
-export const MAX_CONSECUTIVE_REFUSAL_BATCHES = 1;
-export const MAX_CONSECUTIVE_NO_PROGRESS_BATCHES = 2;
-export const NO_PROGRESS_HOLD_MINUTES = 60;
-export const EMPTY_SLEEP_HOURS = 24;
-export const EMPTY_DAYS_BEFORE_EXHAUSTED = 3;
-export const LISTING_UNAVAILABLE_RETRY_MINUTES = 60;
-export const LOGIN_POLL_MINUTES = 10;
-export const MIN_FREE_GIB = 10;
-export const DISK_RECHECK_MINUTES = 60;
-export const PROGRAMME_STALE_DAYS = 35;
-export const PROGRAMME_WARN_DAYS = 7;
+const BACKOFF_RATE_LIMIT_MINUTES = [5, 10, 20, 40, 60] as const;
+const BACKOFF_QUOTA_MINUTES = [30, 60] as const;
+const QUOTA_LONG_SLEEP_HOURS = 6;
+const MAX_CONSECUTIVE_ERROR_BATCHES = 3;
+const ERROR_GAP_MINUTES = 10;
+const REFUSAL_HOLD_MINUTES = 60;
+const MAX_CONSECUTIVE_REFUSAL_BATCHES = 1;
+const MAX_CONSECUTIVE_NO_PROGRESS_BATCHES = 2;
+const NO_PROGRESS_HOLD_MINUTES = 60;
+const EMPTY_SLEEP_HOURS = 24;
+const EMPTY_DAYS_BEFORE_EXHAUSTED = 3;
+const LISTING_UNAVAILABLE_RETRY_MINUTES = 60;
+const LOGIN_POLL_MINUTES = 10;
+const MIN_FREE_GIB = 10;
+const DISK_RECHECK_MINUTES = 60;
+const PROGRAMME_STALE_DAYS = 35;
+const PROGRAMME_WARN_DAYS = 7;
 
 const STOP_REASONS = [
   "operator",
@@ -219,7 +219,7 @@ const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
 
 /** The prefix `continuous run` uses without `--campaign-prefix`. */
-export const DEFAULT_CAMPAIGN_PREFIX = "prod";
+const DEFAULT_CAMPAIGN_PREFIX = "prod";
 export const CAMPAIGN_PREFIX = /^[a-z0-9][a-z0-9-]{0,40}$/;
 
 /**
@@ -329,10 +329,10 @@ export async function readContinuousConcurrency(
 }
 
 /** A runtime name that may become part of a file name. */
-export const RUNTIME_NAME = /^[a-z][a-z0-9-]{0,31}$/;
+const RUNTIME_NAME = /^[a-z][a-z0-9-]{0,31}$/;
 
 /** `<state>/continuous.concurrency.<runtime>`: one runtime's live limit under its cap. */
-export function continuousRuntimeConcurrencyPath(
+function continuousRuntimeConcurrencyPath(
   stateDirectory: string,
   runtime: string,
 ): string {

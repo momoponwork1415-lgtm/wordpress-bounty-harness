@@ -342,7 +342,7 @@ export type WordPressCliProfileOptions = {
   readonly attachments?: Pick<ProviderAttachmentStore, "readByDigest">;
 };
 
-export type WordPressVerification = Verification<
+type WordPressVerification = Verification<
   WordPressFinding,
   WordPressLabSetup,
   WordPressLabHandle

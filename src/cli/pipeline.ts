@@ -130,7 +130,7 @@ export const MAXIMUM_CAMPAIGN_ID_LENGTH =
   );
 
 /** How often a target held by the live limit looks at the limit again. */
-export const TARGET_LIMIT_POLL_MS = 30_000;
+const TARGET_LIMIT_POLL_MS = 30_000;
 
 /**
  * The operator's live target limit (`continuous concurrency`). It only holds

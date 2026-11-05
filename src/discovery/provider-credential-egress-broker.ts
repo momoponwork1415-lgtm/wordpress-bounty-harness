@@ -37,9 +37,6 @@ export const DISCOVERY_LEFTOVER_PATTERNS = {
   networks: [/^provider-egress-(?!broker-)[A-Za-z0-9_.-]+$/],
 } as const;
 
-/** @deprecated Use the complete discovery resource patterns. */
-export const EGRESS_BROKER_LEFTOVER_PATTERNS = DISCOVERY_LEFTOVER_PATTERNS;
-
 /** Memory ceiling of one per-run broker container. */
 export const EGRESS_BROKER_MEMORY_MIB = 512;
 
@@ -116,7 +113,7 @@ export interface ProviderCredentialEgressGrant {
   readonly expiresAt: string;
 }
 
-export type ProviderCredentialEgressOperation<T> =
+type ProviderCredentialEgressOperation<T> =
   | { readonly status: "not-started" }
   | { readonly status: "completed"; readonly value: T }
   | { readonly status: "failed"; readonly error: unknown };
@@ -223,10 +220,10 @@ export const providerCredentialEgressReceiptSchema =
       }
     });
 
-export type ProviderCredentialEgressSetup = z.infer<
+type ProviderCredentialEgressSetup = z.infer<
   typeof providerCredentialEgressSetupSchema
 >;
-export type ProviderCredentialEgressCleanup = z.infer<
+type ProviderCredentialEgressCleanup = z.infer<
   typeof providerCredentialEgressCleanupSchema
 >;
 export type ProviderCredentialEgressReceipt = z.infer<
@@ -246,7 +243,7 @@ export interface ProviderCredentialEgressBroker {
   ): Promise<ProviderCredentialEgressResult<T>>;
 }
 
-export interface DockerCommandResult {
+interface DockerCommandResult {
   readonly exitCode: number;
   readonly stdout: string;
   readonly stderr: string;

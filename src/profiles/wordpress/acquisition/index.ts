@@ -8,7 +8,6 @@ export {
 export { wordPressOrgTargetObservationRefSchema } from "./wordpress-org-contracts.js";
 export type {
   WordPressOrgSourceAdapter,
-  WordPressOrgTargetObservation,
   WordPressOrgTargetObservationRef,
   WordPressOrgTargetSource,
 } from "./wordpress-org-contracts.js";
@@ -28,9 +27,5 @@ export {
 export type { CapturedWordPressOrgSvnPin } from "./pinned-svn-source.js";
 export { openMaterializedSources } from "./materialized-sources.js";
 export { openWordPressCoreSource } from "./wordpress-core-source.js";
-export {
-  openWordPressCoreRelease,
-  WORDPRESS_CORE_VERSION_CHECK_URL,
-  type WordPressCoreReleaseObservation,
-} from "./wordpress-core-release.js";
+export { openWordPressCoreRelease } from "./wordpress-core-release.js";
 export { openPhpRuntimeSource } from "./php-runtime-source.js";

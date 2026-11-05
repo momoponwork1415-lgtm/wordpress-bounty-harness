@@ -1249,7 +1249,7 @@ const usageFields = [
   "outputTokens",
   "reasoningOutputTokens",
 ] as const;
-export type UsageField = (typeof usageFields)[number];
+type UsageField = (typeof usageFields)[number];
 
 /** Provider-reported tokens of discovery runs, per target and UTC day of the run's end. */
 export type UsageRow = {
@@ -1332,7 +1332,7 @@ export type CampaignFunnel = FunnelCounts & {
   readonly byArm: Readonly<Record<string, ArmCounts>>;
   readonly byObjective: Readonly<Record<string, FunnelSlice>>;
 };
-export type FunnelSlice = FunnelCounts & {
+type FunnelSlice = FunnelCounts & {
   readonly runs: number;
   readonly noncachedInputTokens: number;
   readonly unavailableInputRuns: number;
@@ -1341,7 +1341,7 @@ export type FunnelSlice = FunnelCounts & {
   readonly confirmedPerAgentWallHour: number | null;
 };
 type MutableSlice = { -readonly [K in keyof FunnelSlice]: FunnelSlice[K] };
-export type ArmCounts = {
+type ArmCounts = {
   readonly runs: number;
   readonly findings: number;
   readonly confirmed: number;

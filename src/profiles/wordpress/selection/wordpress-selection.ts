@@ -37,7 +37,7 @@ export interface CreateWordPressSelectionOptions {
   ) => Promise<WordPressOrgCandidateEnumeration>;
 }
 
-export interface WordPressSelectionBatchInspection {
+interface WordPressSelectionBatchInspection {
   /** The view of every candidate. */
   readonly inspections: readonly WordPressSelectionInspection[];
   readonly sourceStatus: "manual" | WordPressOrgCandidateEnumeration["status"];
@@ -66,10 +66,10 @@ export interface WordPressCandidateInspection {
   ): Promise<readonly WordPressTargetSelection[]>;
 }
 
-export type WordPressSelectionExclusionReason =
+type WordPressSelectionExclusionReason =
   SelectionReason | WordPressLedgerExclusionReason;
 
-export interface WordPressSelectionDecision {
+interface WordPressSelectionDecision {
   /** Every candidate with its policy and Ledger reasons merged. */
   readonly inspections: readonly (Omit<
     WordPressSelectionInspection,
@@ -85,7 +85,7 @@ export interface WordPressSelectionDecision {
   readonly sourceListings: WordPressSelectionBatchInspection["sourceListings"];
 }
 
-export interface WordPressSelectionDecideOptions {
+interface WordPressSelectionDecideOptions {
   /** Selection batches another runner holds unfinished; their slugs are excluded (#604). */
   readonly reservedBatches?: readonly string[];
 }

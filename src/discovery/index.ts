@@ -166,7 +166,6 @@ export {
 } from "./codex-gvisor-sandbox.js";
 export {
   DISCOVERY_LEFTOVER_PATTERNS,
-  EGRESS_BROKER_LEFTOVER_PATTERNS,
   EGRESS_BROKER_MEMORY_MIB,
 } from "./provider-credential-egress-broker.js";
 export {

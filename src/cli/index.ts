@@ -72,7 +72,7 @@ export interface CliIo {
 
 export type { CliState } from "./state.js";
 
-export type LabDownSummary = {
+type LabDownSummary = {
   readonly labId: string | null;
   /** The foreground process holding the Lab (`lab up --for-review`, #592, or `verify next --handoff`, #600) asked to close it. */
   readonly ownerStopped?: number;
@@ -104,7 +104,7 @@ export type CliSelectionCore = {
     | null;
 };
 
-export interface CliSelectionReport {
+interface CliSelectionReport {
   readonly batchId: string | null;
   /** available, stale or unavailable public listings; manual for named slugs; core-image-outdated / core-release-unavailable when the Lab image is not the latest stable (#741). */
   readonly sourceStatus?: string;
@@ -127,7 +127,7 @@ export interface CliSelectionReport {
 }
 
 /** What `campaign resume --run` did: a reasoned refusal without events, or the new segment's outcome. */
-export type ResumeCampaignRunSummary =
+type ResumeCampaignRunSummary =
   | {
       readonly status: "refused";
       readonly reason: string;
@@ -509,7 +509,7 @@ function stages(counts: FunnelCounts): string {
   return `最終JSON到達 ${counts.reached} → 受理 ${counts.accepted} / 保留 ${counts.held} / parked ${counts.parked} → raw ${counts.raw} → verifier通過 ${counts.verified} → confirmed ${counts.confirmed} / reproduced ${counts.reproduced} / contradicted ${counts.contradicted} / incomplete ${counts.incomplete} → reviewed ${counts.reviewed} → in-scope ${counts.inScope} → submitted ${counts.submitted}${counts.submittedExternally > 0 ? ` (external ${counts.submittedExternally})` : ""} → outcome ${counts.outcome}`;
 }
 
-export function formatStopRow(row: StopRow): string {
+function formatStopRow(row: StopRow): string {
   const fields = Object.entries(row.fields).map(
     ([name, value]) => `${name}=${value}`,
   );
@@ -666,7 +666,7 @@ async function egressPlanFor(
   return { destinations: plan.destinations };
 }
 
-export function formatQueue(
+function formatQueue(
   queue: ReviewListing,
   /** The store's own location of an artifact's files, so the printed path opens. */
   contentPath: (digest: string) => string,
@@ -1019,7 +1019,7 @@ function integerOption(
   return Number(value);
 }
 
-export function formatLabDown(summary: LabDownSummary): string[] {
+function formatLabDown(summary: LabDownSummary): string[] {
   const count = (kind: "containers" | "networks" | "volumes") =>
     `${kind} ${summary.removed[kind].length} removed, ${summary.remaining[kind].length} remaining${summary.remaining[kind].length === 0 ? "" : `: ${summary.remaining[kind].join(", ")}`}`;
   return [

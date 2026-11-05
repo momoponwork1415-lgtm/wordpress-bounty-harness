@@ -129,7 +129,7 @@ export type ReviewRef = z.infer<typeof refSchema>;
 export type ReviewDecisionRef = z.infer<typeof decisionRefSchema>;
 export type ScopeAssessment = z.infer<typeof assessmentSchema>;
 export type SubmissionDraft = z.infer<typeof draftSchema>;
-export type ExternalActionAuthorization = z.infer<typeof authorizationSchema>;
+type ExternalActionAuthorization = z.infer<typeof authorizationSchema>;
 export type ReviewDecisionV1 = z.infer<typeof reviewDecisionV1Schema>;
 export type DuplicateCheck = z.infer<typeof duplicateSchema>;
 
@@ -152,7 +152,7 @@ const reviewRecordSchemas: {
 
 export const REVIEW_RECORD_FILE = "record.json";
 /** A draft carries up to 100,000 characters of content; the JSON around it stays well under this. */
-export const REVIEW_RECORD_MAX_BYTES = 512_000;
+const REVIEW_RECORD_MAX_BYTES = 512_000;
 
 export type ReviewRecordRead<T> =
   | { readonly status: "read"; readonly record: T }

@@ -89,7 +89,7 @@ export const wordPressOrgAcquisitionOriginalSchema = z.strictObject({
   observationRef: wordPressOrgTargetObservationRefSchema,
 });
 
-export const wordPressOrgSourceRequestSchema = z.strictObject({
+const wordPressOrgSourceRequestSchema = z.strictObject({
   kind: z.enum(["metadata", "archive"]),
   sourceUrl: z.url(),
   maximumBytes: z.number().int().positive(),
@@ -115,7 +115,7 @@ export type WordPressOrgObserveRequest = z.infer<
 export type WordPressOrgAcquireRequest = z.infer<
   typeof wordPressOrgAcquireRequestSchema
 >;
-export type WordPressOrgAcquisitionOriginal = z.infer<
+type WordPressOrgAcquisitionOriginal = z.infer<
   typeof wordPressOrgAcquisitionOriginalSchema
 >;
 export type WordPressOrgSourceRequest = z.infer<
@@ -131,7 +131,7 @@ export interface WordPressOrgSourceAdapter {
   ): Promise<WordPressOrgSourceResponse>;
 }
 
-export interface ObservedWordPressOrgTarget {
+interface ObservedWordPressOrgTarget {
   readonly status: "observed";
   readonly observation: WordPressOrgTargetObservation;
   readonly observationRef: WordPressOrgTargetObservationRef;
@@ -182,7 +182,7 @@ interface AcquisitionContext {
   readonly acquisitionOriginalRef: z.infer<typeof immutableArtifactRefSchema>;
 }
 
-export interface WordPressOrgAcquisitionFailureWithOriginal
+interface WordPressOrgAcquisitionFailureWithOriginal
   extends AcquisitionContext, WordPressOrgSourceFailureBase {
   readonly operation: "acquire";
   readonly reason: "metadata-archive-mismatch";
@@ -197,7 +197,7 @@ type RejectedIntakeDisposition = Extract<
   { readonly status: "rejected" }
 >;
 
-export type WordPressOrgAcquisitionWithIntake = AcquisitionContext &
+type WordPressOrgAcquisitionWithIntake = AcquisitionContext &
   (
     | {
         readonly status: "ready";
@@ -213,7 +213,7 @@ export type WordPressOrgAcquisitionWithIntake = AcquisitionContext &
       }
   );
 
-export interface WordPressOrgArchiveRejected extends AcquisitionContext {
+interface WordPressOrgArchiveRejected extends AcquisitionContext {
   readonly status: "rejected";
   readonly reasons: readonly TargetIntakeReason[];
 }

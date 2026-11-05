@@ -194,7 +194,7 @@ export async function localResearchTrials(
 }
 
 /** The Trials of other ledgers `research import` admitted into this one (ADR 0049 D). */
-export function importedResearchTrials(
+function importedResearchTrials(
   state: Pick<CliState, "ledger">,
   filter: { readonly targetId?: string } = {},
 ): readonly ResearchTrial[] {

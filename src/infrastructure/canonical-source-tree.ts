@@ -256,7 +256,7 @@ export async function verifyCanonicalSourceTree(
   };
 }
 
-export type SourceManifestMismatch =
+type SourceManifestMismatch =
   | { readonly reason: "manifest-order"; readonly path: string }
   | { readonly reason: "manifest-path-collision"; readonly path: string }
   | {

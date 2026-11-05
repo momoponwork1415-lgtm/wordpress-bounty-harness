@@ -26,7 +26,7 @@ import {
 } from "./precondition-class.js";
 import { wordpressReproductionStepSchema } from "./reproduction-package.js";
 
-export type WordPressLowPrivilegeAccounts = Readonly<{
+type WordPressLowPrivilegeAccounts = Readonly<{
   subscriber: Readonly<{ username: string; password: string }>;
   customer?: Readonly<{ username: string; password: string }>;
 }>;
@@ -35,7 +35,7 @@ export type WordPressLowPrivilegeAccounts = Readonly<{
  * The Lab as a Verifier transport may see it: named fields only, low-privilege
  * accounts only, and the database only when the impact allows it.
  */
-export type WordPressVerifierLab = Readonly<{
+type WordPressVerifierLab = Readonly<{
   id: string;
   snapshotDigest: string;
   setupDigest: string;
@@ -48,7 +48,7 @@ export type WordPressVerifierLab = Readonly<{
 }>;
 
 /** An earlier recorded route, already validated, for a version comparison. */
-export type WordPressVerifierReferenceRoute = Readonly<{
+type WordPressVerifierReferenceRoute = Readonly<{
   role: "unauthenticated" | "subscriber" | "customer";
   defaultSettings: boolean;
   steps: readonly z.infer<typeof wordpressReproductionStepSchema>[];
@@ -78,8 +78,7 @@ export const WORDPRESS_VERIFIER_FILE_NAMES = [
   "refutation.md",
   "precondition",
 ] as const;
-export type WordPressVerifierFileName =
-  (typeof WORDPRESS_VERIFIER_FILE_NAMES)[number];
+type WordPressVerifierFileName = (typeof WORDPRESS_VERIFIER_FILE_NAMES)[number];
 /** The files a transport hands back verbatim; absent files are absent, never null. */
 export type WordPressVerifierFiles = Readonly<
   Partial<Record<WordPressVerifierFileName, string>>

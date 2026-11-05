@@ -17,7 +17,7 @@
  * Any other value is dropped before forwarding, not refused, so a beta Claude
  * Code adds for a request-shaping feature cannot fail a Trial on its own.
  */
-export const ANTHROPIC_ADMITTED_BETAS: ReadonlySet<string> = new Set([
+const ANTHROPIC_ADMITTED_BETAS: ReadonlySet<string> = new Set([
   "oauth-2025-04-20",
   "claude-code-20250219",
   "interleaved-thinking-2025-05-14",
