@@ -116,7 +116,7 @@ export {
   type WordPressCliProfileOptions,
 } from "./wordpress-session.js";
 
-/** `select` reads either a bare selection policy or a campaign config naming one. */
+/** Selection reads either a bare selection policy or a campaign config naming one. */
 async function loadSelectInput(configPath: string): Promise<{
   readonly policy: WordPressSelectionPolicy;
   /** The pinned core version; undefined takes the Lab image's (#741). */

@@ -568,7 +568,7 @@ export async function createWordPressHostProfile(options: {
           dependencySources: sourcePack.dependencies,
         };
       },
-      // #741: the same core check `select` applies, for `runtime check`.
+      // #741: the same core check selection applies, for `runtime check`.
       coreRelease: openWordPressCoreRelease({
         clock: state.clock,
         ...(options.fetch === undefined ? {} : { fetch: options.fetch }),

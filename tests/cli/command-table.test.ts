@@ -22,7 +22,6 @@ import {
 // The usage text as it was before the commands became a table (2026-10-18).
 const PINNED_USAGE = [
   "usage: harness [--state <dir>] <command>",
-  "  select --config <path> [--minimum <n>]",
   "  campaign run <slug>|--all --campaign <id> --config <path> [--selection <path>] [--repeat <n>]",
   "  continuous run --config <path> --selection <path> [--campaign-prefix <text>] [--notify <command>] [--resume]",
   "  continuous stop [--campaign-prefix <text>]",
@@ -328,7 +327,7 @@ describe("command table", () => {
   });
 
   it("names an unknown flag, then prints the usage text, and exits 2", async () => {
-    const result = await run("select", "--no-such-flag");
+    const result = await run("ledger", "funnel", "--no-such-flag");
     expect(result.code).toBe(2);
     expect(result.stderr.startsWith("Unknown option '--no-such-flag'")).toBe(
       true,

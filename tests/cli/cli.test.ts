@@ -1037,6 +1037,12 @@ async function harness(
       },
     }),
   );
+  /** Freeze one selection batch through the profile, as the runner does. */
+  const select = async (path: string, minimum?: number) =>
+    environment.profile.select(
+      await openState(environment.stateDirectory, environment),
+      { configPath: path, ...(minimum === undefined ? {} : { minimum }) },
+    );
   const run = async (...argv: string[]) => {
     const stdout: string[] = [];
     const stderr: string[] = [];
@@ -1209,6 +1215,7 @@ async function harness(
     ledger: () => state.ledger,
     state: () => state,
     profile: environment.profile,
+    select,
     store: () => state.store,
     maxInFlight: () => maxInFlight,
     frozenSelections,
@@ -1218,7 +1225,7 @@ async function harness(
 /** Reproduce a large, digest-addressed automatic batch at the public CLI seam. */
 async function largeReservedSelectionFixture(reportBytes: number) {
   const fixture = await harness({ candidates: ["item-a"] });
-  const { run, root, ledger, store, configPath, profile } = fixture;
+  const { run, root, ledger, store, configPath, profile, select } = fixture;
   const policyPath = join(root, "selection.json");
   const manual = JSON.parse(await readFile(policyPath, "utf8")) as Record<
     string,
@@ -1240,14 +1247,7 @@ async function largeReservedSelectionFixture(reportBytes: number) {
     },
   };
   await writeFile(policyPath, JSON.stringify(policy));
-  const selection = await run(
-    "select",
-    "--config",
-    policyPath,
-    "--minimum",
-    "1",
-  );
-  expect(selection).toMatchObject({ code: 0, stderr: "" });
+  expect((await select(policyPath, 1)).batchId).not.toBeNull();
   const selected = ledger()
     .read({ type: "target-selected" })
     .map(({ event }) => event)
@@ -2831,8 +2831,8 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("reads historical stage and continuation references without writing them on new Trials", async () => {
-    const { run, configPath, ledger } = await harness();
-    expect((await run("select", "--config", configPath)).code).toBe(0);
+    const { configPath, ledger, select } = await harness();
+    await select(configPath);
     await ledger().append({
       schemaVersion: 1,
       identity: "historical-discovery-start",
@@ -2862,7 +2862,7 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("does not label a new manual selection with an archived prompt", async () => {
-    const { run, root, configPath, prompts } = await harness();
+    const { run, root, configPath, prompts, select } = await harness();
     const policyPath = join(root, "selection.json");
     const policy = JSON.parse(await readFile(policyPath, "utf8")) as Record<
       string,
@@ -2876,14 +2876,10 @@ describe("harness CLI vertical slice", () => {
         promptVariant: "wp2shell-bounty-v6",
       }),
     );
-    const direct = await run("select", "--config", policyPath);
-    expect(direct.code).toBe(1);
-    expect(direct.stderr).toContain(
+    await expect(select(policyPath)).rejects.toThrow(
       "New selections use the current prompt variant only",
     );
-    const fromCampaign = await run("select", "--config", configPath);
-    expect(fromCampaign.code).toBe(1);
-    expect(fromCampaign.stderr).toContain(
+    await expect(select(configPath)).rejects.toThrow(
       "Selection and campaign prompt variants differ",
     );
     const campaign = await run(
@@ -3493,8 +3489,8 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("checks every recorded cleanup Lab id before resuming", async () => {
-    const { run, configPath, prompts, ledger } = await harness();
-    expect((await run("select", "--config", configPath)).code).toBe(0);
+    const { run, configPath, prompts, ledger, select } = await harness();
+    await select(configPath);
     await ledger().append({
       schemaVersion: 1,
       identity: "replay-cleanup-stop",
@@ -4600,7 +4596,7 @@ describe("harness CLI vertical slice", () => {
   it.each(["missing", "unreadable"])(
     "selects while the configured mirror is %s",
     async (status) => {
-      const { run, root, configPath, ledger } = await harness({
+      const { root, configPath, ledger, select } = await harness({
         history: true,
       });
       if (status === "missing") {
@@ -4610,9 +4606,7 @@ describe("harness CLI vertical slice", () => {
         await writeFile(join(root, "wordfence.sqlite"), "not a database");
         await writeFile(join(root, "wordfence-state.json"), "not JSON");
       }
-      const selected = await run("select", "--config", configPath);
-      expect(selected.code).toBe(0);
-      expect(selected.stderr).toBe("");
+      await select(configPath);
       expect(ledger().read({ type: "target-selected" })).toHaveLength(1);
       expect(ledger().read({ type: "discovery-run-started" })).toHaveLength(0);
     },
@@ -4856,16 +4850,23 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("records a source freeze failure during selection without leaking diagnostics", async () => {
-    const { run, configPath, ledger, store } = await harness({
+    const { configPath, ledger, store, select } = await harness({
       candidates: ["broken-plugin", "synthetic-plugin"],
       failFreeze: "broken-plugin",
     });
-    const selected = await run("select", "--config", configPath);
-    expect(selected.code).toBe(0);
-    expect(selected.stdout).toContain(
-      "excluded wporg:broken-plugin  reasons snapshot-unavailable",
+    const selected = await select(configPath);
+    expect(selected.excluded).toContainEqual(
+      expect.objectContaining({
+        targetId: "wporg:broken-plugin",
+        reasons: ["snapshot-unavailable"],
+      }),
     );
-    expect(selected.stdout).toContain("wporg:synthetic-plugin 3.3.1 installs");
+    expect(selected.selected).toContainEqual(
+      expect.objectContaining({
+        targetId: "wporg:synthetic-plugin",
+        version: "3.3.1",
+      }),
+    );
     const skips = ledger()
       .read({ type: "target-skipped" })
       .map(({ event }) => event);
@@ -4932,7 +4933,7 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("continues the install queue when its highest ranked source fails to freeze (#533)", async () => {
-    const { run, root, ledger, store } = await harness({
+    const { root, ledger, store, select } = await harness({
       candidates: ["broken-plugin", "item-b"],
       failFreeze: "broken-plugin",
       installs: { "broken-plugin": 150_000, "item-b": 60_000 },
@@ -4965,18 +4966,16 @@ describe("harness CLI vertical slice", () => {
       }),
     );
     // A failed source does not prevent the remaining queue from supplying a batch.
-    const selected = await run(
-      "select",
-      "--config",
-      policyPath,
-      "--minimum",
-      "1",
+    const selected = await select(policyPath, 1);
+    expect(selected.batchId).toMatch(/^selection-/);
+    expect(selected.selected).toContainEqual(
+      expect.objectContaining({ activeInstallations: 60000 }),
     );
-    expect(selected.code).toBe(0);
-    expect(selected.stdout).toMatch(/^selection batch selection-/m);
-    expect(selected.stdout).toContain("installs 60000");
-    expect(selected.stdout).toContain(
-      "excluded wporg:broken-plugin  reasons snapshot-unavailable",
+    expect(selected.excluded).toContainEqual(
+      expect.objectContaining({
+        targetId: "wporg:broken-plugin",
+        reasons: ["snapshot-unavailable"],
+      }),
     );
     const chosen = ledger()
       .read({ type: "target-selected" })
@@ -4998,7 +4997,7 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("returns an empty selection with reasons below the floor, and a batch at --minimum 1", async () => {
-    const { run, root, ledger, store, configPath } = await harness({
+    const { run, root, ledger, store, configPath, select } = await harness({
       candidates: ["broken-plugin", "item-b"],
       failFreeze: "broken-plugin",
     });
@@ -5028,12 +5027,14 @@ describe("harness CLI vertical slice", () => {
         },
       }),
     );
-    const selected = await run("select", "--config", policyPath);
+    const selected = await select(policyPath);
     // Below the floor of 3: no batch, a reason per target, and no throw.
-    expect(selected.code).toBe(0);
-    expect(selected.stdout).toContain("no targets selected");
-    expect(selected.stdout).toContain(
-      "excluded wporg:item-b  reasons below-minimum",
+    expect(selected.selected).toEqual([]);
+    expect(selected.excluded).toContainEqual(
+      expect.objectContaining({
+        targetId: "wporg:item-b",
+        reasons: expect.arrayContaining(["below-minimum"]),
+      }),
     );
     expect(ledger().read({ type: "target-selected" })).toHaveLength(0);
     const skipped = ledger().read({ type: "target-skipped" })[0]?.event;
@@ -5053,9 +5054,8 @@ describe("harness CLI vertical slice", () => {
         minimum: 3,
       });
     // The runner's floor of 1 makes a batch of the one eligible target.
-    const one = await run("select", "--config", policyPath, "--minimum", "1");
-    expect(one.code).toBe(0);
-    expect(one.stdout).toMatch(/^selection batch selection-/m);
+    const one = await select(policyPath, 1);
+    expect(one.batchId).toMatch(/^selection-/);
     expect(ledger().read({ type: "target-selected" })).toHaveLength(1);
     const automatic = await run(
       "campaign",
@@ -5074,9 +5074,6 @@ describe("harness CLI vertical slice", () => {
         type: "discovery-run-started",
       }),
     ).not.toHaveLength(0);
-    expect(
-      (await run("select", "--config", policyPath, "--minimum", "0")).code,
-    ).toBe(2);
   });
 
   it("classifies a source mismatch in the ledger and keeps its detail private", async () => {
@@ -5118,11 +5115,13 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("lists the policy selection and runs only the named target or --all", async () => {
-    const { run, configPath, prompts } = await harness();
-    const selected = await run("select", "--config", configPath);
-    expect(selected.code).toBe(0);
-    expect(selected.stdout).toMatch(
-      /^wporg:synthetic-plugin 3\.3\.1 installs /m,
+    const { run, configPath, prompts, select } = await harness();
+    const selected = await select(configPath);
+    expect(selected.selected).toContainEqual(
+      expect.objectContaining({
+        targetId: "wporg:synthetic-plugin",
+        version: "3.3.1",
+      }),
     );
 
     const unmatched = await run(
@@ -5198,7 +5197,7 @@ describe("harness CLI vertical slice", () => {
         reason: "http-error" as const,
       },
     ];
-    const { run, configPath, root, ledger, store } = await harness({
+    const { run, configPath, root, ledger, store, select } = await harness({
       candidates,
       listingObservations,
       failRepeatedFreeze: true,
@@ -5229,13 +5228,19 @@ describe("harness CLI vertical slice", () => {
         },
       }),
     );
-    const first = await run("select", "--config", policyPath);
-    expect(first.code).toBe(0);
-    expect(first.stdout).toContain("wporg:item-a 9.9.9 installs");
-    expect(first.stdout).toContain("wporg:item-c 9.9.9 installs");
-    expect(first.stdout).toContain("installs 5000");
-    expect(first.stdout).toContain(
-      "excluded wporg:item-d  reasons below-rank-cutoff",
+    const first = await select(policyPath);
+    const ids = (report: Awaited<ReturnType<typeof select>>) =>
+      report.selected.map(({ targetId, version }) => `${targetId} ${version}`);
+    expect(ids(first)).toContain("wporg:item-a 9.9.9");
+    expect(ids(first)).toContain("wporg:item-c 9.9.9");
+    expect(first.selected).toContainEqual(
+      expect.objectContaining({ activeInstallations: 5000 }),
+    );
+    expect(first.excluded).toContainEqual(
+      expect.objectContaining({
+        targetId: "wporg:item-d",
+        reasons: ["below-rank-cutoff"],
+      }),
     );
     // A reservation alone excludes nothing; the started Trials do.
     const firstBatch = await run(
@@ -5248,14 +5253,16 @@ describe("harness CLI vertical slice", () => {
       configPath,
     );
     expect(firstBatch.code).toBe(0);
-    const second = await run("select", "--config", policyPath);
-    expect(second.code).toBe(0);
-    expect(second.stdout).not.toContain("wporg:item-a 9.9.9 installs");
-    expect(second.stdout).toContain(
-      "excluded wporg:item-b  reasons previously-selected",
+    const second = await select(policyPath);
+    expect(ids(second)).not.toContain("wporg:item-a 9.9.9");
+    expect(second.excluded).toContainEqual(
+      expect.objectContaining({
+        targetId: "wporg:item-b",
+        reasons: ["previously-selected"],
+      }),
     );
-    expect(second.stdout).toContain("wporg:item-d 9.9.9 installs");
-    expect(second.stdout).toContain("wporg:item-f 9.9.9 installs");
+    expect(ids(second)).toContain("wporg:item-d 9.9.9");
+    expect(ids(second)).toContain("wporg:item-f 9.9.9");
     const reservations = ledger()
       .read({ type: "target-selected", limit: 100 })
       .filter(({ event }) => event.campaignId.startsWith("selection-"));
@@ -5324,9 +5331,8 @@ describe("harness CLI vertical slice", () => {
       selectionIds: ["wporg:item-d@9.9.9"],
     });
 
-    const third = await run("select", "--config", policyPath);
-    expect(third.code).toBe(0);
-    expect(third.stdout).toContain("wporg:item-g 9.9.9 installs");
+    const third = await select(policyPath);
+    expect(ids(third)).toContain("wporg:item-g 9.9.9");
     const labsBeforeCompletedResume = ledger().read({
       campaignId: "campaign-reserved",
       type: "lab-provisioned",
@@ -5451,7 +5457,7 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("keeps a held batch's targets out of another runner's selection and binds the batch a runner names (#604)", async () => {
-    const { run, configPath, root, ledger, profile } = await harness({
+    const { configPath, root, ledger, profile, select } = await harness({
       candidates: ["item-a", "item-b", "item-c", "item-d", "item-e", "item-f"],
     });
     const policyPath = join(root, "selection.json");
@@ -5494,7 +5500,7 @@ describe("harness CLI vertical slice", () => {
       return [...byBatch];
     };
     // One runner's batch: selected, not started.
-    expect((await run("select", "--config", policyPath)).code).toBe(0);
+    await select(policyPath);
     const [[held, heldTargets]] = batches() as [[string, string[]]];
     expect(heldTargets).toEqual([
       "wporg:item-a@9.9.9",
@@ -5533,21 +5539,22 @@ describe("harness CLI vertical slice", () => {
   });
 
   it("drops a batch frozen under another policy on restart and selects its targets again (#302)", async () => {
-    const { run, root, profile, configPath, ledger, store } = await harness({
-      candidates: ["item-a", "item-b", "item-c"],
-      listingObservations: [
-        {
-          kind: "popular" as const,
-          page: 1,
-          sourceUrl:
-            "https://api.wordpress.org/plugins/info/1.2/?request%5Bbrowse%5D=popular",
-          checkedAt: now,
-          status: "available" as const,
-          observedAt: now,
-          contentDigest: sha("b"),
-        },
-      ],
-    });
+    const { run, root, profile, configPath, ledger, store, select } =
+      await harness({
+        candidates: ["item-a", "item-b", "item-c"],
+        listingObservations: [
+          {
+            kind: "popular" as const,
+            page: 1,
+            sourceUrl:
+              "https://api.wordpress.org/plugins/info/1.2/?request%5Bbrowse%5D=popular",
+            checkedAt: now,
+            status: "available" as const,
+            observedAt: now,
+            contentDigest: sha("b"),
+          },
+        ],
+      });
     const state = join(root, "state");
     const { wordpressVersion } = JSON.parse(
       await readFile(configPath, "utf8"),
@@ -5624,7 +5631,7 @@ describe("harness CLI vertical slice", () => {
     expect(stoppedSelection).toMatchObject({ batchId: null, selected: [] });
     expect(batches()).toEqual([]);
     // An unbound batch from an earlier start, under the earlier policy.
-    expect((await run("select", "--config", policyPath)).code).toBe(0);
+    await select(policyPath);
     const [[orphan, orphanTargets]] = batches() as [[string, string[]]];
     expect(orphanTargets).toHaveLength(3);
     await writeFile(
@@ -7262,16 +7269,18 @@ describe("WordPress core follows the latest stable release (#741)", () => {
   const unpinned = { wordpressVersion: undefined };
 
   it("freezes on the image's version when it is the latest stable and records it in the report", async () => {
-    const { run, configPath, ledger, state } = await harness({
+    const { configPath, ledger, state, select } = await harness({
       config: unpinned,
       core: { image: "6.8", latest: "6.8" },
     });
-    const result = await run("select", "--config", configPath);
-    expect(result.code).toBe(0);
-    expect(result.stdout).toContain(
-      "wordpress core 6.8 (image)  latest 6.8  ok",
-    );
-    expect(result.stdout).toContain("selection batch ");
+    const result = await select(configPath);
+    expect(result.core).toMatchObject({
+      version: "6.8",
+      source: "image",
+      latest: { version: "6.8" },
+      status: "ok",
+    });
+    expect(result.batchId).not.toBeNull();
     const selected = ledger().read({ type: "target-selected" });
     expect(selected.length).toBeGreaterThan(0);
     const digest = selected[0]!.event.artifacts.find(
@@ -7299,29 +7308,33 @@ describe("WordPress core follows the latest stable release (#741)", () => {
   ] as const)(
     "freezes nothing and answers %s when the image is behind or the check is unanswered",
     async (status, latest) => {
-      const { run, configPath, ledger } = await harness({
+      const { configPath, ledger, select } = await harness({
         config: unpinned,
         core: { image: "6.8", latest },
       });
-      const result = await run("select", "--config", configPath);
-      expect(result.code).toBe(0);
-      expect(result.stdout).toContain(`wordpress core 6.8 (image)`);
-      expect(result.stdout).toContain(status);
-      expect(result.stdout).toContain("no targets selected");
+      const result = await select(configPath);
+      expect(result.core).toMatchObject({
+        version: "6.8",
+        source: "image",
+        status,
+      });
+      expect(result.selected).toEqual([]);
       expect(ledger().read({ type: "target-selected" })).toHaveLength(0);
       expect(ledger().read({ type: "target-skipped" })).toHaveLength(0);
     },
   );
 
   it("keeps freezing on a pinned version and only reports the latest beside it", async () => {
-    const { run, configPath, ledger } = await harness({
+    const { configPath, ledger, select } = await harness({
       core: { image: "6.8", latest: "6.9" },
     });
-    const result = await run("select", "--config", configPath);
-    expect(result.code).toBe(0);
-    expect(result.stdout).toContain(
-      "wordpress core 6.8 (pinned)  latest 6.9  ok",
-    );
+    const result = await select(configPath);
+    expect(result.core).toMatchObject({
+      version: "6.8",
+      source: "pinned",
+      latest: { version: "6.9" },
+      status: "ok",
+    });
     expect(ledger().read({ type: "target-selected" }).length).toBeGreaterThan(
       0,
     );

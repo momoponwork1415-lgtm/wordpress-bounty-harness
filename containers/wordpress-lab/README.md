@@ -11,7 +11,7 @@ operator rebuilds, pushes and re-pins `images.wordpress`, Labs run the old
 image: `POST /trace` then answers `unavailable` and nothing else changes.
 
 The core version the image ships is the version every Snapshot, exploration
-sandbox and Lab uses (#741, ADR 0047). `select` reads the latest stable release
+sandbox and Lab uses (#741, ADR 0047). Selection reads the latest stable release
 from WordPress.org's version check and freezes nothing while the image is
 behind it (`core-image-outdated`); `runtime check` prints the same comparison
 as the `wordpress-core` item. Only development and historical runs pin a
@@ -22,7 +22,7 @@ It reads the latest stable version, pulls the matching official
 `wordpress:<version>-php8.3-apache` image, and prints its digest as the
 `images.wordpress` value and as the `WORDPRESS_BASE` line for a custom build.
 With `--write <host.json>` it sets `images.wordpress` in that Git-external host
-config. Restart the runner afterwards; `select` resumes on the next batch.
+config. Restart the runner afterwards; selection resumes on the next batch.
 
 To update a custom-built image by hand:
 

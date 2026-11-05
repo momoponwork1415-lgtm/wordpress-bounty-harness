@@ -1215,51 +1215,6 @@ function continuousRow(
 /** One row per command, in the order the usage text lists them. */
 const COMMANDS: readonly Command[] = [
   command({
-    name: "select",
-    required: ["config"],
-    usage: ["select --config <path> [--minimum <n>]"],
-    options: { config: STR, minimum: STR },
-    validate: (values) => {
-      const minimum =
-        values.minimum === undefined ? undefined : Number(values.minimum);
-      if (
-        minimum !== undefined &&
-        (!Number.isSafeInteger(minimum) || minimum < 1 || minimum > 5)
-      )
-        throw new UsageError("--minimum must be an integer from 1 to 5");
-    },
-    handler: async ({ values, state, environment, io }) => {
-      const minimum =
-        values.minimum === undefined ? undefined : Number(values.minimum);
-      const report = await environment.profile.select(state, {
-        configPath: resolve(required(values.config, "config")),
-        ...(minimum === undefined ? {} : { minimum }),
-      });
-      for (const target of report.selected)
-        io.stdout(
-          `${target.targetId} ${target.version} installs ${target.activeInstallations}  updated ${target.versionPublishedAt ?? "unavailable"}  ${target.reason}  observed ${target.observedAt}  source ${target.sourceUrl ?? "unavailable"}  excluded none`,
-        );
-      for (const target of report.excluded)
-        io.stdout(
-          `excluded ${target.targetId}  reasons ${target.reasons.join(",")}  observed ${target.observedAt ?? "unavailable"}  source ${target.sourceUrl ?? "unavailable"}`,
-        );
-      if (report.core !== undefined)
-        io.stdout(
-          `wordpress core ${report.core.version} (${report.core.source})  latest ${
-            report.core.latest === null
-              ? "not checked"
-              : "version" in report.core.latest
-                ? report.core.latest.version
-                : `unavailable (${report.core.latest.unavailable})`
-          }  ${report.core.status}`,
-        );
-      if (report.batchId !== null)
-        io.stdout(`selection batch ${report.batchId}`);
-      if (report.selected.length === 0) io.stdout("no targets selected");
-      return 0;
-    },
-  }),
-  command({
     name: "campaign run",
     required: ["campaign", "config"],
     maxPositionals: 1,

@@ -28,7 +28,7 @@ export type DockerCommand = (
  * once per image digest. Nothing in it is executed on the host. When a version
  * is declared, the one in `wp-includes/version.php` must equal it, so the
  * agents read exactly the core the Lab runs; without one (#741), the image's
- * version is the core version and `select` checks it against the latest
+ * version is the core version and selection checks it against the latest
  * stable release.
  */
 export function openWordPressCoreSource(options: {
