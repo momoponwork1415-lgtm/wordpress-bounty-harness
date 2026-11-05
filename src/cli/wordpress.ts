@@ -14,7 +14,6 @@ import {
   providerLimitedAutoResumeRefusal,
   recordInterruptedRun,
   runParametersSection,
-  type StagedSkill,
 } from "../discovery/index.js";
 import type {
   PlannedDiscoveryRun,
@@ -58,11 +57,6 @@ import {
   type WordPressDiscoveryAsset,
   type WordPressOutputContractVersion,
 } from "../profiles/wordpress/prompts/index.js";
-import {
-  loadWordPressDiscoverySkill,
-  wordPressDiscoverySkillRecord,
-  type WordPressDiscoverySkill,
-} from "../profiles/wordpress/prompts/skills.js";
 import { createWordpressScopeEvaluator } from "../profiles/wordpress/scope-policy.js";
 import {
   openWordPressSelection,
@@ -638,8 +632,6 @@ function wordPressDiscoveryPromptText(options: {
   readonly runParameters: RunParameters;
   /** ADR 0048: the generated `## Prior research` section of a later Trial on the same target. */
   readonly priorResearchSection?: string;
-  /** The front-matter names of the staged skills (ADR 0049 addendum 6). */
-  readonly skillNames?: readonly string[];
 }): string {
   const { objective, trustBoundary, config, lab, source } = options;
   const objectiveOnly = wordPressDiscoveryContractPlan(
@@ -660,14 +652,7 @@ function wordPressDiscoveryPromptText(options: {
       ? [
           "This Trial has no Lab. Runtime confirmation happens during verification.",
         ]
-      : [
-          wordPressLabSection(
-            lab,
-            config.discovery.lab,
-            options.resumedLab,
-            options.skillNames ?? [],
-          ),
-        ]),
+      : [wordPressLabSection(lab, config.discovery.lab, options.resumedLab)]),
     ...(source.dependency === undefined
       ? []
       : [
@@ -700,12 +685,6 @@ type WordPressLabBudget = {
 };
 
 /**
- * The front-matter name of the skill that describes the use of the Lab
- * commands; matched by name, not id, so a later version is covered.
- */
-const WORDPRESS_LAB_SKILL_NAME = "wbh-lab";
-
-/**
  * ADR 0049: an exploration Lab always carries the read-only database account
  * (`find` and `sql` answer through it), whatever the campaign's `lab.databaseAccess`
  * says for verification Labs.
@@ -725,17 +704,12 @@ const explorationSetupFor =
  * Passwords are written here: the sandbox has no other channel for Lab
  * credentials. A resumed segment's section states that its Lab is new and how
  * much of the Trial's budgets is used; it is that segment's first-turn notice.
- * When a staged skill is named `wbh-lab`, one sentence after the Trace
- * paragraph says that skill describes the use of these commands (ADR 0049
- * addendum 6); without it the section is byte-identical to before, so past
- * Trials' prompts still match their digests.
  * Agent-facing text: changes need `owner-approved`.
  */
 export function wordPressLabSection(
   lab: WordPressLabHandle,
   budget: WordPressLabBudget,
   resumed?: WordPressLabUsed,
-  skillNames: readonly string[] = [],
 ): string {
   const { maxResets, maxObservations, maxLookups } = budget;
   const exploration = lab.exploration;
@@ -771,11 +745,6 @@ export function wordPressLabSection(
     `Find: \`POST http://${control.host}/find\` with a JSON body \`{"marker": "..."}\`, where marker is a string of 10 to 15 digits not starting with 0, searches the site's database and the files under \`wp-content\` for that exact string. The answer lists every database table and column whose rows contain it, with up to 20 key values per table, and every file path that contains it, up to 50; \`truncated\` says when a limit cut the list. A value the search does not find is reported as not found; that is an absence in this search, not proof that the value was not stored.`,
     `Query: \`POST http://${control.host}/sql\` with a JSON body \`{"select": "..."}\` runs one SELECT statement on the site's database as a read-only account and answers with the column names and up to 200 rows; \`truncated\` says when more rows matched. A statement that is not a single SELECT, or that the database rejects, is refused with \`sql-error\` and the database's message. Find and Query share one budget: ${resumed === undefined ? `this Trial may use them at most ${maxLookups} times` : `this Trial may use them at most ${maxLookups} times in all and has used ${resumed.lookupsUsed}`}, and each answer states how many are used.`,
     `Trace: \`POST http://${control.host}/trace\` with a JSON body \`{"method": "GET" or "POST", "path": "/...", "cookie": "...", "contentType": "...", "body": "..."}\` sends that one request to the site from inside the Lab with a PHP function trace turned on, and answers with the HTTP status and the functions the request ran inside the plugin directories, in call order, each with its call depth, file and line, up to 2000 entries; \`entryCount\` is the full number and \`truncated\` says when the list was cut. The path follows the rules of Observe's path; cookie, contentType and body are optional, contentType is one of \`application/x-www-form-urlencoded\`, \`application/json\` or \`text/plain\`, and body is at most 8192 characters and only with POST. A trace shows what ran for that one request as sent; it shows nothing about another request or another account. Trace shares the Find and Query budget.`,
-    ...(skillNames.includes(WORDPRESS_LAB_SKILL_NAME)
-      ? [
-          `The installed skill ${WORDPRESS_LAB_SKILL_NAME} describes when to use Find, Query, Trace and Observe from the research files and how to record each answer; read it before the first of these commands.`,
-        ]
-      : []),
     "The Harness records the HTTP traffic through the site address and the site state before and after each reset. Nothing observed in this Lab is a confirmation. A setting you make as administrator is a configuration precondition; state it in `configurationPrecondition`. In a Finding or Lead, `labObservations` states what you tried in the Lab and what you saw.",
   ].join("\n\n");
 }
@@ -810,21 +779,6 @@ function wordPressResumeParagraph(
 }
 
 /** The source mounts of one Snapshot as the transport run names them. */
-/** What the sandbox stages: the front matter name and the whole pinned file. */
-function stagedSkills(
-  skills: readonly WordPressDiscoverySkill[],
-): StagedSkill[] {
-  return skills.map((skill) => ({
-    name: skill.frontMatter.name,
-    content: skill.text,
-    ...(skill.files.length === 0
-      ? {}
-      : {
-          files: skill.files.map(({ name, content }) => ({ name, content })),
-        }),
-  }));
-}
-
 function wordPressSourceMounts(source: WordPressDiscoverySource) {
   return {
     sourceDirectory: source.directory,
@@ -883,10 +837,6 @@ async function planWordPressDiscovery(
           currentVersion: snapshot.target.version,
         })
       : undefined;
-  // ADR 0043: the campaign's skills, pinned by digest, staged into the CLI's home.
-  const skills = await Promise.all(
-    (config.discovery.skills ?? []).map(loadWordPressDiscoverySkill),
-  );
   const promptFor = (selectedObjective: typeof objective) =>
     wordPressDiscoveryPromptText({
       objective: selectedObjective,
@@ -895,7 +845,6 @@ async function planWordPressDiscovery(
       lab,
       source,
       runParameters,
-      skillNames: skills.map((skill) => skill.frontMatter.name),
       ...(priorResearch?.status === "passed"
         ? { priorResearchSection: priorResearch.section }
         : {}),
@@ -963,9 +912,6 @@ async function planWordPressDiscovery(
           lab: runParameters.lab,
           model: runParameters.runtime.model,
           effort: runParameters.runtime.effort,
-          ...(skills.length === 0
-            ? {}
-            : { skills: skills.map(({ id, digest }) => ({ id, digest })) }),
           ...(priorResearch === undefined
             ? {}
             : { priorResearch: priorResearch.configuration }),
@@ -979,7 +925,6 @@ async function planWordPressDiscovery(
           maxChildren: runParameters.maxChildren,
           minimumActiveMs: wordPressMinimumActiveMs(config),
           resumePrompt,
-          ...(skills.length === 0 ? {} : { skills: stagedSkills(skills) }),
           ...(priorResearch?.status === "passed"
             ? { priorResearch: priorResearch.files }
             : {}),
@@ -1212,19 +1157,15 @@ async function resumeWordPressRun(
       ? undefined
       : started.configuration.mode,
   );
-  // A segment receives the skills its Trial recorded, at the recorded digests
-  // (ADR 0043); a version the registry no longer has cannot be rebuilt.
-  const recordedSkills: WordPressDiscoverySkill[] = [];
-  for (const recorded of started.configuration.skills ?? []) {
-    const record = wordPressDiscoverySkillRecord(recorded.id);
-    if (record === undefined || record.digest !== recorded.digest)
-      return {
-        status: "refused",
-        reason: "skill-version-differs",
-        detail: `${recorded.id} at ${recorded.digest} is not in the skill registry`,
-      };
-    recordedSkills.push(await loadWordPressDiscoverySkill(record.id));
-  }
+  // A Trial that recorded exploration skills (ADR 0043) cannot be rebuilt:
+  // the skills were removed in the v26 cleanup.
+  const [recordedSkill] = started.configuration.skills ?? [];
+  if (recordedSkill !== undefined)
+    return {
+      status: "refused",
+      reason: "skill-version-differs",
+      detail: `${recordedSkill.id} at ${recordedSkill.digest} is not in the skill registry`,
+    };
   // The Snapshot the run was frozen on; the sandbox re-verifies every tree digest at mount.
   const snapshot = await boundaries.loadSnapshot(started.snapshotDigest);
   if (snapshot.digest !== started.snapshotDigest)
@@ -1326,7 +1267,6 @@ async function resumeWordPressRun(
     maxChildren: recorded.maxChildren ?? DEFAULT_MAX_CHILDREN,
   };
   const minimumActiveMs = runParameters.minimumActiveMinutes * 60_000;
-  const skillNames = recordedSkills.map((skill) => skill.frontMatter.name);
   const promptWith = (
     lab: WordPressLabHandle | undefined,
     resumedLab?: WordPressLabUsed,
@@ -1339,7 +1279,6 @@ async function resumeWordPressRun(
       ...(resumedLab === undefined ? {} : { resumedLab }),
       source,
       runParameters,
-      skillNames,
       ...(priorResearchSection === undefined ? {} : { priorResearchSection }),
     });
   const prompt = promptWith(undefined);
@@ -1369,9 +1308,6 @@ async function resumeWordPressRun(
     prompt,
     maxChildren: runParameters.maxChildren,
     resumePrompt,
-    ...(recordedSkills.length === 0
-      ? {}
-      : { skills: stagedSkills(recordedSkills) }),
     ...wordPressSourceMounts(source),
   };
   const { recoverInterrupted } = runtime.executor;
@@ -1434,7 +1370,6 @@ async function resumeWordPressRun(
     plan,
     budget: labBudget!,
     used: plan.lab,
-    skillNames,
     promptWith,
     context,
     run,
@@ -1461,8 +1396,6 @@ async function resumeWithExplorationLab(options: {
   /** The Lab budget the resumed run recorded when it started. */
   readonly budget: WordPressLabBudget;
   readonly used: WordPressLabUsed;
-  /** The front-matter names of the skills the segment stages. */
-  readonly skillNames: readonly string[];
   readonly promptWith: (
     lab: WordPressLabHandle,
     resumedLab: WordPressLabUsed,
@@ -1560,12 +1493,7 @@ async function resumeWithExplorationLab(options: {
     if (handle.exploration === undefined)
       throw new Error("The discovery Lab is not an exploration Lab");
     const resumedLab = options.used;
-    const notice = wordPressLabSection(
-      handle,
-      options.budget,
-      resumedLab,
-      options.skillNames,
-    );
+    const notice = wordPressLabSection(handle, options.budget, resumedLab);
     outcome = await executeTrialResume(
       {
         ...options.context,

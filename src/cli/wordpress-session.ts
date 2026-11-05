@@ -23,7 +23,6 @@ import type {
   DiscoveryTransportRun,
   ProviderAttachmentStore,
 } from "../discovery/index.js";
-import { MAX_STAGED_SKILLS } from "../discovery/skill-definition.js";
 import type { ExpectedSourceTree } from "../infrastructure/canonical-source-tree.js";
 import type { ScopeFactsProvider } from "../review/index.js";
 import type { Snapshot } from "../snapshot/index.js";
@@ -43,10 +42,6 @@ import {
   WORDPRESS_VERIFIER_PROMPT_ID,
   wordPressDiscoveryModeOf,
 } from "../profiles/wordpress/prompts/index.js";
-import {
-  WORDPRESS_LAUNCHABLE_DISCOVERY_SKILL_IDS,
-  wordPressDiscoverySkillRecord,
-} from "../profiles/wordpress/prompts/skills.js";
 import type {
   WordpressScopeInput,
   WordpressScopePolicy,
@@ -87,7 +82,7 @@ const WORDPRESS_DEFAULT_WALL_MINUTES = 120;
 /**
  * ADR 0033 / 0039: the active floor unless discovery.minimumActiveMinutes
  * sets one. ADR 0039 addendum 20 (#686): there is no floor by default; the
- * ending is the skill's judgment (wbh-recon v3 step 9).
+ * ending is the Root's judgment.
  */
 const WORDPRESS_DEFAULT_MINIMUM_ACTIVE_MINUTES = 0;
 
@@ -157,14 +152,7 @@ const commonCampaignFields = {
       enumerator: z.unknown().optional(),
       partition: z.unknown().optional(),
       tracer: z.unknown().optional(),
-      /**
-       * ADR 0043: exploration skills staged into the agent CLI's home for a
-       * Trial; absent, none. Ids name pinned versions.
-       */
-      skills: z
-        .array(z.enum(WORDPRESS_LAUNCHABLE_DISCOVERY_SKILL_IDS))
-        .max(MAX_STAGED_SKILLS)
-        .optional(),
+      skills: z.unknown().optional(),
       /** ADR 0044's named second Trial was removed on 2026-11-05; refused below. */
       priorLeads: z.unknown().optional(),
       /**
@@ -242,17 +230,12 @@ export const wordpressCampaignConfigSchema = z
         path: ["promptId"],
         message: `The ${mode} mode runs ${WORDPRESS_LAUNCHABLE_DISCOVERY_PROMPT_IDS.filter((id) => wordPressDiscoveryModeOf(id) === mode).join(" or ")} only`,
       });
-    if (config.discovery.skills !== undefined) {
-      const names = config.discovery.skills.map(
-        (id) => wordPressDiscoverySkillRecord(id)!.name,
-      );
-      if (new Set(names).size !== names.length)
-        context.addIssue({
-          code: "custom",
-          path: ["discovery", "skills"],
-          message: "discovery.skills names each skill once",
-        });
-    }
+    if (config.discovery.skills !== undefined)
+      context.addIssue({
+        code: "custom",
+        path: ["discovery", "skills"],
+        message: "Exploration skills were removed in the v26 cleanup",
+      });
     if (
       config.discovery.followUp !== undefined &&
       config.discovery.followUp !== "none"

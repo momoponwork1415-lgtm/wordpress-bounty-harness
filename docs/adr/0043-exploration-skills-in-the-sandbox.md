@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded（2026-11-05、所有者決定。v26-wide の単一目的文に固定し、探索スキルの staging を削除した。追記 10）
 date: 2026-10-30
 amends: 0029（単一協調 Trial の主経路）と 0039（探索の mode）に、Trial へ渡すスキルの置き場と記録を足す。0042（区画分配型）は比較の腕として残す
 ---
@@ -127,3 +127,9 @@ amends: 0029（単一協調 Trial の主経路）と 0039（探索の mode）に
 
 - 事実（本番 `prod-v21-20261102-4`、5 Root、2026-11-02）: 目的文が名前で指す `wbh-recon` / `wbh-tools` / `wbh-setup` の SKILL.md は各 4 回以上読まれ、どの文も名指さない `wbh-lab` の SKILL.md は 0 回だった。staging は CLI の一覧に載せるだけで、読ませはしない。
 - 道具を導入する Harness 生成の節は、その使い方を書いたスキルを名前で指してよい。何が installed かという事実であって、舵取りではない。`## Lab` 節に足した 1 文は [ADR 0049 の 2026-11-02 追記 6](0049-lab-resident-exploration.md)にある。
+
+## 2026-11-05 追記 10: staging と探索スキル 9 本を削除した
+
+- 決定: 所有者は 2026-11-05 に探索方式を `wp2shell-bounty-v26-wide`（スキルを名指さない単一目的文）に固定し、主経路が使わない機構を「すべて削除でいい」とした。campaign 設定の `discovery.skills`、sandbox の CLI home への staging、`prompts/skills/` の 9 本（`wbh-recon-v1〜v3`、`wbh-tools-v1`、`wbh-setup-v1`、`wbh-lab-v1`、`wbh-falsify-v1/v2`、実験の `wbh-audit-v1/v2`）、`## Lab` 節が `wbh-lab` を名指す 1 文（ADR 0049 追記 6）を消した。`## Lab` 節の本文は、staged の `wbh-lab` が無かったときと byte 単位で同じである。
+- 残すもの: 台帳の `discovery-run-started.configuration.skills [{id, digest}]` の型は読み取りのために残す。`discovery.skills` を書いた campaign 設定は parse で止め、`skills` を記録した Trial の再開は `skill-version-differs` で断る。Private Evidence の `skill-*` artifact はそのまま。本文は tag `archive/pre-v26-cleanup` に残る。
+- 消し方: 削除 PR の revert。

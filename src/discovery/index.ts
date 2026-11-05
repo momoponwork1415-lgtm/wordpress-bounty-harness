@@ -99,23 +99,6 @@ export {
 } from "./prior-research.js";
 export { researchArchiveSchema } from "./resume-trial.js";
 export {
-  admittedSkillFiles,
-  admittedStagedSkills,
-  MAX_STAGED_SKILL_BYTES,
-  MAX_STAGED_SKILL_FILE_BYTES,
-  MAX_STAGED_SKILL_FILES,
-  MAX_STAGED_SKILLS,
-  parseSkillDefinition,
-  SKILL_FILE_NAME,
-  SKILL_NAME,
-  skillDefinitionFrontMatterSchema,
-  stageSkills,
-  type SkillDefinition,
-  type SkillDefinitionFrontMatter,
-  type StagedSkill,
-  type StagedSkillFile,
-} from "./skill-definition.js";
-export {
   assignDiscoveryRuntime,
   runtimeShareSchema,
   type DiscoveryRuntime,

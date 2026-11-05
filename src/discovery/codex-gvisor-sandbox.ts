@@ -54,7 +54,6 @@ import {
   MAX_PRIOR_RESEARCH_TOTAL_BYTES,
   isPriorResearchPath,
 } from "./prior-research.js";
-import { admittedStagedSkills, stageSkills } from "./skill-definition.js";
 import { MINIMUM_ACTIVE_RUNNER_SOURCE } from "./minimum-active-runner.js";
 import {
   codexThreadIdSchema,
@@ -834,7 +833,6 @@ export class GvisorCodexSandbox implements CodexSandbox {
       command.supportFiles.length !== 1 ||
       command.supportFiles[0]?.path !==
         "/opt/codex-support/report-schema.json" ||
-      (command.skills !== undefined && !admittedStagedSkills(command.skills)) ||
       (command.minimumActiveMs === undefined
         ? command.resumeArgs !== undefined || command.resumePrompt !== undefined
         : !Number.isSafeInteger(command.minimumActiveMs) ||
@@ -957,9 +955,6 @@ export class GvisorCodexSandbox implements CodexSandbox {
         researchDirectory !== undefined
       )
         await seedResearch(researchDirectory, command.priorResearch);
-      // ADR 0043: the CLI lists `skills/<name>/SKILL.md` under its home to the model.
-      if (command.skills !== undefined)
-        await stageSkills(codexHome, command.skills);
       if (tls !== undefined) {
         await writeFile(join(staging, "grant-ca.pem"), tls.caPem, {
           flag: "wx",

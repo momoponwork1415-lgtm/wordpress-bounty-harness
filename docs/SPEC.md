@@ -28,7 +28,7 @@
 
 1. 選定: WordPress.org の人気順一覧から、方針 file の数値（下限、鮮度、除外）で適格な候補を並べ、帯と公開日の順に 1 batch 10 件を束ねる。同版は 1 回。方法を変えた再開では `countTrialsFrom` より前の Trial を探索済みに数えない（ADR 0037）。
 2. Snapshot: plugin、WordPress 本体（最新安定版、ADR 0047）、PHP ソース、依存 plugin を版と digest で固定する（ADR 0033）。
-3. 探索: 対象ごとに 1 回、gVisor の使い捨て sandbox で Codex の Root と子が協調する Trial を回す。Harness は目的文、生成節、固定ソース、スキルを渡し、制限時間と子の数と出力の保存だけを受け持つ（第 6 節、ADR 0029、0039）。
+3. 探索: 対象ごとに 1 回、gVisor の使い捨て sandbox で Codex の Root と子が協調する Trial を回す。Harness は目的文、生成節、固定ソースを渡し、制限時間と子の数と出力の保存だけを受け持つ（第 6 節、ADR 0029、0039）。
 4. 出口: Finding と Lead の候補を契約で正規化し、受理、保留、または Programme Boundary 外の park に分ける。（ADR 0018、0019、0032）。
 5. 検証: 対象範囲内で記録された Finding は全件がレビュー列に出る。AI の 6 段のスキルが Lab で前提を作り route を実行し、人間が review Lab で観測する。確定の根拠は人間の観測だけで、判定器は無い（第 7 節、ADR 0038、0040）。
 6. 提出: AI が報告書と form JSON を作り、人間が送る。submitted と outcome を台帳に記録する。転帰は `wbh-screen` の規則と Lab の基線へ戻し、選定と探索には戻さない（第 8 節、ADR 0045）。
@@ -58,7 +58,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 | Lab provisioner | gVisor内のWordPress + MySQL、ロール別アカウント、HTTP捕捉のrecorder、Lab browser |
 | Lab観測器 | 第7節のHTTP捕捉、Lab状態の差分、被害者画面の記録。成立は判定しない（判定器集合は2026-10-25に削除、ADR 0040） |
 | scope方針 | `src/profiles/wordpress/policy/programme-scope.md`（Wordfence / Patchstack） |
-| prompt雛形 | リポジトリの既定は `wide` の `wp2shell-bounty-v26-wide`。`deep` と `wp2shell-bounty-v11` は 2026-11-05 に退役した（ADR 0039 追記 23）。v26-wide は 7 月 30 日方式を一つの目的文にした版である。v22-wide は比較用に残す（ADR 0051）。出力は `direct/v1` で受ける。目的文とスキルの版・digest は過去 Trial の照合用に残す。trust 境界宣言の雛形も持つ（ADR 0019、0029、0033、0039） |
+| prompt雛形 | リポジトリの既定は `wide` の `wp2shell-bounty-v26-wide`。`deep` と `wp2shell-bounty-v11` は 2026-11-05 に退役した（ADR 0039 追記 23）。v26-wide は 7 月 30 日方式を一つの目的文にした版である。v22-wide は比較用に残す（ADR 0051）。出力は `direct/v1` で受ける。目的文の版・digest は過去 Trial の照合用に残す（探索スキルは 2026-11-05 に削除し、台帳の `configuration.skills` だけを読む。ADR 0043 追記 10）。trust 境界宣言の雛形も持つ（ADR 0019、0029、0033、0039） |
 | Lead型 | sourceに根拠があり、影響までの辺が1つ足りないprimitiveの分類と記録 |
 | 評価対象の表現 | 開発対象のslug、版、修正版、影響分類。正解表の手入力は初期受入条件にしない |
 
@@ -83,7 +83,7 @@ strict TypeScriptのモジュラーモノリス。各モジュールは公開イ
 ## 6. Discovery runの仕様
 
 - 攻撃者位置: 未認証と subscriber（customer 相当）だけ。contributor 以上は trust 境界の内側として宣言する（第 8a 節）。
-- 入力: 固定ソース（読み取り専用）、人間が書いた trust 境界宣言、Programme Boundary、目的文、Harness が生成する節（`## Run parameters`、版付きの Finding / Lead 出力契約、スキルの場所、`discovery.priorResearch: same-target` のときの `## Prior research`）。評価対象の答え、PoC、公開履歴の中身、入口索引は渡さない（不変条件 1、ADR 0012、0034）。
+- 入力: 固定ソース（読み取り専用）、人間が書いた trust 境界宣言、Programme Boundary、目的文、Harness が生成する節（`## Run parameters`、版付きの Finding / Lead 出力契約、`discovery.priorResearch: same-target` のときの `## Prior research`）。評価対象の答え、PoC、公開履歴の中身、入口索引は渡さない（不変条件 1、ADR 0012、0034）。
 - 目的文: リポジトリの既定は `wide` の `wp2shell-bounty-v26-wide`。新しい Trial の mode は `wide` だけで、`deep` と `wp2shell-bounty-v11` は 2026-11-05 に退役した。台帳の `mode: "deep"` は読み続け、旧 deep Trial は記録した版と mode で再開する（ADR 0039 追記 23）。v26-wide は 7 月 30 日の `DISCOVERY.md` に基づく単一目的文である。v22-wide は比較用に残す。v26 は「少なくとも 1 件ある」を探索努力の作業仮定として与えるが、候補の根拠にせず 0 件もそのまま記録する。本文を変えたら版を上げ、旧版と digest を残す（ADR 0051）。
 - 構成: 対象ごとに Root と子の協調 Trial を 1 回。同時に生きる子の上限は `discovery.maxChildren`（既定 4、1〜8）で Harness が強制し、何体使うかは Root が決める。子の有効な Finding と Lead は Root の最終報告と独立に記録する。Claude runtime は `runtimeShare` で分けられるが、本番の share は 0 である。
 - 許可する操作: 固定ソースの読み取り、Lab があればそこへの HTTP。外向き通信は認証ブローカー経由の provider API だけ（不変条件 2）。`discovery.lab: attached`（既定、ADR 0049）では Trial ごとに探索 Lab を 1 台立て、制御口は `reset` / `observe` と、保存先の観測器 `find`（植えた印の table / column / file）、`sql`（読み取り専用ユーザーで SELECT 1 文、200 行まで）、`trace`（1 リクエストの plugin 内の関数呼び出し列）を受ける。`find`、`sql`、`trace` は 1 つの予算 `discovery.lab.maxLookups`（既定 60）を共有する。Harness は捕捉と状態の差分と要求・答えを封じて回数を数えるだけで、答えを読まず判定しない（ADR 0003 の 2026-10-25 追記と 2026-11-02 追記）。Lab を付けないのは `none` を名指ししたときだけである。

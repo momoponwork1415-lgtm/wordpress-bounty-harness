@@ -2545,34 +2545,3 @@ describe("Codex native agent runtime", () => {
     }
   });
 });
-
-describe("Codex native agent runtime skills (ADR 0043)", () => {
-  it("hands the run's skills to the sandbox command unchanged, and none without them", async () => {
-    const skills = [
-      { name: "wbh-recon", content: "---\nname: wbh-recon\n" },
-      {
-        name: "wbh-tools",
-        content: "---\nname: wbh-tools\n",
-        // #687: supporting files ride along with the skill.
-        files: [{ name: "list-v1.sh", content: "#!/bin/sh\n" }],
-      },
-    ];
-    const commands: CodexSandboxCommand[] = [];
-    const runtime = new CodexNativeAgentRuntime(
-      sandbox(transcript, commands),
-      broker(),
-      new ProviderAttachmentStore(
-        await mkdtemp(join(tmpdir(), "codex-skills-")),
-      ),
-      image,
-      wordPressLabCommandRule,
-      () => new Date(now),
-    );
-    const result = await runtime.execute({ ...run, skills });
-    expect(result.receipt.terminal).toBe("completed");
-    expect(commands).toHaveLength(1);
-    expect(commands.at(-1)?.skills).toEqual(skills);
-    await runtime.execute(run);
-    expect(commands.at(-1)).not.toHaveProperty("skills");
-  });
-});

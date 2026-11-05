@@ -19,13 +19,11 @@ export const claudeRunnerChildLimitDenial = (maxChildren: number): string =>
  * reach stdout; full transcripts stay in the mounted Claude config directory.
  * With `resumeSessionId`, the first turn resumes that restored session with
  * the pinned directive instead of sending the objective again (ADR 0036).
- * With `skills`, the Skill tool is offered and the SDK lists exactly those names from the staged
- * config directory (ADR 0043).
  */
 export const CLAUDE_RUNNER_SOURCE = String.raw`
 import { query } from "@anthropic-ai/claude-agent-sdk";
 
-const ALL_TOOLS = ["Read", "Glob", "Grep", "Bash", "Write", "Edit", "Agent"];
+const TOOLS = ["Read", "Glob", "Grep", "Bash", "Write", "Edit", "Agent"];
 // The SDK gives the Root this tool for the json_schema report; children answer in text.
 const REPORT_TOOL = "StructuredOutput";
 const MAX_FINAL_MESSAGE = 64 * 1024;
@@ -47,20 +45,9 @@ if (
   (config.outputSchema !== undefined &&
     (typeof config.outputSchema !== "object" || config.outputSchema === null)) ||
   (config.resumeSessionId !== undefined &&
-    (typeof config.resumeSessionId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(config.resumeSessionId))) ||
-  (config.skills !== undefined &&
-    (!Array.isArray(config.skills) || config.skills.length === 0 || config.skills.length > 8 ||
-      config.skills.some((name) => typeof name !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(name))))
+    (typeof config.resumeSessionId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(config.resumeSessionId)))
 ) process.exit(2);
 const MAX_CHILDREN = config.maxChildren;
-// ADR 0043: the skills the Harness staged under the config directory. The SDK
-// lists only these names, reads them only with the user setting source (the
-// staged, otherwise empty home), and needs the Skill tool on the surface.
-const SKILLS = config.skills ?? [];
-const TOOLS = [
-  ...ALL_TOOLS,
-  ...(SKILLS.length === 0 ? [] : ["Skill"]),
-];
 const CHILD_LIMIT = DENIALS.childLimit.replace("{n}", String(MAX_CHILDREN));
 
 let pending = 0;
@@ -149,8 +136,7 @@ async function turn(prompt) {
       tools: TOOLS,
       allowedTools: [...TOOLS, REPORT_TOOL],
       permissionMode: "default",
-      settingSources: SKILLS.length === 0 ? [] : ["user"],
-      ...(SKILLS.length === 0 ? {} : { skills: SKILLS }),
+      settingSources: [],
       pathToClaudeCodeExecutable: "/usr/local/bin/claude",
       persistSession: true,
       strictMcpConfig: true,

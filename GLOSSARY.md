@@ -43,7 +43,7 @@
 | 後続 Trial（follow-up） | 2026-11-05 に削除した（ADR 0049 追記 7）。台帳の記録を読むための語。終了した Trial に Lead が残り、同じ Snapshot に第 2 Trial が無いとき、連続ランナーが新しい対象より先に 1 回組む第 2 Trial（ADR 0044 の Lead 入力 Trial と同じ入力）。設定は `discovery.followUp`（`lab: attached` のときの既定 `leads`）。Harness は Lead の件数と台帳順の id だけを読む。台帳では `follow-up-scheduled` と `discovery-run-started.configuration.followUp` で名指しの第 2 Trial と分ける（ADR 0049 追記 2）。 |
 | 以前の調査（prior research） | `discovery.priorResearch: same-target` のとき、同じ plugin の別の版の最新の終了 Trial が封じた研究 file（`recon-map.md`、`lab-setup.md`、`REGISTRY.md`、`assumptions/*.md`、`walks/*.md`）と、その Trial の Lab の `lookupLog` から Harness が写した保存先の表 `stores.json` を、`## Prior research` 節で `/workspace/research/prior/` に置いて渡す仕組み（ADR 0048）。全部で 2 MiB・64 file まで。`research import --from <state dir>` で別の台帳（bench）の終了 Trial も候補にでき、台帳には `research-imported` が残る（ADR 0049 決定 D）。 |
 | Root / 子 | 協調 Trial の親エージェントが Root、Root が起動する subagent が子。同時に生きる子の上限は設定値 `discovery.maxChildren`（1〜8）で、何体使うかは Root が決める（ADR 0029、ADR 0039）。 |
-| 探索スキル（discovery skill） | 探索の手順 1 つを書いた `SKILL.md`。campaign 設定 `discovery.skills` で id を名指しすると、Harness が digest を検証してサンドボックスの CLI home に置き、CLI が name と description を Root と子に一覧する。目的文は変えない。registry は `prompts/skills.ts`、本文は `prompts/skills/<id>/SKILL.md`。同じディレクトリの script や参照文も digest で固定して一緒に置く（ADR 0043）。 |
+| 探索スキル（discovery skill） | 2026-11-05 まで、campaign 設定 `discovery.skills` で名指しするとサンドボックスの CLI home に置いた探索の手順 `SKILL.md`。staging ごと削除し、台帳の `configuration.skills [{id, digest}]` だけを読む。本文は tag `archive/pre-v26-cleanup` に残る（ADR 0043 追記 10）。 |
 | Discovery run | モデル実行の記録単位。Trial の中で何回モデルを呼んだかと区別する。 |
 | 探索候補 | Root または子が報告した、受理前の Finding / Lead の主張。 |
 | 受理契約 | 探索候補を Finding / Lead として記録する前の条件。いまは `direct/v1`（直接受理）だけ。`checked/v1`（子の独立点検との結合）は 2026-11-05 に削除し、台帳の記録だけを読む。 |
