@@ -97,7 +97,7 @@ flowchart LR
 
 リポジトリの wide 方針は `wp2shell-bounty-v26-wide` を既定にし、探索 Lab を付け、最低 60 分を指定する。制限時間の上限は 120 分、同時に生きる子はリポジトリの wide 方針で 3（基底の既定 4、設定可能な上限 8）である。v26 は 7 月 30 日方式の一つの目的文を Root に渡し、探索手順を持つスキルを既定で付けない。Cloudflare 派生の六段階探索方式（v23 / v24 / v25-wide、`wbh-audit-v1/v2`、`checked/v1`）は 2026-11-05 に削除した（ADR 0050）。Claude runtime の share は 0 である。
 
-リポジトリの wide 方針は `discovery.priorResearch: same-target` を指定し、同じ plugin の別 Snapshot の最新 Trial が封じた研究 file を `/workspace/research/prior/` に置く。同一 Snapshot の研究 file 全体はこの経路で渡さない。基礎の `recon-map.md` と `lab-setup.md` に加え、存在すれば `REGISTRY.md`、`assumptions/*.md`、`walks/*.md` と Lab の保存先記録 `stores.json` を渡す（SPEC 第 6 節）。同一 Snapshot の再探索は既定で自動起動しない。どこを読むか、何を仮説にするか、子に何を任せるかは Root が決める。Harness は舵を取らない。稼働中のランナーの Git 外設定と、このリポジトリの既定は別に確認する。
+リポジトリの wide 方針は `discovery.priorResearch: same-target` を指定し、同じ plugin の別 Snapshot の最新 Trial が封じた研究 file を `/workspace/research/prior/` に置く。同一 Snapshot の研究 file 全体はこの経路で渡さない。基礎の `recon-map.md` と `lab-setup.md` に加え、存在すれば `REGISTRY.md`、`assumptions/*.md`、`walks/*.md` と Lab の保存先記録 `stores.json` を渡す（SPEC 第 6 節）。同一 Snapshot の再探索は起動しない。Lead の件数で起動する第 2 Trial（`discovery.followUp`）と Lead を名指しで渡す入力（`discovery.priorLeads`、`## Prior leads`）は 2026-11-05 に削除した（ADR 0044、0049 追記 7）。どこを読むか、何を仮説にするか、子に何を任せるかは Root が決める。Harness は舵を取らない。稼働中のランナーの Git 外設定と、このリポジトリの既定は別に確認する。
 
 止まった Root は、同じ Snapshot と残りの制限時間で新しい sandbox に再開できる。Codex の `provider-limited` と死んだ持ち主の `interrupted` は自動で、それ以外は操作者の名指しで再開する。言い換えはしない。
 

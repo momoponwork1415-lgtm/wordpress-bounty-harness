@@ -47,7 +47,7 @@ node dist/cli/main.js --state <確認した state> --host <確認した host 設
 
 停止した runner の復旧と探索方式の切り替えは監視 session の操作範囲外とし、操作者へ次の順を引き継ぐ。
 
-1. 新しい main を**別の** checkout で build し、旧 Git 外設定を残して v26 の Git 外設定を別ファイルに作る。目的文、Lab、最低時間、子の上限、`followUp`、研究引継ぎが [campaign.json](../../src/profiles/wordpress/policy/campaign.json) と一致するか確認する。
+1. 新しい main を**別の** checkout で build し、旧 Git 外設定を残して v26 の Git 外設定を別ファイルに作る。目的文、Lab、最低時間、子の上限、研究引継ぎが [campaign.json](../../src/profiles/wordpress/policy/campaign.json) と一致するか確認する。
 2. 終了 event のない旧 Trial を台帳から列挙し、runtime と回収可否を確認する。2026-11-05 の `prod-c22-20261104-9` の 3 件は Claude の未終了 run で、[ADR 0036](../adr/0036-operator-resume-after-provider-refusal.md) の規則上 `campaign resume` は `run-unfinished` で拒否する。旧台帳を残して未終了として報告する。同じ接頭辞で runner を再起動すると、その対象は新しい Trial になり得る。
 3. 同時に動く本番 runner がないことと停止マーカーを確認する。旧選定方針の `promptVariant` は v22 なので、v26 用の選定方針を別ファイルで作り、**同じ接頭辞**で v26 設定の `continuous run --resume` を起動する。選定方針の digest が変わるため、runner は旧選定 batch を `selection-batch-discarded`（`policy-changed`）で記録して新しい batch を選ぶ。旧 Claude run は終了 event のない記録として残り、個別再開はできない。runner のログで batch 破棄と新選定を確認し、`continuous status` と次の `discovery-run-started` の prompt ID で切り替えを確かめる。
 

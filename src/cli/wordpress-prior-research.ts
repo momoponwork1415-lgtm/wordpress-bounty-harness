@@ -23,9 +23,28 @@ import {
 } from "../profiles/wordpress/lab/research-stores.js";
 import { wordPressTargetSelectionSchema } from "../profiles/wordpress/selection/index.js";
 import type { CliState } from "./index.js";
-import { priorLeadSourceRefusal } from "./wordpress-prior-leads.js";
 
 type StartedEvent = Extract<LedgerEventV1, { type: "discovery-run-started" }>;
+
+/**
+ * ADR 0048: a Trial's files are passed on only when its inputs were inside
+ * invariant 1 — no ADR 0012 catalog and a `wp2shell-bounty` objective from
+ * v8 on (no entry index, no fixed attack path).
+ */
+export function priorTrialInsideInvariantOne(
+  started: Pick<StartedEvent, "history"> & {
+    readonly configuration: Pick<
+      StartedEvent["configuration"],
+      "promptVariant"
+    >;
+  },
+): boolean {
+  if (started.history.mode !== "none") return false;
+  const match = /^wp2shell-bounty-v(\d+)(?:-wide)?$/.exec(
+    started.configuration.promptVariant,
+  );
+  return match !== null && Number(match[1]) >= 8;
+}
 type FinishedEvent = Extract<LedgerEventV1, { type: "discovery-run-finished" }>;
 type PriorResearchConfiguration = NonNullable<
   StartedEvent["configuration"]["priorResearch"]
@@ -139,7 +158,7 @@ export async function localResearchTrials(
     if (event.type !== "discovery-run-finished") continue;
     const started = starts.get(event.runId);
     if (started === undefined || event.researchArtifact === undefined) continue;
-    if (priorLeadSourceRefusal(started) !== undefined) continue;
+    if (!priorTrialInsideInvariantOne(started)) continue;
     const key = `${started.campaignId}\n${started.snapshotDigest}`;
     const selection = selections.get(key)!;
     let version = versions.get(key);

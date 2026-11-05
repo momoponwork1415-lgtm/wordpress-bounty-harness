@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { wordpressCampaignConfigSchema } from "../../src/cli/wordpress.js";
 import {
+  priorTrialInsideInvariantOne,
   rebuildWordPressPriorResearch,
   resolveWordPressPriorResearch,
 } from "../../src/cli/wordpress-prior-research.js";
@@ -231,6 +232,36 @@ const query = {
   snapshotDigest: sha("b"),
   currentVersion: "3.4.0",
 };
+
+describe("priorTrialInsideInvariantOne (ADR 0048)", () => {
+  it("passes only v8-or-later wp2shell-bounty Trials without the ADR 0012 catalog", () => {
+    const started = (promptVariant: string, catalog = false) => ({
+      history: catalog
+        ? {
+            mode: "catalog" as const,
+            digest: `sha256:${"c".repeat(64)}`,
+            recordIds: [],
+          }
+        : { mode: "none" as const },
+      configuration: { promptVariant },
+    });
+    expect(priorTrialInsideInvariantOne(started("wp2shell-bounty-v8"))).toBe(
+      true,
+    );
+    expect(
+      priorTrialInsideInvariantOne(started("wp2shell-bounty-v26-wide")),
+    ).toBe(true);
+    expect(priorTrialInsideInvariantOne(started("wp2shell-bounty-v7"))).toBe(
+      false,
+    );
+    expect(
+      priorTrialInsideInvariantOne(started("wp2shell-whitebox-v1.7")),
+    ).toBe(false);
+    expect(
+      priorTrialInsideInvariantOne(started("wp2shell-bounty-v14-wide", true)),
+    ).toBe(false);
+  });
+});
 
 describe("resolveWordPressPriorResearch (ADR 0048)", () => {
   it("passes the latest earlier Trial's whole map and setup record from another Snapshot of the same target", async () => {

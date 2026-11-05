@@ -89,7 +89,7 @@ PR の「測った数字」に貼る列は固定する。
 
 ## 5c. 過去の Lead 後続 Trial の計測記録（ADR 0044）
 
-以下は当時の実験設計と結果を読むための記録である。現行の v26-wide 方針は `followUp: none` で、Lead 件数による自動の第 2 Trial を起動しない。
+以下は当時の実験設計と結果を読むための記録である。`discovery.priorLeads` と `discovery.followUp` は 2026-11-05 に削除した（ADR 0044、0049 追記 7）。台帳の記録は下の方法で読める。
 
 `discovery.priorLeads.targets` を書いた campaign は、名指しした Snapshot だけを対象にし（選定は回さない）、各 Trial に `## Prior leads` 節と探索 Lab（`discovery.lab: attached` が必須）を付ける。台帳の `discovery-run-started.configuration.priorLeads` の有無で第 2 Trial を見分ける。中身は代表の数 `representatives`、代表の `leadIds`、`representativesDigest`、隙間の文を伏せた数 `gapWithheld`、節の `sectionDigest`。
 

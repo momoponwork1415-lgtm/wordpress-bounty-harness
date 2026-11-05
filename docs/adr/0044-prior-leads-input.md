@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded（2026-11-05、所有者決定「すべて削除でいい」。`discovery.priorLeads` と `## Prior leads` 節は削除した。2026-11-05 追記）
 date: 2026-10-31
 amends: 0029（対象ごとに 1 回の Trial、自動の追加 Trial はしない）、0012（探索へ渡す入力の範囲）
 ---
@@ -58,3 +58,9 @@ Lead は「筋はよいが 1 歩足りない」ルートで、同じ固定ソー
 ## 2026-11-02 追記 3: ランナーが第 2 Trial を自動で組む（ADR 0049 決定 C）
 
 「自動の追加 Trial ではなく、名指しでだけ走る」は ADR 0049 の決定 C で例外を持つ。campaign 設定の `discovery.followUp` が `leads`（`lab: attached` のときの既定）なら、連続ランナーは、終了した Trial に Lead が 1 件以上あり同じ Snapshot に第 2 Trial が無いとき、新しい対象より先にこの ADR の第 2 Trial を 1 回組む。入力と節はこの ADR のままで、Harness は Lead の件数と台帳順の id（先頭 8 件）しか読まない。台帳では `configuration.followUp` の有無で名指しの第 2 Trial と分ける。同じ Snapshot に同じ代表の組で 2 回目を走らせない規則（`prior-leads-already-run`）はそのまま上限で、拒否は `target-skipped` の `follow-up-refused` に残る。詳細は [ADR 0049 の追記 2](0049-lab-resident-exploration.md#2026-11-02-追記-2-lead-が残った-trial-の第-2-trial-をランナーが自動で組む793-の-pr-3決定-c)。
+
+## 2026-11-05 追記: 削除した
+
+所有者は 2026-11-05 に探索方式を `wp2shell-bounty-v26-wide` に固定し、主経路が使わない機構は「すべて削除でいい」と決めた。v26 の方針は `discovery.priorLeads` を使わず、ADR 0049 決定 C の自動第 2 Trial も `followUp: none` で止めていたので、この ADR の入力を削除した。消したのは campaign 設定の `discovery.priorLeads`、`## Prior leads` 節の生成、Lead の代表の解決と輸送、関連する test である。いまは `discovery.priorLeads` を書いた campaign 設定を検査で止め、`configuration.priorLeads` を記録した Trial の再開は `prior-leads-differ` で拒む。
+
+台帳の `discovery-run-started.configuration.priorLeads` は読み取りのために型を残す。所有者が望む「未解決経路があるときだけ同一 Snapshot の 2・3 回目を自動、4 回目以降は手動」は、この入力と形が違うので流用せず、別の契約として設計する（ADR 0051 の 2026-11-05 追記）。削除前の状態は tag `archive/pre-v26-cleanup` に残る。
