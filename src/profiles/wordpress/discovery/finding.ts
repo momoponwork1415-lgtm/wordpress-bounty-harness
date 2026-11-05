@@ -35,7 +35,7 @@ const sourceFile = z
  * never derives it from wording. All three fields are optional: an omitted
  * declaration neither holds nor parks.
  */
-export const configurationClassSchema = z
+const configurationClassSchema = z
   .union([
     z
       .literal("default")
@@ -64,9 +64,9 @@ export const configurationClassSchema = z
       ),
   ])
   .describe("The site configuration the route needs.");
-export type ConfigurationClass = z.infer<typeof configurationClassSchema>;
+type ConfigurationClass = z.infer<typeof configurationClassSchema>;
 
-export const attackerInputPathSchema = z
+const attackerInputPathSchema = z
   .union([
     z
       .literal("direct-request")
@@ -88,9 +88,9 @@ export const attackerInputPathSchema = z
       ),
   ])
   .describe("How the attacker's input reaches the sink.");
-export type AttackerInputPath = z.infer<typeof attackerInputPathSchema>;
+type AttackerInputPath = z.infer<typeof attackerInputPathSchema>;
 
-export const exploitTimingSchema = z
+const exploitTimingSchema = z
   .union([
     z
       .literal("any-time")
@@ -103,7 +103,7 @@ export const exploitTimingSchema = z
     z.literal("race").describe("It depends on two requests interleaving."),
   ])
   .describe("When the attacker can trigger the route.");
-export type ExploitTiming = z.infer<typeof exploitTimingSchema>;
+type ExploitTiming = z.infer<typeof exploitTimingSchema>;
 
 /** The declared fields; a park records each one the Finding declared. */
 export type WordPressDeclaredPrecondition = {

@@ -14,7 +14,7 @@ const PACKAGE_FILE_LIMIT = 1024 * 1024;
  * A profile reads `setup` and `snapshot` with its own schema; the rest of the
  * file is passed through as written.
  */
-export const labReconstructionSchema = z.looseObject({
+const labReconstructionSchema = z.looseObject({
   snapshotDigest: digest,
   labSetupDigest: digest,
   setup: z.unknown(),

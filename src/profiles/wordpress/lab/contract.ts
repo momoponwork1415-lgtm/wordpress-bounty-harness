@@ -68,7 +68,7 @@ export interface WordPressLabHandle extends LabHandle {
 }
 
 /** Bounded observer diagnostic; never includes a visited path or browser output. */
-export type WordPressVictimPagesFailurePhase = "victim-input" | "victim-page";
+type WordPressVictimPagesFailurePhase = "victim-input" | "victim-page";
 
 export type WordPressVictimPagesFailureCode =
   | "browser-visit"

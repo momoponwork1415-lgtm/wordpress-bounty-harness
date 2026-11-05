@@ -67,7 +67,7 @@ function snapshotKey(
  * version is retried once the window has passed; a rejected archive is the
  * version's own and stays out until the version changes (#771).
  */
-export const FREEZE_DEFERRAL_RETRY_DAYS = 7;
+const FREEZE_DEFERRAL_RETRY_DAYS = 7;
 
 /** Inspect the append-only ledger; selections without a counted Trial remain eligible. */
 export function inspectWordPressLedgerExclusions(input: {

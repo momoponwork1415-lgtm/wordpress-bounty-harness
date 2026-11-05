@@ -181,7 +181,7 @@ export function finalReportTimeline(
 }
 
 /** Candidate extraction is independent of transcript event admission. */
-export function extractRootCandidateReport(stdout: string) {
+function extractRootCandidateReport(stdout: string) {
   const messages: string[] = [];
   for (const line of stdout.split("\n")) {
     try {
@@ -699,9 +699,7 @@ function isRootRollout(raw: string, threadId: string): boolean {
 }
 
 /** Keep provider refusal details typed without copying private error text to the ledger. */
-export function providerPolicyDetail(
-  result: CodexSandboxResult,
-): string | undefined {
+function providerPolicyDetail(result: CodexSandboxResult): string | undefined {
   if (result.status === "exited" && result.exitCode === 0) return undefined;
   const threadId = rootThreadId(result.stdout);
   const rollout = result.rollouts?.find(
@@ -1052,7 +1050,7 @@ function observedFromRollout(
   );
 }
 
-export function usageFromTranscript(
+function usageFromTranscript(
   stdout: string,
 ): NativeRunReceipt["usage"] | undefined {
   let usage: z.infer<typeof usageSchema> | undefined;
@@ -1281,9 +1279,7 @@ const CODEX_AUTHENTICATION_METHODS: readonly string[] = [
 ];
 
 /** Classifies the CLI's failure events; the broker's own grant cap is not a provider limit. */
-export function providerLimitOf(
-  stdout: string,
-): "rate-limit" | "quota" | undefined {
+function providerLimitOf(stdout: string): "rate-limit" | "quota" | undefined {
   let limit: "rate-limit" | "quota" | undefined;
   for (const line of stdout.split("\n")) {
     let value: unknown;
@@ -1312,7 +1308,7 @@ export function providerLimitOf(
 }
 
 /** A broker body-size rejection is a Harness bound, not a provider failure. */
-export function brokerRequestBytesExceeded(stdout: string): boolean {
+function brokerRequestBytesExceeded(stdout: string): boolean {
   for (const line of stdout.split("\n")) {
     let value: unknown;
     try {
@@ -1510,7 +1506,7 @@ function admittedLabEndpoint(run: DiscoveryTransportRun): URL | undefined {
     : undefined;
 }
 
-export function sandboxAdmissionFailure(
+function sandboxAdmissionFailure(
   result: CodexSandboxResult,
   run: Pick<DiscoveryTransportRun, "profile">,
   sandboxImage: string,
@@ -1525,7 +1521,7 @@ export function sandboxAdmissionFailure(
   return undefined;
 }
 
-export function assertBrokerAddress(
+function assertBrokerAddress(
   grant: ProviderCredentialEgressGrant,
   run: Pick<DiscoveryTransportRun, "profile" | "lab">,
 ): boolean {
@@ -1543,7 +1539,7 @@ export function assertBrokerAddress(
   return login;
 }
 
-export function codexArgs(
+function codexArgs(
   run: Pick<DiscoveryTransportRun, "profile" | "maxChildren">,
   grant: ProviderCredentialEgressGrant,
   cooperative: boolean,
@@ -1784,7 +1780,7 @@ function sandboxCommand(
  * reached it at 66–96 minutes and ended `broker-request-cap` (#783), so the
  * cap now matches the Claude runtime's.
  */
-export const CODEX_DISCOVERY_BROKER_LIMITS = {
+const CODEX_DISCOVERY_BROKER_LIMITS = {
   maxRequests: 10_000,
   maxRequestBytes: 8 * 1024 * 1024,
   maxResponseBytes: 8 * 1024 * 1024,

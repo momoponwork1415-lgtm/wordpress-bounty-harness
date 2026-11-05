@@ -440,7 +440,7 @@ const victimPageActionSchemas = [
     value: z.string().min(1).max(120),
   }),
 ] as const;
-export const wordpressVictimActionSchema = z.discriminatedUnion("kind", [
+const wordpressVictimActionSchema = z.discriminatedUnion("kind", [
   ...victimPageActionSchemas,
 ]);
 /**

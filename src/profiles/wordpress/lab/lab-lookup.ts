@@ -20,16 +20,10 @@ import { parseBatchRows } from "./state-capture.js";
 export const wordpressExplorationFindSchema = z.strictObject({
   marker: z.string().regex(/^[1-9][0-9]{9,14}$/),
 });
-export type WordPressExplorationFindRequest = z.infer<
-  typeof wordpressExplorationFindSchema
->;
 
 export const wordpressExplorationSqlSchema = z.strictObject({
   select: z.string().min(6).max(4000),
 });
-export type WordPressExplorationSqlRequest = z.infer<
-  typeof wordpressExplorationSqlSchema
->;
 
 /**
  * Whether `text` is one SELECT statement in shape: optional leading

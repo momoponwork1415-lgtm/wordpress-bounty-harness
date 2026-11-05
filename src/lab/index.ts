@@ -2,17 +2,6 @@ import { canonicalJson } from "../infrastructure/canonical-json.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
 import type { LabEgressPlan } from "./egress-plan.js";
 
-export type {
-  LabEgressDestination,
-  LabEgressPlan,
-  LabEgressPlanFile,
-} from "./egress-plan.js";
-export {
-  labEgressPlanFileSchema,
-  readLabEgressPlanFile,
-  MAX_LAB_EGRESS_DESTINATIONS,
-} from "./egress-plan.js";
-
 /** A profile owns target-specific setup; the generic Lab boundary only carries receipts. */
 export interface LabHandle {
   readonly id: string;

@@ -93,7 +93,7 @@ const pathRule = z.discriminatedUnion("match", [
     path: z.string().regex(/^\/[A-Za-z0-9_./-]*$/),
   }),
 ]);
-export const wordPressLabBaselineSchema = z.strictObject({
+const wordPressLabBaselineSchema = z.strictObject({
   schema: z.literal("wbh-lab-baseline/v1"),
   id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
   /** The review document the values were taken from. */

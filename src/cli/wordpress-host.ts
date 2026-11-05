@@ -136,7 +136,7 @@ export type HostDockerRun = (
   signal?: AbortSignal,
 ) => Promise<NativeModelProcessResult>;
 
-export type HostPreflightItem = {
+type HostPreflightItem = {
   readonly item: string;
   readonly ok: boolean;
   readonly detail: string;

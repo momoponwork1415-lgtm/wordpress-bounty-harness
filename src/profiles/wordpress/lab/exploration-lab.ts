@@ -23,9 +23,9 @@ import {
 } from "./lab-trace.js";
 
 /** The Private Evidence bundle one Trial's exploration Lab leaves behind. */
-export const EXPLORATION_LAB_CAPTURE_FILE = "capture.jsonl";
+const EXPLORATION_LAB_CAPTURE_FILE = "capture.jsonl";
 export const EXPLORATION_LAB_RECORD_FILE = "exploration-lab.json";
-export const EXPLORATION_LAB_SCREENSHOT_FILE = "screenshot.png";
+const EXPLORATION_LAB_SCREENSHOT_FILE = "screenshot.png";
 /** How long one `docker exec … next` waits for a command before asking again. */
 const CONTROL_WAIT_SECONDS = 10;
 

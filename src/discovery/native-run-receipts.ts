@@ -351,7 +351,7 @@ export function createNativeRunReceipt(
 }
 
 /** The one file of a sealed receipt artifact in Private Evidence. */
-export const NATIVE_RUN_RECEIPT_FILE = "receipt.json";
+const NATIVE_RUN_RECEIPT_FILE = "receipt.json";
 /** Every receipt string is at most 128 characters; a sealed receipt stays far below this. */
 const NATIVE_RUN_RECEIPT_MAX_BYTES = 64 * 1024;
 

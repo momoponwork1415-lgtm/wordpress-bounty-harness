@@ -39,20 +39,16 @@ import {
 } from "./submission-basis.js";
 
 export {
-  currentManualObservation,
-  currentObservationVerification,
   MANUAL_LAB_RECEIPT_FILE,
   MANUAL_OBSERVATION_CONFIGURATION_FILE,
   MANUAL_OBSERVATION_EVIDENCE_FILE,
   manualObservationConfigurationSchema,
-  manualObservationEvidenceStatus,
   recordManualObservation,
   recordManualObservationLabReady,
 } from "./manual-observation.js";
 
 export type {
   BasisAnswer,
-  BasisMissingReason,
   BasisUse,
   SubmissionBasis,
 } from "./submission-basis.js";
@@ -61,10 +57,8 @@ export {
   exportReviewBundle,
   REVIEW_EXPORT_SCHEMA_ID,
   reviewExportV1Schema,
-  stateDiffSummarySchema,
   type HttpEvidenceReader,
   type HttpEvidenceRecord,
-  type ReviewExportV1,
   type StateDiffReader,
   type StateDiffSummary,
   type VerifierRecord,
@@ -72,7 +66,6 @@ export {
 } from "./export.js";
 export {
   exportReviewBundleV2,
-  REVIEW_EXPORT_V2_SCHEMA_ID,
   reviewExportV2Schema,
   type ReviewExportV2,
 } from "./manual-observation-export.js";
@@ -102,16 +95,11 @@ import {
 } from "./records.js";
 
 export {
-  DEDUPE_NOTE_FILE,
-  readReviewRecord,
-  REVIEW_RECORD_FILE,
-  REVIEW_RECORD_MAX_BYTES,
   type DuplicateCheck,
   type ReviewDecisionRef,
   type ReviewDecisionV1,
   type ReviewRecordByKind,
   type ReviewRecordKind,
-  type ReviewRecordRead,
   type ReviewRef,
   type ScopeAssessment,
 } from "./records.js";
@@ -229,7 +217,7 @@ export type ReviewQueue = {
   readonly preconditionClassCounts: Readonly<Record<string, number>>;
 };
 /** One listed item and what is printed beside it (#494). */
-export type ReviewListingRow = {
+type ReviewListingRow = {
   readonly item: ReviewItem;
   /**
    * The reason code of `item.decision`, the decision on this Snapshot and

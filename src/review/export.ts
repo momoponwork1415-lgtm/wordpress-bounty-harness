@@ -52,7 +52,7 @@ const firingStatuses = [
 ] as const;
 
 /** A profile summarizes its own state-diff file into this shape; values never appear. */
-export const stateDiffSummarySchema = z.strictObject({
+const stateDiffSummarySchema = z.strictObject({
   settings: z.strictObject({
     added: z.array(z.string().max(191)),
     removed: z.array(z.string().max(191)),

@@ -1,12 +1,12 @@
 import { z } from "zod";
 
-export const preconditionClassSchema = z.enum([
+const preconditionClassSchema = z.enum([
   "default",
   "common-usage",
   "admin-configuration",
   "unknown",
 ]);
-export type PreconditionClass = z.infer<typeof preconditionClassSchema>;
+type PreconditionClass = z.infer<typeof preconditionClassSchema>;
 
 export type ClassifiedPrecondition = {
   readonly preconditionClass: PreconditionClass;

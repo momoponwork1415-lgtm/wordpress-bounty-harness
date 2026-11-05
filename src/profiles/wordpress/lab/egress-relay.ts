@@ -11,7 +11,7 @@ import type { WordPressLabSession } from "./lab-session.js";
  * Lab that the destinations no longer answer, before any attacker data is
  * released.
  */
-export const EGRESS_RELAY_SCRIPT = `const net = require("net");
+const EGRESS_RELAY_SCRIPT = `const net = require("net");
 const host = process.env.WBH_EGRESS_HOST;
 const port = Number(process.env.WBH_EGRESS_PORT);
 const log = (record) => process.stdout.write(JSON.stringify(record) + "\\n");
@@ -40,7 +40,7 @@ export type EgressRelay = {
   readonly ip: string;
 };
 
-export type EgressConnection = {
+type EgressConnection = {
   readonly destination: LabEgressDestination;
   readonly openedAt: string;
   readonly closedAt: string;
@@ -57,7 +57,7 @@ export type EgressClosure = {
   readonly unreachableConfirmed: boolean;
 };
 
-export function egressRelayName(labId: string, index: number): string {
+function egressRelayName(labId: string, index: number): string {
   return `wbh-${labId}-egress${index}`;
 }
 

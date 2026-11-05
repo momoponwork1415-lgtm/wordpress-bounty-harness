@@ -13,14 +13,14 @@ import type { WordPressLabSession } from "./lab-session.js";
  * request. Nothing here judges; the answer is an observation.
  */
 
-export const TRACE_METHODS = ["GET", "POST"] as const;
-export const TRACE_CONTENT_TYPES = [
+const TRACE_METHODS = ["GET", "POST"] as const;
+const TRACE_CONTENT_TYPES = [
   "application/x-www-form-urlencoded",
   "application/json",
   "text/plain",
 ] as const;
-export const MAX_TRACE_BODY_CHARACTERS = 8192;
-export const MAX_TRACE_ENTRIES = 2000;
+const MAX_TRACE_BODY_CHARACTERS = 8192;
+const MAX_TRACE_ENTRIES = 2000;
 
 export const wordpressExplorationTraceSchema = z.strictObject({
   method: z.enum(TRACE_METHODS),
@@ -64,7 +64,7 @@ export type TraceLab = Pick<
   "wordpress" | "xdebugTrigger" | "docker"
 >;
 
-export const TRACE_DIRECTORY = "/var/tmp/wbh-trace";
+const TRACE_DIRECTORY = "/var/tmp/wbh-trace";
 const SITE_ROOT = "/var/www/html";
 const PLUGIN_DIRECTORIES = [
   `${SITE_ROOT}/wp-content/plugins/`,

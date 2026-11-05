@@ -13,14 +13,10 @@ import {
 import type { Ledger, LedgerEventV1 } from "../ledger/index.js";
 import type { VerificationResultV1 } from "./reproduction-package.js";
 
-export {
-  verificationResultV1Schema,
-  type VerificationResultV1,
-} from "./reproduction-package.js";
+export { type VerificationResultV1 } from "./reproduction-package.js";
 export {
   countAttemptsForReason,
   shouldAutomaticallyRetryVerification,
-  type IncompleteReason,
 } from "./retry-budget.js";
 
 const id = z.string().min(1).max(128);
@@ -179,7 +175,7 @@ export type AttemptObservation =
     };
 
 /** An opaque Lab state the observer took before the Verifier ran; only its digest is generic. */
-export type LabStateCapture = {
+type LabStateCapture = {
   readonly digest: string;
   readonly state: unknown;
 };

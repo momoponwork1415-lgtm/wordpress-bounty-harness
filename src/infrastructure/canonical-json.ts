@@ -23,7 +23,7 @@ import { bytesDigest } from "./content-digest.js";
 
 type JsonPrimitive = boolean | null | number | string;
 
-export type JsonValue =
+type JsonValue =
   JsonPrimitive | JsonValue[] | { readonly [key: string]: JsonValue };
 
 const jsonValueSchema = z.json();
@@ -49,7 +49,7 @@ function isPropertyJsonValue(value: unknown): value is JsonValue {
 }
 
 /** Encode already-validated JSON without changing persisted byte ordering. */
-export function encodeCanonicalJson(value: JsonValue): string {
+function encodeCanonicalJson(value: JsonValue): string {
   if (value === null || typeof value !== "object") {
     const encoded = JSON.stringify(value);
     if (encoded === undefined) {

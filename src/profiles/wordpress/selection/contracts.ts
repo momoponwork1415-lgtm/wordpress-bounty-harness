@@ -26,9 +26,7 @@ const operatorCandidateSchema = z.strictObject({
   evidenceDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
 });
 
-export type WordPressOperatorCandidate = z.infer<
-  typeof operatorCandidateSchema
->;
+type WordPressOperatorCandidate = z.infer<typeof operatorCandidateSchema>;
 
 const commonSelectionPolicy = {
   kind: z.literal("wordpress-selection-policy"),
@@ -195,7 +193,7 @@ export type SelectionReason =
   | "programme-stale";
 
 /** Counts and dates from the public advisory mirror; no record content (ADR 0037). */
-export interface WordPressTargetAdvisoryHistory {
+interface WordPressTargetAdvisoryHistory {
   readonly count: number;
   readonly payingClassCount: number;
   readonly latestPublished?: string | undefined;

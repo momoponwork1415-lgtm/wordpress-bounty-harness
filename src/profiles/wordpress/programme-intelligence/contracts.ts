@@ -9,13 +9,13 @@ const identifierSchema = z
 const programmeIdentitySchema = z
   .string()
   .regex(/^programme:[a-z0-9][a-z0-9-]*$/);
-export const policyTermSchema = z
+const policyTermSchema = z
   .string()
   .min(1)
   .max(128)
   .regex(/^[a-z0-9][a-z0-9-]*$/);
 
-export const directoryEligibilityRuleSchema = z.strictObject({
+const directoryEligibilityRuleSchema = z.strictObject({
   directoryIdentity: policyTermSchema,
   requiredMembership: policyTermSchema,
   eligibilityEffect: policyTermSchema,
@@ -124,7 +124,7 @@ export const programmeEligibilityInspectionRequestSchema = z.strictObject({
   requiredFor: z.enum(["target-selection-batch", "submission-staging"]),
 });
 
-export type ProgrammeEligibilityFreshnessPolicy = z.infer<
+type ProgrammeEligibilityFreshnessPolicy = z.infer<
   typeof programmeEligibilityFreshnessPolicySchema
 >;
 export type NormalizedProgrammePolicy = z.infer<
@@ -136,7 +136,7 @@ export type ProgrammeEligibilitySnapshot = z.infer<
 export type ProgrammePolicySourceSnapshot = z.infer<
   typeof programmePolicySourceSnapshotSchema
 >;
-export type ProgrammePolicySourceDescriptor = z.infer<
+type ProgrammePolicySourceDescriptor = z.infer<
   typeof programmePolicySourceDescriptorSchema
 >;
 export type ProgrammeEligibilitySnapshotRef = z.infer<
@@ -168,32 +168,32 @@ export interface ProgrammePolicySourceAdapter {
   ): Promise<unknown> | unknown;
 }
 
-export interface CurrentProgrammeEligibilitySnapshot {
+interface CurrentProgrammeEligibilitySnapshot {
   readonly status: "current";
   readonly snapshot: ProgrammeEligibilitySnapshot;
   readonly snapshotRef: ProgrammeEligibilitySnapshotRef;
 }
 
-export interface ProgrammeEligibilityPolicyConflict {
+interface ProgrammeEligibilityPolicyConflict {
   readonly status: "policy-conflict";
   readonly programmeIdentity: string;
   readonly sources: readonly ProgrammePolicySourceSnapshot[];
 }
 
-export interface ProgrammeEligibilityParseFailed {
+interface ProgrammeEligibilityParseFailed {
   readonly status: "parse-failed";
   readonly programmeIdentity: string;
   readonly source: ProgrammePolicySourceSnapshot;
 }
 
-export interface ProgrammeEligibilityRefreshFailed {
+interface ProgrammeEligibilityRefreshFailed {
   readonly status: "stale";
   readonly programmeIdentity: string;
   readonly reason: "refresh-failed";
   readonly requiredSources: readonly ProgrammePolicySourceDescriptor[];
 }
 
-export interface ProgrammeEligibilitySnapshotExpired {
+interface ProgrammeEligibilitySnapshotExpired {
   readonly status: "stale";
   readonly programmeIdentity: string;
   readonly reason: "snapshot-expired";

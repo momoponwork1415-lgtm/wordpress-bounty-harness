@@ -9,7 +9,7 @@ import {
 } from "./sandbox-layout.js";
 
 /** Private Evidence file of a run's `read-paths` artifact: sorted source-relative paths. */
-export const READ_PATHS_FILE = "read-paths.json";
+const READ_PATHS_FILE = "read-paths.json";
 // A file-like token: no flags, globs, variables or `file:line`; the last segment has an extension.
 const PATH_TOKEN = /^[A-Za-z0-9_./@+][A-Za-z0-9_./@+,-]*\.[A-Za-z0-9]+$/;
 

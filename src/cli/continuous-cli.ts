@@ -44,10 +44,7 @@ function notify(command: string, line: string): Promise<void> {
 }
 
 /** Counts for `continuous status`, from the ledger only. */
-export function continuousCounts(
-  state: Pick<CliState, "ledger">,
-  since: string,
-) {
+function continuousCounts(state: Pick<CliState, "ledger">, since: string) {
   const { started, finished, notTrials, superseded } = exploreTrials(
     state.ledger,
     { since },

@@ -87,7 +87,7 @@ export function nonRootContainerUser(sandbox: string): string {
   return `${process.getuid()}:${process.getgid()}`;
 }
 
-export type ContainerHost = { readonly name: string; readonly ipv4: string };
+type ContainerHost = { readonly name: string; readonly ipv4: string };
 
 /** The Lab endpoints a container may resolve besides the broker. */
 export interface LabHosts {

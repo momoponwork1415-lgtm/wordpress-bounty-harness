@@ -41,7 +41,7 @@ export const capturedExchangeSchema = z.strictObject({
 export type CapturedExchange = z.infer<typeof capturedExchangeSchema>;
 
 /** A line that cannot serve as evidence, in file order. */
-export type CaptureDefect = {
+type CaptureDefect = {
   /** One-based line number in the capture file. */
   readonly line: number;
   readonly kind:

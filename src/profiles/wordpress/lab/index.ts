@@ -93,7 +93,7 @@ import {
 } from "./wordpress-initialization.js";
 
 export type * from "./contract.js";
-export type { EgressClosure, EgressConnection } from "./egress-relay.js";
+export type { EgressClosure } from "./egress-relay.js";
 export type {
   DockerRequest,
   DockerResult,
@@ -108,33 +108,13 @@ export {
   wordpressLabStateDiffSchema,
   wordpressLabStateSchema,
 } from "./state-capture.js";
-export { hostGatewayName, type HostExposure } from "./host-exposure.js";
-export type {
-  WordPressLabSetup,
-  ParsedWordPressLabSetup,
-} from "./provision-input.js";
+export { hostGatewayName } from "./host-exposure.js";
+export type { WordPressLabSetup } from "./provision-input.js";
 export { WORDPRESS_CORE_IDENTITY } from "./provision-input.js";
-export {
-  CURRENT_WORDPRESS_LAB_BASELINE_ID,
-  type WordPressAttackerEntrance,
-  type WordPressAttackerOrigin,
-  type WordPressDeniedPath,
-} from "./baseline.js";
-export {
-  isSingleSelect,
-  wordpressExplorationFindSchema,
-  wordpressExplorationSqlSchema,
-  type WordPressExplorationFindRequest,
-  type WordPressExplorationFindResult,
-  type WordPressExplorationQueryResult,
-  type WordPressExplorationSqlRequest,
-} from "./lab-lookup.js";
+export type { WordPressAttackerOrigin } from "./baseline.js";
 export {
   wordpressExplorationObserveSchema,
-  wordpressVisitPathSchema,
   wordpressVictimRouteSchema,
-  type WordPressExplorationObservation,
-  type WordPressExplorationObserveRequest,
   type WordPressVictimRoute,
 } from "./lab-observation.js";
 

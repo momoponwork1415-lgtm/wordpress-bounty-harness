@@ -57,7 +57,7 @@ const EXECUTION_METHODS = [
   "labDown",
 ] as const satisfies readonly (keyof CliProfile)[];
 
-export interface RecordedFinding {
+interface RecordedFinding {
   readonly findingId: string;
   readonly category: "account-takeover" | "sqli";
   /** Absent with `verified: false`. */

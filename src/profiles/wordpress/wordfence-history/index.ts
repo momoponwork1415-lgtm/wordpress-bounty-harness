@@ -34,7 +34,7 @@ export const duplicateQuerySchema = z.object({
 });
 
 export type DuplicateQuery = z.infer<typeof duplicateQuerySchema>;
-export type DuplicateCandidate = {
+type DuplicateCandidate = {
   id: string;
   title: string;
   published: string | null;
