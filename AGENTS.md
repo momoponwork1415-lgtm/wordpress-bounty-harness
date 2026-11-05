@@ -14,7 +14,7 @@
 
 設計・実装・レビューのすべてで守る。
 
-1. 探索エージェントへ渡すのは、固定したソース、人間が書いた trust 境界宣言、Programme Boundary、Lab、時点で切った対象の公開履歴だけである。公開履歴はカタログ情報に限る（ADR 0012）。評価対象の答え、held-out 公開日以降の記録、PoC、ペイロード、再現手順は渡さない。例外は 2 つで、どちらも campaign 設定で名指ししたときだけ渡る。同じ Snapshot に対する過去 Trial の Lead の代表を `## Prior leads` 節で渡すこと（ADR 0044。`discovery.followUp: leads` のとき、連続ランナーが Lead の残った終了 Trial の第 2 Trial を自動で 1 回組む場合を含む。ADR 0049 追記 2）と、同じ対象の別 Snapshot に対する最新の過去 Trial の `recon-map.md` と `lab-setup.md` を `## Prior research` 節で渡すこと（ADR 0048）である。
+1. 探索エージェントへ渡すのは、固定したソース、人間が書いた trust 境界宣言、Programme Boundary、Lab、時点で切った対象の公開履歴だけである。公開履歴はカタログ情報に限る（ADR 0012）。評価対象の答え、held-out 公開日以降の記録、PoC、ペイロード、再現手順は渡さない。例外は 2 つある。同じ Snapshot に対する過去 Trial の Lead の代表を `## Prior leads` 節で渡すこと（campaign の名指し、または `discovery.followUp: leads` による自動第 2 Trial。ADR 0044、0049 追記 2）と、`discovery.priorResearch: same-target` のときに同じ対象の別 Snapshot の最新 Trial が封じた `recon-map.md`、`lab-setup.md`、存在すれば `REGISTRY.md`、`assumptions/*.md`、`walks/*.md`、`stores.json` を `## Prior research` 節で渡すこと（ADR 0048、0049 追記 2）である。
 2. 対象は gVisor（`runsc`）の使い捨て環境の中でだけ実行する。ホストでは実行せず、弱い隔離へ暗黙に切り替えない。外向き通信は、認証ブローカー経由の provider API に限る。外部サービス接続が通常の利用の前提になる検証では、ADR 0046 の 6 条件を満たす専用 Lab に限って外向き通信と一時公開を行える。出口の中継器と `setup-done` 直後の停止確認は Harness が `--egress-plan` で持ち、公開入口と資格情報は持たない。
 3. Harness は判定器を持たない。確定の根拠は、名指しした人間が review Lab で記録した `review observe` の match と `review decide --reproduced match` だけである（ADR 0040）。エージェントや手順の自己申告、捕捉を読んだだけの推定、AI が自分で Lab を見て打った記録は根拠にしない。所有者が会話の中で観測の結果を明言したときに限り、AI 操作役が所有者の名前で代行記録し、発言の原文と時刻を Private Evidence の attestation に残す（ADR 0040 追記 3、所有者決定 2026-10-31）。リバースシェル、永続化、ホストへのアクセスは証明にしない。
 4. 検証の失敗（環境、手順、観測、証拠の不足）は `incomplete` にする。`contradicted` にも棄却にもしない。

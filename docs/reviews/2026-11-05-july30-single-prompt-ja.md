@@ -1,6 +1,6 @@
 # 7月30日の探索プロンプトを現行 Harness に接続する候補
 
-2026-11-05。比較候補の記録であり、採用済みの探索方式ではない。
+2026-11-05 に比較候補として作成した記録。後に所有者が v26-wide を主経路に採用した（ADR 0051 の 2026-11-05 追記）。
 
 - [7月30日の実行時原文](../knowledge/imported/08-whitebox/DISCOVERY-2026-07-30-translatepress-original-run.md) は、`/home/dev/bug-bountgy-harness/wordpress-plugin/artifacts/direct-discovery/translatepress-3.2.6-sol-ultra-20260730a/agent-workspace/DISCOVERY.md` をバイト単位で保存したもの。SHA-256: `2b794adadd14aca7b34a26425a5d12de8367c1c14b4538894da7cf19aa4f3a75`。元の artifact は Git 履歴に含まれないため、commit ID ではなく、このパスと digest で原本を特定する。
 - [現行向け候補](../../src/profiles/wordpress/prompts/wp2shell-bounty-v26-wide.md) は別の版と digest を持つ。以下はその全文の日本語訳である。
