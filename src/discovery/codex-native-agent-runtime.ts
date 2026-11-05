@@ -43,6 +43,7 @@ import {
   type ObservedCommand,
 } from "./read-paths.js";
 import {
+  MAX_RESUME_NOTICE_LENGTH,
   SANDBOX_RESEARCH_MOUNT_PATH,
   SANDBOX_SOURCE_MOUNT_PATH,
   dependencyMountPathSchema,
@@ -525,7 +526,7 @@ const discoveryTransportRunSchema = z.strictObject({
     .max(120 * 60_000)
     .optional(),
   resumePrompt: z.string().min(1).max(2_048).optional(),
-  resumeNotice: z.string().min(1).max(4_096).optional(),
+  resumeNotice: z.string().min(1).max(MAX_RESUME_NOTICE_LENGTH).optional(),
   resume: discoveryResumeInputSchema.optional(),
   /** ADR 0048 / ADR 0049 D: `prior/<name>`, the names `isPriorResearchPath` admits. */
   priorResearch: z

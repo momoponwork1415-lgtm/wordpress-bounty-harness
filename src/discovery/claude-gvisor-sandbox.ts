@@ -45,6 +45,7 @@ import {
 } from "./gvisor-container.js";
 import type { ProviderCredentialEgressGrant } from "./provider-credential-egress-broker.js";
 import {
+  MAX_RESUME_NOTICE_LENGTH,
   SANDBOX_RESEARCH_MOUNT_PATH,
   SANDBOX_SOURCE_MOUNT_PATH,
   dependencyMountPathsAreDisjoint,
@@ -334,7 +335,7 @@ export class GvisorClaudeSandbox implements ClaudeSandbox {
       (command.input.resumeNotice !== undefined &&
         (command.input.resumeSessionId === undefined ||
           command.input.resumeNotice.length === 0 ||
-          command.input.resumeNotice.length > 4_096)) ||
+          command.input.resumeNotice.length > MAX_RESUME_NOTICE_LENGTH)) ||
       (command.resume === undefined
         ? command.input.resumeSessionId !== undefined
         : !admittedResumeSeed(command.resume, command.input.resumeSessionId)) ||

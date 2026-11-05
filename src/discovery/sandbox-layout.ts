@@ -10,6 +10,12 @@ const SANDBOX_WORKSPACE_ROOT = "/workspace";
 export const SANDBOX_SOURCE_MOUNT_PATH = "/workspace/main";
 /** The Trial-local writable notes directory of a cooperative run. */
 export const SANDBOX_RESEARCH_MOUNT_PATH = "/workspace/research";
+/**
+ * The longest first-turn notice a resumed segment may carry. A resumed Trial
+ * with an exploration Lab sends the whole `## Lab` section as its notice
+ * (about 4,900 characters on 2026-11-06), so the bound is well above that.
+ */
+export const MAX_RESUME_NOTICE_LENGTH = 16_384;
 /** Every path the sandbox itself owns; no dependency mount may use or contain one. */
 const FIXED_MOUNT_PATHS = [
   SANDBOX_SOURCE_MOUNT_PATH,
