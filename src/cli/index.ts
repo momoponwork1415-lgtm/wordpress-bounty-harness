@@ -365,8 +365,8 @@ export interface CliProfile {
       readonly version?: string;
       /** Retry an unconfirmed Finding after adding pinned dependency sources. */
       readonly resnapshotDependencies?: boolean;
-      /** Hand the versioned Lab to the verification skill. */
-      readonly handoff?: {
+      /** Hand the versioned Lab to the verification skill (ADR 0035). */
+      readonly handoff: {
         readonly directory: string;
         readonly httpPort: number;
         readonly databasePort: number;
@@ -1817,7 +1817,7 @@ const COMMANDS: readonly Command[] = [
     name: "review reverify",
     required: ["campaign", "finding", "config"],
     usage: [
-      "review reverify --campaign <id> --finding <id> --config <path> [--version <target-version>] [--resnapshot-dependencies] [--handoff <dir> [--port <n>] [--db-port <n>] [--egress-plan <path>]]",
+      "review reverify --campaign <id> --finding <id> --config <path> [--version <target-version>] [--resnapshot-dependencies] --handoff <dir> [--port <n>] [--db-port <n>] [--egress-plan <path>]",
     ],
     options: {
       campaign: STR,
@@ -1831,24 +1831,18 @@ const COMMANDS: readonly Command[] = [
       version: STR,
     },
     validate: (values) => {
+      // The automatic Verifier is retired (ADR 0035); only the skill verifies.
+      if (values.handoff === undefined)
+        throw new UsageError(
+          "review reverify runs only through the verification skill; pass --handoff <dir>",
+        );
       const version = values.version;
       if (version !== undefined && !/^[0-9][A-Za-z0-9.+-]{0,31}$/.test(version))
         throw new UsageError("--version is invalid");
-      if (values["resnapshot-dependencies"] === true) {
-        if (version !== undefined)
-          throw new UsageError(
-            "--resnapshot-dependencies cannot be combined with --version",
-          );
-        if (values.handoff === undefined)
-          throw new UsageError("--resnapshot-dependencies requires --handoff");
-      }
-      if (
-        values.handoff === undefined &&
-        (values.port !== undefined || values["db-port"] !== undefined)
-      )
-        throw new UsageError("--port and --db-port require --handoff");
-      if (values["egress-plan"] !== undefined && values.handoff === undefined)
-        throw new UsageError("--egress-plan requires --handoff");
+      if (values["resnapshot-dependencies"] === true && version !== undefined)
+        throw new UsageError(
+          "--resnapshot-dependencies cannot be combined with --version",
+        );
       integerOption(values.port, "port", 0, 65535);
       integerOption(values["db-port"], "db-port", 0, 65535);
     },
@@ -1866,21 +1860,12 @@ const COMMANDS: readonly Command[] = [
         ...(values["resnapshot-dependencies"] === true
           ? { resnapshotDependencies: true }
           : {}),
-        ...(values.handoff === undefined
-          ? {}
-          : {
-              handoff: {
-                directory: resolve(values.handoff),
-                httpPort: integerOption(values.port, "port", 0, 65535),
-                databasePort: integerOption(
-                  values["db-port"],
-                  "db-port",
-                  0,
-                  65535,
-                ),
-                ...(egress === undefined ? {} : { egress }),
-              },
-            }),
+        handoff: {
+          directory: resolve(required(values.handoff, "handoff")),
+          httpPort: integerOption(values.port, "port", 0, 65535),
+          databasePort: integerOption(values["db-port"], "db-port", 0, 65535),
+          ...(egress === undefined ? {} : { egress }),
+        },
       };
       const summary = await environment.profile.reverify(state, input);
       io.stdout(

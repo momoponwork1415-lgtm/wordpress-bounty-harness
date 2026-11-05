@@ -38,7 +38,6 @@ async function fixture(options: {
   readonly config?: Record<string, unknown>;
   readonly policy?: Record<string, unknown> | null;
   readonly policyName?: string;
-  readonly legacyVerifier?: boolean;
   readonly handoffVerifier?: WordPressCampaignBoundaries["handoffVerifier"];
 }) {
   const root = await mkdtemp(join(tmpdir(), "wbh-session-"));
@@ -65,7 +64,6 @@ async function fixture(options: {
   const boundaryCalls: WordPressCampaignConfig[] = [];
   const boundaries = {
     lab: {},
-    ...(options.legacyVerifier === false ? {} : { verifier: {} }),
     ...(options.handoffVerifier === undefined
       ? {}
       : { handoffVerifier: options.handoffVerifier }),
@@ -111,7 +109,6 @@ describe("WordPress campaign session", () => {
       siteTitle: "Lab",
     });
     expect(session.setupFor(snapshot)).not.toHaveProperty("scenario");
-    expect(session.verification.promptVersion).toBeDefined();
   });
 
   it("rejects a config with a retired key before building boundaries", async () => {
@@ -129,18 +126,16 @@ describe("WordPress campaign session", () => {
     expect(boundaryCalls).toHaveLength(0);
   });
 
-  it("opens administration without a legacy Verifier and never selects handoff implicitly", async () => {
+  it("opens administration without a handoff and never selects handoff implicitly", async () => {
     const handoffVerifier = vi.fn(() => {
       throw new Error("Handoff was not requested");
     });
     const { open, boundaryCalls, boundaries } = await fixture({
-      legacyVerifier: false,
       handoffVerifier,
     });
     const session = await open();
     expect(boundaryCalls).toHaveLength(1);
     expect(session.boundaries).toBe(boundaries);
-    expect(session.boundaries.verifier).toBeUndefined();
     expect(session.config.wordpressVersion).toBe("6.8");
     expect((await session.policy()).id).toBe("session-test-policy");
     const snapshot = { digest: "sha256:" + "a".repeat(64) } as Parameters<
@@ -148,7 +143,7 @@ describe("WordPress campaign session", () => {
     >[0];
     expect(session.setupFor(snapshot).snapshotDigest).toBe(snapshot.digest);
     expect(() => session.verification).toThrow(
-      "The legacy Codex Verifier is retired",
+      "Verification runs only through a skill handoff",
     );
     expect(handoffVerifier).not.toHaveBeenCalled();
   });
@@ -159,7 +154,6 @@ describe("WordPress campaign session", () => {
     });
     const handoffVerifier = vi.fn(() => ({ attempt }));
     const { open, root } = await fixture({
-      legacyVerifier: false,
       handoffVerifier,
     });
     const handoff = {
@@ -175,7 +169,7 @@ describe("WordPress campaign session", () => {
     expect(attempt).not.toHaveBeenCalled();
   });
 
-  it("requires the explicitly requested handoff adapter without falling back to a legacy Verifier", async () => {
+  it("requires the explicitly requested handoff adapter", async () => {
     const { open, root } = await fixture({});
     const session = await open({
       handoff: {
@@ -184,7 +178,6 @@ describe("WordPress campaign session", () => {
         databasePort: 3306,
       },
     });
-    expect(session.boundaries.verifier).toBeDefined();
     expect(() => session.verification).toThrow(
       "This profile has no handoff Verifier",
     );

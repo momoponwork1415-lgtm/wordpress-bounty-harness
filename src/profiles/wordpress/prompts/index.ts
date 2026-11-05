@@ -64,12 +64,6 @@ export const WORDPRESS_TRUST_BOUNDARIES = [
   },
 ] as const satisfies readonly WordPressPromptRecord[];
 
-/**
- * The version a run without `--handoff` records for the retired automatic
- * Verifier (ADR 0035). Its text is kept under `history/prompts/objectives/`.
- */
-export const WORDPRESS_VERIFIER_PROMPT_ID = "verifier-v8";
-
 type DiscoveryPromptRow = (typeof WORDPRESS_DISCOVERY_PROMPTS)[number];
 type CurrentOf<Row extends WordPressPromptRecord> = Extract<
   Row,

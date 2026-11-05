@@ -128,3 +128,14 @@ PR #577 で Lab の scenario を削除したので、上の追記の「Lab に s
 Harness の変更は `WBH_VERIFY_SKILL_ID` を `wbh-verify/v12` にすることだけである。v11 の本文は `.claude/skills/wbh-verify/versions/v11.md` に残す。測る数字は、handoff attempt のうち `precondition-unavailable` で終わる割合（出発点 135 / 365）。
 
 消し方: `SKILL.md` を `versions/v11.md` に戻し、`WBH_VERIFY_SKILL_ID` を v11 にする。記録済みの `promptVersion: wbh-verify/v12` は読み続ける。
+
+## 2026-11-05 追記: `--handoff` 無しの `review reverify` と注入 Verifier の経路を削除する（所有者指示）
+
+所有者は 2026-11-05 に、探索方式を v26-wide に固定し、主経路が使わないコードを削除すると決めた（「コードは削除でいい」）。2026-10-23 追記で実 host が退役エラーで止めていた `--handoff` 無しの `review reverify` を、CLI の検査で止める形にまとめる。
+
+- `review reverify` は `verify next` と同じく `--handoff <dir>` を必須にし、無ければ UsageError で止める。境界を組む前に止まるので、何も起動しない。実 host の reverify 上書きと退役エラーの定数、campaign の境界の `verifier`（実 host は設定せず、test だけが注入していた）を削除した。
+- `--handoff` 無しの run が台帳に書く版 `WORDPRESS_VERIFIER_PROMPT_ID`（`verifier-v8`）を削除した。検証の `promptVersion` は常に `WBH_VERIFY_SKILL_ID` になる。台帳の `verifier-v8` の event と、`verifier-run-finished` などの型と読み取りは残す（不変条件 8）。
+- `verify next --handoff`、`review reverify --handoff`、`wbh-verify`、人間の `review observe` / `review decide` の経路は変えない。
+
+消し方: この追記の PR を revert する。
+

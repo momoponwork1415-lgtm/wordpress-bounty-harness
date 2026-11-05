@@ -137,7 +137,6 @@ const SYNTHETIC_CAPTURE = `{"request":{"method":"GET","path":"/synthetic","heade
 async function harness(
   options: {
     readonly askMinutes?: CliIo["askMinutes"];
-    readonly omitLegacyVerifier?: boolean;
     /** A test-owned barrier for observing overlapping synthetic executions. */
     readonly executionStarted?: () => Promise<void>;
     readonly scopeFacts?: Parameters<
@@ -914,51 +913,50 @@ async function harness(
         };
       },
     },
-    // `verify next --handoff`: the same synthetic Verifier, recording the handoff it was asked for.
+    // `--handoff`: a synthetic Verifier, recording the handoff it was asked for.
     handoffVerifier: (handoff) => {
       handoffs.push(handoff);
       sweepHeldAtHandoff.push(
         existsSync(join(root, "state", "sweep-holds", String(process.pid))),
       );
-      return boundaries.verifier!;
-    },
-    verifier: {
-      // A fresh-container Verifier; it hands back a recipe, never a verdict.
-      async attempt(input) {
-        verifierReferenceRoutes.push(input.referenceRoute);
-        labIdsDuringVerification.push(
-          [...live.containers].flatMap((name) => {
-            const id = /^wbh-([0-9a-f-]{36})-wp$/.exec(name)?.[1];
-            return id === undefined ? [] : [id];
-          }),
-        );
-        verifierAttempts++;
-        return {
-          status: "attempted",
-          recipeDigest: await state.store.putFiles({
-            "route.json": JSON.stringify({
-              role: "subscriber",
-              account: "lab-subscriber",
-              defaultSettings: true,
-              configurationChanges: [],
-              steps: [
-                {
-                  kind: "http",
-                  method: "GET",
-                  path: "/synthetic",
-                  expected: "Synthetic observation",
-                },
-              ],
+      return {
+        // A fresh-container Verifier; it hands back a recipe, never a verdict.
+        async attempt(input) {
+          verifierReferenceRoutes.push(input.referenceRoute);
+          labIdsDuringVerification.push(
+            [...live.containers].flatMap((name) => {
+              const id = /^wbh-([0-9a-f-]{36})-wp$/.exec(name)?.[1];
+              return id === undefined ? [] : [id];
             }),
-            "http.json": JSON.stringify([{ status: 200 }]),
-            "session.json": JSON.stringify({
-              cookie: "synthetic-victim-session",
+          );
+          verifierAttempts++;
+          return {
+            status: "attempted",
+            recipeDigest: await state.store.putFiles({
+              "route.json": JSON.stringify({
+                role: "subscriber",
+                account: "lab-subscriber",
+                defaultSettings: true,
+                configurationChanges: [],
+                steps: [
+                  {
+                    kind: "http",
+                    method: "GET",
+                    path: "/synthetic",
+                    expected: "Synthetic observation",
+                  },
+                ],
+              }),
+              "http.json": JSON.stringify([{ status: 200 }]),
+              "session.json": JSON.stringify({
+                cookie: "synthetic-victim-session",
+              }),
+              // As WordPressVerifier records the recorder offset at setup-done.
+              "capture-marker.json": JSON.stringify({ marker: "0" }),
             }),
-            // As WordPressVerifier records the recorder offset at setup-done.
-            "capture-marker.json": JSON.stringify({ marker: "0" }),
-          }),
-        };
-      },
+          };
+        },
+      };
     },
   };
   let state: Parameters<
@@ -981,7 +979,6 @@ async function harness(
       boundaries: async (_config, opened) => {
         state = opened;
         const available = { ...boundaries };
-        if (options.omitLegacyVerifier) delete available.verifier;
         return options.claude === true
           ? {
               ...available,
@@ -2044,7 +2041,6 @@ describe("harness CLI vertical slice", () => {
   it("keeps a Lab provision exception and next step in the lab-diagnostic artifact and fails the campaign (#284)", async () => {
     const message = `synthetic provision failure ${"x".repeat(600)}`;
     const { run, configPath, ledger, prompts, state } = await harness({
-      omitLegacyVerifier: true,
       config: { promptId: undefined, discovery: { lab: "attached" } },
       labProvisionError: () => new Error(message),
     });
@@ -2095,7 +2091,6 @@ describe("harness CLI vertical slice", () => {
   it("keeps the handoff Lab's provision exception in Private Evidence (#284)", async () => {
     let failLab = false;
     const { run, configPath, ledger, state, root } = await harness({
-      omitLegacyVerifier: true,
       entryPoints: true,
       config: { promptId: undefined, discovery: { lab: "none" } },
       labProvisionError: () =>
@@ -2168,7 +2163,6 @@ describe("harness CLI vertical slice", () => {
       labIdsDuringVerification,
       root,
     } = await harness({
-      omitLegacyVerifier: true,
       entryPoints: true,
       config: {
         promptId: undefined,
@@ -2277,7 +2271,6 @@ describe("harness CLI vertical slice", () => {
       controlAnswers,
       state,
     } = await harness({
-      omitLegacyVerifier: true,
       config: { promptId: undefined, discovery: { lab: "attached" } },
       executionStarted: async () => {
         for (let poll = 0; poll < 500 && answered.length < 2; poll++)
@@ -2487,7 +2480,6 @@ describe("harness CLI vertical slice", () => {
       controlAnswers,
       state,
     } = await harness({
-      omitLegacyVerifier: true,
       refuseOnCalls: [1],
       refusalSession: true,
       zeroFindings: true,
@@ -2644,7 +2636,6 @@ describe("harness CLI vertical slice", () => {
 
   it("does not resume an exploration-Lab Trial under a campaign with discovery.lab none", async () => {
     const attached = await harness({
-      omitLegacyVerifier: true,
       refuseOnCalls: [1],
       refusalSession: true,
       zeroFindings: true,
@@ -2686,7 +2677,6 @@ describe("harness CLI vertical slice", () => {
 
   it("does not resume an exploration-Lab Trial when the campaign's reset budget changed", async () => {
     const attached = await harness({
-      omitLegacyVerifier: true,
       refuseOnCalls: [1],
       refusalSession: true,
       zeroFindings: true,
@@ -2734,7 +2724,6 @@ describe("harness CLI vertical slice", () => {
 
   it("does not resume an exploration-Lab Trial when the campaign's observe budget changed (Phase D2)", async () => {
     const attached = await harness({
-      omitLegacyVerifier: true,
       refuseOnCalls: [1],
       refusalSession: true,
       zeroFindings: true,
@@ -2776,7 +2765,6 @@ describe("harness CLI vertical slice", () => {
 
   it("refuses --repeat with an attached exploration Lab once, before any freeze", async () => {
     const { run, configPath, ledger, transportRuns } = await harness({
-      omitLegacyVerifier: true,
       config: { promptId: undefined, discovery: { lab: "attached" } },
     });
     const campaignId = "campaign-exploration-repeat";
@@ -3329,7 +3317,6 @@ describe("harness CLI vertical slice", () => {
 
   it("does not resume a second Trial that recorded a Prior leads section, removed on 2026-11-05 (ADR 0044)", async () => {
     const attached = await harness({
-      omitLegacyVerifier: true,
       refuseOnCalls: [1],
       refusalSession: true,
       zeroFindings: true,
@@ -6481,6 +6468,8 @@ describe("harness CLI vertical slice", () => {
     const reverified = await run(
       "review",
       "reverify",
+      "--handoff",
+      join(root, "handoff"),
       ...campaign,
       "--finding",
       finding.findingId,
@@ -6762,7 +6751,7 @@ describe("harness CLI vertical slice", () => {
 
     const noHandoff = await run(...args.slice(0, -2));
     expect(noHandoff.code).not.toBe(0);
-    expect(noHandoff.stderr).toContain("requires --handoff");
+    expect(noHandoff.stderr).toContain("pass --handoff <dir>");
     const fixedVersion = await run(...args, "--version", "9.9.9");
     expect(fixedVersion.code).not.toBe(0);
     expect(fixedVersion.stderr).toContain("cannot be combined with --version");
