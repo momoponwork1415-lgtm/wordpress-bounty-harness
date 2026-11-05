@@ -18,29 +18,21 @@ const skillsUrl = new URL(
 const sha256 = (bytes: Uint8Array) =>
   `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 
-// The older skills contain procedures without attack-class guidance. ADR 0050
-// gives the audit skill source questions but still forbids target answers.
+// Agent-facing text (ADR 0043): pinned by digest, a procedure only, free of
+// answer clues, target names, bug-type lists and judgment criteria.
 const ANSWER_CLUES =
   /\bCVE(?:-\d+)?\b|\badvisor(?:y|ies)\b|\bPoC\b|\bpayload\b|<script\b|\bcurl\s+-|(?:past|previous)\s+(?:fix|patch)|TranslatePress|The Events Calendar|Smash Balloon|ThemePunch|revslider|wpforms|woocommerce|Tourfic|Groundhogg|rtMedia|Relevanssi|Brizy|Elementor/i;
-const TARGET_ANSWERS =
-  /\bCVE-\d{4}-\d+\b|TranslatePress|The Events Calendar|Smash Balloon|ThemePunch|revslider|wpforms|woocommerce|Tourfic|Groundhogg|rtMedia|Relevanssi|Brizy|Elementor/i;
 
 describe("WordPress discovery skills", () => {
   it("pins every skill to its digest and names it in the front matter", async () => {
     for (const row of WORDPRESS_DISCOVERY_SKILLS) {
       const skill = await loadWordPressDiscoverySkill(row.id);
-      const directory =
-        "sourceDirectory" in row ? `${row.sourceDirectory}/${row.id}` : row.id;
-      const bytes = await readFile(new URL(`${directory}/SKILL.md`, skillsUrl));
+      const bytes = await readFile(new URL(`${row.id}/SKILL.md`, skillsUrl));
       expect(skill.digest).toBe(sha256(bytes));
       expect(skill.digest).toBe(row.digest);
       expect(skill.frontMatter.name).toBe(row.name);
       expect(row.id.startsWith(`${row.name}-v`)).toBe(true);
-      expect(
-        skill.body.startsWith(`# ${row.name} v`) ||
-          ((row.id === "wbh-audit-v1" || row.id === "wbh-audit-v2") &&
-            skill.body.startsWith("# WordPress audit")),
-      ).toBe(true);
+      expect(skill.body.startsWith(`# ${row.name} v`)).toBe(true);
       expect(skill.body.length).toBeGreaterThan(500);
       expect(Buffer.byteLength(skill.text, "utf8")).toBeLessThan(16_000);
       // Supporting files (#687): every file in the directory is pinned, by name and digest.
@@ -48,7 +40,7 @@ describe("WordPress discovery skills", () => {
         (row as { files?: readonly { name: string; digest: string }[] })
           .files ?? [];
       const inDirectory = (
-        await readdir(new URL(`${directory}/`, skillsUrl))
+        await readdir(new URL(`${row.id}/`, skillsUrl))
       ).sort();
       expect(inDirectory).toEqual(
         ["SKILL.md", ...pinnedFiles.map((file) => file.name)].sort(),
@@ -64,23 +56,12 @@ describe("WordPress discovery skills", () => {
     const onDisk = (await readdir(skillsUrl, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name);
-    const direct = WORDPRESS_DISCOVERY_SKILLS.filter(
-      (row) => !("sourceDirectory" in row),
-    ).map((row) => row.id);
-    expect(onDisk.sort()).toEqual([...direct, "experimental"].sort());
-    expect((await readdir(new URL("experimental/", skillsUrl))).sort()).toEqual(
-      ["wbh-audit-v1", "wbh-audit-v2"],
-    );
-    expect(WORDPRESS_DISCOVERY_SKILL_IDS).toEqual(
-      WORDPRESS_DISCOVERY_SKILLS.map((row) => row.id),
-    );
+    expect(onDisk.sort()).toEqual([...WORDPRESS_DISCOVERY_SKILL_IDS].sort());
     expect(WORDPRESS_LAUNCHABLE_DISCOVERY_SKILL_IDS).toEqual([
       "wbh-tools-v1",
       "wbh-setup-v1",
       "wbh-recon-v3",
       "wbh-lab-v1",
-      "wbh-audit-v1",
-      "wbh-audit-v2",
     ]);
     // #791: v2 was measured on bench h32 and not adopted; it stays readable.
     expect(wordPressDiscoverySkillRecord("wbh-falsify-v2")?.status).toBe(
@@ -110,23 +91,9 @@ describe("WordPress discovery skills", () => {
     expect(wordPressDiscoverySkillRecord("wbh-other-v1")).toBeUndefined();
   });
 
-  it("keeps target answers out of skills and legacy procedures within their contract", async () => {
+  it("keeps every body a procedure: no answer clues, bug-type lists, criteria or Harness-fixed numbers", async () => {
     for (const row of WORDPRESS_DISCOVERY_SKILLS) {
-      const { body, frontMatter, files } = await loadWordPressDiscoverySkill(
-        row.id,
-      );
-      expect(body).not.toMatch(TARGET_ANSWERS);
-      for (const file of files)
-        expect(file.content.toString("utf8")).not.toMatch(TARGET_ANSWERS);
-      if (row.id === "wbh-audit-v1" || row.id === "wbh-audit-v2") {
-        expect(body).toContain("## Six phases");
-        expect(body).toContain("REGISTRY.md");
-        expect(body).toContain(
-          "Only a named human's later review Lab observation",
-        );
-        expect(frontMatter.description).toMatch(/^Use /);
-        continue;
-      }
+      const { body, frontMatter } = await loadWordPressDiscoverySkill(row.id);
       expect(body).not.toMatch(ANSWER_CLUES);
       expect(body).not.toMatch(
         /\b(?:XSS|SQLi|SQL injection|RCE|LFI|SSRF|CSRF|IDOR)\b/,
@@ -195,26 +162,5 @@ describe("WordPress discovery skills", () => {
         );
       }
     }
-  });
-
-  it("keeps the v2 final checker record separate from the Root report", async () => {
-    const v1 = await loadWordPressDiscoverySkill("wbh-audit-v1");
-    const v2 = await loadWordPressDiscoverySkill("wbh-audit-v2");
-    const phase5 = v2.files
-      .find((file) => file.name === "validation-and-reporting.md")
-      ?.content.toString("utf8");
-    const hunting = v2.files
-      .find((file) => file.name === "hunting.md")
-      ?.content.toString("utf8");
-    expect(v1.body).not.toContain("five-key JSON");
-    expect(v2.body).toContain("All children return five keys");
-    expect(v2.body).toContain("Root's final report has only");
-    expect(hunting).toContain("empty `findings`, `leads`, and `checks`");
-    expect(phase5).toContain("one `checks` entry per assigned draft");
-    expect(phase5).toContain(
-      "original, unchanged Root draft claim for every verdict",
-    );
-    expect(phase5).toContain("the corrected claim stays in scratch");
-    expect(phase5).toContain("receives `verified` before reporting it");
   });
 });

@@ -41,7 +41,6 @@ import {
   wordPressDiscoveryOutputContractV2,
   wordPressDiscoveryOutputContractV4,
   wordPressDiscoveryOutputContractV5,
-  wordPressDiscoveryOutputContractV6,
 } from "../profiles/wordpress/discovery/output-contract.js";
 import type {
   WordPressLabHandle,
@@ -628,7 +627,6 @@ function wordPressOutputContractFor(id: string) {
     v2: wordPressDiscoveryOutputContractV2,
     v4: wordPressDiscoveryOutputContractV4,
     v5: wordPressDiscoveryOutputContractV5,
-    v6: wordPressDiscoveryOutputContractV6,
   }[contract]();
 }
 
@@ -950,10 +948,6 @@ async function planWordPressDiscovery(
         configuration: {
           promptVariant: selectedObjective.id,
           promptDigest: selectedObjective.digest,
-          ...(wordPressDiscoveryContractPlan(selectedObjective.id).contract ===
-          "v6"
-            ? { admissionContract: "checked/v1" as const }
-            : {}),
           ...(objectiveOnly(selectedObjective.id)
             ? {
                 objectiveDigest: selectedObjective.digest,

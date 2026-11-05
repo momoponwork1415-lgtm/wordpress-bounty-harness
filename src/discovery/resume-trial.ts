@@ -143,9 +143,6 @@ function configurationOf(
     ...(configuration.contractDigest === undefined
       ? {}
       : { contractDigest: configuration.contractDigest }),
-    ...(configuration.admissionContract === undefined
-      ? {}
-      : { admissionContract: configuration.admissionContract }),
     ...(configuration.sectionDigests === undefined
       ? {}
       : { sectionDigests: configuration.sectionDigests }),

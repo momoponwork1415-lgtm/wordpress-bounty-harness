@@ -46,9 +46,7 @@
 | 探索スキル（discovery skill） | 探索の手順 1 つを書いた `SKILL.md`。campaign 設定 `discovery.skills` で id を名指しすると、Harness が digest を検証してサンドボックスの CLI home に置き、CLI が name と description を Root と子に一覧する。目的文は変えない。registry は `prompts/skills.ts`、本文は `prompts/skills/<id>/SKILL.md`。同じディレクトリの script や参照文も digest で固定して一緒に置く（ADR 0043）。 |
 | Discovery run | モデル実行の記録単位。Trial の中で何回モデルを呼んだかと区別する。 |
 | 探索候補 | Root または子が報告した、受理前の Finding / Lead の主張。 |
-| 独立点検 | スキルの手順では発見者とは別の子が、同じ候補を固定ソースと必要な Lab 観測から読み直すこと。Harness は Root と異なる完了した子の報告であることを確認し、その claim を子の自発候補として記録した子自身の点検を昇格に使わない。scratch の最初の発見者までは証明しない。点検者の `verified` は人間による確定を意味しない。 |
-| pending 候補 | 独立点検との一致が無いなどの理由で、Finding / Lead にまだ昇格していない探索候補。スキーマ不適合の保留候補とは区別する。 |
-| 受理契約 | 探索候補を Finding / Lead として記録する前の条件。`direct/v1` は従来の直接受理、`checked/v1` は独立点検との結合を求める版。 |
+| 受理契約 | 探索候補を Finding / Lead として記録する前の条件。いまは `direct/v1`（直接受理）だけ。`checked/v1`（子の独立点検との結合）は 2026-11-05 に削除し、台帳の記録だけを読む。 |
 | Finding | 攻撃者の立場、入口から影響までのソース上の経路、観測を備え、受理された未確認の主張。独立点検を経ても脆弱性の確定ではない。 |
 | Lead | ソースに根拠があり、影響までに未解決の辺が残る、受理された手がかり。Finding でも検証結果でもない。`review leads` で人間が全件を見る。 |
 | VerificationResult | Lab での検証 attempt の結果。新しい検証は `incomplete` だけを出し、Harness の捕捉が残ったものは `incomplete(awaiting-human-observation)` として人間の観測を待つ（ADR 0040）。 |

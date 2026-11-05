@@ -9,7 +9,7 @@ for (const entry of await readdir(source, {
   recursive: true,
   withFileTypes: true,
 })) {
-  if (!entry.isFile() || !/\.(md|json|sh|txt)$/.test(entry.name)) continue;
+  if (!entry.isFile() || !/\.(md|json|sh)$/.test(entry.name)) continue;
   const relative = join(entry.parentPath, entry.name).slice(
     source.pathname.length,
   );

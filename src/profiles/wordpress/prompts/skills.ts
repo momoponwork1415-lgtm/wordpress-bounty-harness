@@ -8,7 +8,7 @@ import {
 
 /**
  * The exploration skills a cooperative Trial may receive (ADR 0043): one
- * `SKILL.md` per id under `skills/<id>/` or `skills/experimental/<id>/`, staged into the agent CLI's home
+ * `SKILL.md` per id under `skills/<id>/`, staged into the agent CLI's home
  * so the CLI lists it to the Root and its children. A campaign names the ids
  * in `discovery.skills`; absent, no skill is staged and the Trial is the one
  * every earlier decision describes. Each file is pinned by digest like every
@@ -17,8 +17,6 @@ import {
  */
 interface WordPressDiscoverySkillRecord {
   readonly id: string;
-  /** Source-only grouping; the staged skill name and digest stay unchanged. */
-  readonly sourceDirectory?: "experimental";
   /** The front matter `name`: what the CLI lists and the agent invokes. */
   readonly name: string;
   /** sha256 of `SKILL.md`. */
@@ -109,76 +107,6 @@ export const WORDPRESS_DISCOVERY_SKILLS = [
       "sha256:58548360a44e53b3e1049f7214eee411679ed6c86ffde6771e99c0f6dd5e6f35",
     status: "current",
   },
-  {
-    id: "wbh-audit-v1",
-    sourceDirectory: "experimental",
-    name: "wbh-audit",
-    digest:
-      "sha256:0b7503134dc9635878a40e916ac4a80d6addabb2d133a603a300a23ccc1db579",
-    files: [
-      {
-        name: "reconnaissance.md",
-        digest:
-          "sha256:d3698bc1fd1a038b567c2bf0377281034ab5657783dc5882688edaf139674f71",
-      },
-      {
-        name: "hunting.md",
-        digest:
-          "sha256:3d6c9d559c2c4c83cf0c51ec5670f7d5574fa83165c5a4b7defabc252f750b27",
-      },
-      {
-        name: "wordpress-classes.md",
-        digest:
-          "sha256:4e1490b4bdc991b3e2acc2365eb5ebc85d77a76e5c67abe1d7df66107e4cfc2e",
-      },
-      {
-        name: "validation-and-reporting.md",
-        digest:
-          "sha256:bdb3ee63b65eb2f9a5ad4491ed1a82bf8bb99cd8cae780eb565ed510c7460f0c",
-      },
-      {
-        name: "upstream-license.txt",
-        digest:
-          "sha256:e598e694aa506650c7192d5ea3be0e50aca0d356ea00551c53429f0b01eb6391",
-      },
-    ],
-    status: "current",
-  },
-  {
-    id: "wbh-audit-v2",
-    sourceDirectory: "experimental",
-    name: "wbh-audit",
-    digest:
-      "sha256:35a8a57b7c11866c3a8daaf117b8ab47269f4f41b961d237e03cd2ed0f880039",
-    files: [
-      {
-        name: "reconnaissance.md",
-        digest:
-          "sha256:d3698bc1fd1a038b567c2bf0377281034ab5657783dc5882688edaf139674f71",
-      },
-      {
-        name: "hunting.md",
-        digest:
-          "sha256:63784cdc4348de96503ea7759c574498d9ffe87bdd5e3e9ac6ed7a9399dbb1e1",
-      },
-      {
-        name: "wordpress-classes.md",
-        digest:
-          "sha256:4e1490b4bdc991b3e2acc2365eb5ebc85d77a76e5c67abe1d7df66107e4cfc2e",
-      },
-      {
-        name: "validation-and-reporting.md",
-        digest:
-          "sha256:6283480a4ff789f4b9961859fb657b7aa5ccfac45f3418899431dff11ad23acb",
-      },
-      {
-        name: "upstream-license.txt",
-        digest:
-          "sha256:e598e694aa506650c7192d5ea3be0e50aca0d356ea00551c53429f0b01eb6391",
-      },
-    ],
-    status: "current",
-  },
 ] as const satisfies readonly WordPressDiscoverySkillRecord[];
 
 export type WordPressDiscoverySkillId =
@@ -217,11 +145,7 @@ export async function loadWordPressDiscoverySkill(
   const record = wordPressDiscoverySkillRecord(id);
   if (record === undefined)
     throw new Error("Unknown WordPress discovery skill");
-  const pinned: WordPressDiscoverySkillRecord = record;
-  const sourceUrl = new URL(
-    `./skills/${pinned.sourceDirectory ? `${pinned.sourceDirectory}/` : ""}${id}/SKILL.md`,
-    import.meta.url,
-  );
+  const sourceUrl = new URL(`./skills/${id}/SKILL.md`, import.meta.url);
   const text = new TextDecoder("utf-8", { fatal: true }).decode(
     await readFile(sourceUrl),
   );
@@ -230,6 +154,7 @@ export async function loadWordPressDiscoverySkill(
     throw new Error("Skill definition differs from its pinned digest");
   if (definition.frontMatter.name !== record.name)
     throw new Error("Skill definition names another skill");
+  const pinned: WordPressDiscoverySkillRecord = record;
   const files = await Promise.all(
     (pinned.files ?? []).map(async (file) => {
       const content = await readFile(new URL(file.name, sourceUrl));

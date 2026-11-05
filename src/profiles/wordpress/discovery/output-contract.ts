@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 
 import { canonicalJson } from "../../../infrastructure/canonical-json.js";
-import { wordPressAuditCheckSchema } from "./audit-check.js";
 import { wordpressFindingClaimSchema } from "./finding.js";
 import { wordpressLeadClaimSchema } from "./lead.js";
 
@@ -76,26 +75,4 @@ export function wordPressDiscoveryOutputContractV4() {
  */
 export function wordPressDiscoveryOutputContractV5() {
   return renderWordPressDiscoveryOutputContract("v5");
-}
-
-/** The checked/v1 handoff; old contract text and digests stay byte-identical. */
-export function wordPressDiscoveryOutputContractV6() {
-  const finding = z.toJSONSchema(archivedFindingClaimSchema, { io: "output" });
-  const lead = z.toJSONSchema(wordpressLeadClaimSchema, { io: "output" });
-  const check = z.toJSONSchema(wordPressAuditCheckSchema, { io: "output" });
-  const text = [
-    "## Finding and Lead output contract (wordpress-discovery-contract-v6)",
-    "Include this complete contract in every child assignment and follow-up. Root's final report has exactly `findings`, `leads`, `examined`, and `unexamined`. Each child's final report has exactly those four keys plus `checks`. A later prose reply must not replace the child's report.",
-    "Child `findings` and `leads` are empty arrays. Children that do not check a final draft return `checks: []`. A final-record checker returns one check object per draft. `kind` is `finding` or `lead`; `candidate` is always the complete unchanged draft claim object, including for `replace`; `verdict` is `verified`, `replace`, `refuted`, or `blocked`; `explanation` names the source and Lab facts checked and the exact unresolved gap. Put replacement text in the child's private scratch and explanation, then obtain a new `verified` check for the revised draft. An AI check is never a human confirmation.",
-    "Root includes a claim only when a distinct child's `verified` check names the same normalized claim in the same Trial and Target Snapshot. `examined` and `unexamined` are strings. In Root's final report, encode each Finding and Lead object as one JSON string in its array, as required by the transport schema. In a child report, `checks` and its `candidate` values are JSON objects.",
-    "Each claim object must follow its schema below. Fields of type string are single strings, not arrays. `sourceTrace` is an array of objects with `file`, `function`, and positive integer `line`. Use target-relative paths; prefix WordPress core paths with `@wordpress/`, PHP paths with `@php/`, and supplied plugin dependency paths with `@dependencies/<id>/`.",
-    `Finding schema: ${canonicalJson(finding)}`,
-    `Lead schema: ${canonicalJson(lead)}`,
-    `Child check schema: ${canonicalJson(check)}`,
-  ].join("\n\n");
-  return {
-    id: "wordpress-discovery-contract-v6" as const,
-    text,
-    digest: `sha256:${createHash("sha256").update(text).digest("hex")}`,
-  };
 }

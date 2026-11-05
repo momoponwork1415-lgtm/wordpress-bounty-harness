@@ -103,7 +103,6 @@ const childReportSchema = z.strictObject({
   leads: z.array(z.unknown()),
   examined: childCoverageSchema,
   unexamined: childCoverageSchema,
-  checks: z.array(z.unknown()).optional(),
 });
 const candidateReportSchema = z.object({
   findings: z.array(z.unknown()).default([]),
@@ -111,7 +110,6 @@ const candidateReportSchema = z.object({
   examined: childCoverageSchema.default(""),
   unexamined: childCoverageSchema.default(""),
   coverage: z.unknown().optional(),
-  checks: z.array(z.unknown()).optional(),
 });
 export function extractCandidateReport(message: string) {
   const value = JSON.parse(message) as unknown;
@@ -138,7 +136,7 @@ export function mergeTurnReports(messages: readonly string[]) {
   const distinct = (key: "findings" | "leads") => {
     const seen = new Set<string>();
     return reports
-      .flatMap((report) => report[key] ?? [])
+      .flatMap((report) => report[key])
       .filter((claim) => {
         const identity = canonicalJson(claim);
         if (seen.has(identity)) return false;
@@ -146,24 +144,10 @@ export function mergeTurnReports(messages: readonly string[]) {
         return true;
       });
   };
-  const chronologicalChecks = () => {
-    let previous: string | undefined;
-    return reports
-      .flatMap((report) => report.checks ?? [])
-      .filter((check) => {
-        const identity = canonicalJson(check);
-        if (identity === previous) return false;
-        previous = identity;
-        return true;
-      });
-  };
   return {
     ...latest,
     findings: distinct("findings"),
     leads: distinct("leads"),
-    ...(reports.some((report) => report.checks !== undefined)
-      ? { checks: chronologicalChecks() }
-      : {}),
   };
 }
 /**

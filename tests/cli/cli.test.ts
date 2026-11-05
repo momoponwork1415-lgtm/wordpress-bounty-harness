@@ -3272,17 +3272,16 @@ describe("harness CLI vertical slice", () => {
       });
   });
 
-  it("uses the corrected trust boundary for v25 and preserves it on resume", async () => {
+  it("uses the corrected trust boundary for v26 and preserves it on resume", async () => {
     const { run, configPath, transportRuns, ledger } = await harness({
       refuseOnCalls: [1],
       refusalSession: true,
       zeroFindings: true,
       config: {
-        promptId: "wp2shell-bounty-v25-wide",
+        promptId: "wp2shell-bounty-v26-wide",
         discovery: {
           mode: "wide",
           lab: "attached",
-          skills: ["wbh-audit-v2", "wbh-setup-v1", "wbh-lab-v1"],
         },
       },
     });

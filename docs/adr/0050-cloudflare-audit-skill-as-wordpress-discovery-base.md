@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: superseded
+superseded-by: 0051
 date: 2026-11-04
 amends: 0043（探索スキルの主従）、0045（2026-11-03 の recon-v4 限定）、0048（過去研究の次の入力契約）
 ---
@@ -85,3 +86,7 @@ Harness が確かめるのは出力の形式、run と digest の結合、Privat
 マージ前の独立レビューで、v24-wide の「wbh-audit-v2 を読む」という指示と、CLI が表示するスキル名 `wbh-audit` が一致しないと分かった。また、効果まで裏付けた候補だけを報告する文が、同じスキルの「影響まで一辺残る Lead」を妨げ得た。既存の目的文と digest を書き換えず、v24-wide を起動前に archived とし、CLI に見える名前と Finding / Lead の境界を明記した v25-wide を候補にする。v25-wide も同じ `wbh-audit-v2`、生成契約 v6、`checked/v1`、attached Lab を使う。本番の既定は v22-wide のままにする。この節は上の v24 に限る指定を、今後の比較 Trial について v25 に置き換える。
 
 同じレビューで、Claude の子が途中の報告に自発候補を出し、最後の報告で消して自分の点検を返した場合、途中候補の記録が欠けて自己点検の除外を迂回できることも分かった。点検を含む子の報告は読めた全ターンの候補を保持し、自己点検の由来を台帳に残す。過去の `direct/v1` の最終報告の扱いは変えない。
+
+## 2026-11-05 追記: 削除する
+
+所有者は 2026-11-05 に探索方式を `wp2shell-bounty-v26-wide`（ADR 0051）に固定し、主経路が使わない機構は「すべて削除でいい」と指示した。新しい探索手法の比較も始めないので、この方式を起動する機会は無い。v23 / v24 / v25-wide の目的文、`wbh-audit-v1/v2`、生成契約 v6 と `checked/v1` の受理・昇格、`review audit-pending`、funnel の `auditPending` / `auditDisputed` を削除した。台帳の `audit-check-*` / `audit-candidate-*` の型と `auditCheck` は既存の記録を読むために残す（不変条件 8）。削除前の状態は tag `archive/pre-v26-cleanup` にある。

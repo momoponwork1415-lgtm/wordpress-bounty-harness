@@ -20,10 +20,7 @@ import {
   type TrialOutcome,
 } from "./execute-trial.js";
 import type { ProviderAttachmentStore } from "./provider-research-report.js";
-import type {
-  DiscoveryAdmissionContract,
-  ReportRecorder,
-} from "./record-discovery-report.js";
+import type { ReportRecorder } from "./record-discovery-report.js";
 
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 
@@ -69,8 +66,6 @@ export type PlannedDiscoveryRun = {
   readonly run: Omit<DiscoveryTransportRun, "campaignInput">;
   readonly configuration: {
     readonly promptVariant: string;
-    /** Admission rule pinned to this Trial; absent in historical runs means direct/v1. */
-    readonly admissionContract?: DiscoveryAdmissionContract;
     readonly promptDigest?: string;
     readonly objectiveDigest?: string;
     readonly contractDigest?: string;
