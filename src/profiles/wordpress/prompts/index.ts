@@ -547,7 +547,7 @@ export const WORDPRESS_DISCOVERY_PROMPTS = [
   },
 ] as const satisfies readonly WordPressDiscoveryPromptRecord[];
 
-/** Human-written trust declarations; the v25 comparison uses v2 only. */
+/** Human-written trust declarations; opt-in comparisons v25/v26 use v2. */
 export const WORDPRESS_TRUST_BOUNDARIES = [
   {
     id: "trust-boundary-v1",
