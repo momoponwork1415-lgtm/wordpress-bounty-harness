@@ -5426,6 +5426,51 @@ describe("harness CLI vertical slice", () => {
     });
   });
 
+  it("keeps a named-list campaign that ran unbound on its own targets when the runner resumes it with a batch", async () => {
+    const { configPath, root, ledger, profile, select } = await harness({
+      candidates: ["item-a", "item-b", "item-c", "item-d"],
+    });
+    const policyPath = join(root, "selection.json");
+    const named = JSON.parse(await readFile(policyPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    await writeFile(
+      policyPath,
+      JSON.stringify({
+        ...named,
+        pinnedVersions: {},
+        wordpressVersion: "6.8",
+        maximumTargets: 2,
+      }),
+    );
+    const state = () =>
+      openState(join(root, "state"), { clock: () => new Date(now) });
+    // Ran before the binding fix: targets recorded, no batch bound.
+    await profile.runCampaign(await state(), {
+      campaignId: "prod-named-legacy",
+      configPath,
+      target: null,
+    });
+    const batch = await select(policyPath);
+    // prod-v26d-20261105-5 failed here with "Campaign already has targets but
+    // no selection batch binding" after the restart (2026-11-06).
+    await expect(
+      profile.runCampaign(await state(), {
+        campaignId: "prod-named-legacy",
+        configPath,
+        target: null,
+        selectionBatchId: batch.batchId!,
+      }),
+    ).resolves.toBeDefined();
+    expect(
+      ledger().read({
+        campaignId: "prod-named-legacy",
+        type: "selection-batch-bound",
+      }),
+    ).toHaveLength(0);
+  });
+
   it("binds the runner's batch under a named-list policy, so the next campaign runs the next targets", async () => {
     const { configPath, root, ledger, profile, select } = await harness({
       candidates: ["item-a", "item-b", "item-c", "item-d", "item-e", "item-f"],
