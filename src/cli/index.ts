@@ -42,7 +42,7 @@ import {
   type TargetLimit,
   type VerifyNextSummary,
 } from "./pipeline.js";
-import { holdDiscoverySweep } from "./continuous.js";
+import { holdDiscoverySweep, type ContinuationTarget } from "./continuous.js";
 import {
   continuousCommand,
   type ContinuousHostStatus,
@@ -239,8 +239,40 @@ export interface CliProfile {
       readonly resumeProviderLimited?: { log(line: string): void };
       /** The runner only: the operator's live limit under maxConcurrentTargets. */
       readonly targetLimit?: TargetLimit;
+      /**
+       * ADR 0052 (the runner, or `campaign continue`): this campaign runs one
+       * continuation Trial per listed Snapshot instead of a selection; a
+       * refused one is recorded, logged and left out.
+       */
+      readonly continuation?: {
+        readonly targets: readonly ContinuationTarget[];
+        log(line: string): void;
+      };
     },
   ): Promise<CampaignSummary>;
+  /** ADR 0052: whether the runner schedules continuation Trials under this campaign config. */
+  continuationPolicy?(configPath: string): Promise<"open-routes" | "none">;
+  /**
+   * ADR 0052: `campaign continue --run`: one continuation Trial of a named
+   * run whose sealed `continuation.json` was valid with open routes, without
+   * the chain cap or the progress rule; a reasoned refusal otherwise.
+   */
+  continueCampaignRun?(
+    state: CliState,
+    input: {
+      readonly campaignId: string;
+      readonly runId: string;
+      readonly configPath: string;
+      log(line: string): void;
+    },
+  ): Promise<
+    | {
+        readonly status: "refused";
+        readonly reason: string;
+        readonly detail?: string;
+      }
+    | { readonly status: "scheduled"; readonly summary: CampaignSummary }
+  >;
   /** The campaign config's maxConcurrentTargets, the ceiling of `continuous concurrency`. */
   targetCeiling?(configPath: string): Promise<number>;
   /** The campaign config's per-runtime caps, the ceilings of `continuous concurrency --runtime`. */
@@ -2520,6 +2552,52 @@ const COMMANDS: readonly Command[] = [
         `imported ${summary.imported}  existing ${summary.existing}  skipped ${summary.skipped}`,
       );
       return 0;
+    },
+  }),
+  // ADR 0052: a named continuation Trial (the 4th and later of a chain); registered last as above.
+  command({
+    name: "campaign continue",
+    required: ["campaign", "run", "config"],
+    usage: ["campaign continue --campaign <id> --run <runId> --config <path>"],
+    options: { campaign: STR, run: STR, config: STR },
+    handler: async ({ values, state, environment, io, print }) => {
+      if (environment.profile.continueCampaignRun === undefined)
+        throw new UsageError("This profile cannot continue a discovery run");
+      const campaignId = required(values.campaign, "campaign");
+      const release = await holdDiscoverySweep(
+        state.stateDirectory,
+        process.pid,
+      );
+      const result = await environment.profile
+        .continueCampaignRun(state, {
+          campaignId,
+          runId: required(values.run, "run"),
+          configPath: resolve(required(values.config, "config")),
+          log: (line) => io.stderr(line),
+        })
+        .finally(release);
+      if (result.status === "refused") {
+        io.stderr(
+          `not continuable: ${result.reason}${result.detail === undefined ? "" : ` (${result.detail})`}`,
+        );
+        return 3;
+      }
+      const { summary } = result;
+      for (const skipped of summary.skipped)
+        io.stderr(
+          `skipped ${skipped.targetId} ${skipped.version} at ${skipped.stage}: ${skipped.message}`,
+        );
+      for (const target of summary.targets)
+        io.stdout(
+          `${target.targetId} ${target.version}  snapshot ${target.snapshotDigest}  lab ${target.lab}  runs ${target.runCount}  stopped by ${target.stoppedBy}`,
+        );
+      if (summary.stopped !== undefined)
+        io.stdout(
+          `campaign stopped by ${summary.stopped}; run the same command again to resume`,
+        );
+      print(formatFunnel(state.ledger.funnel(campaignId)));
+      if (summary.stopped !== undefined) return 3;
+      return summary.targets.length === 0 ? 1 : 0;
     },
   }),
 ];

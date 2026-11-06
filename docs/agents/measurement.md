@@ -146,6 +146,40 @@ for (const { event_json } of rows) {
 }' <state>/ledger.sqlite
 ```
 
+## 5e. continuation の Trial（ADR 0052）
+
+`discovery.continuation: open-routes` の campaign で、同じ Snapshot の続きとして組まれた Trial は、`discovery-run-started.configuration.continuation` があるもので見分ける（`of` は続けた Root run、`ordinal` は連鎖の中の何回目か、`passedIdDigests` は受け取った id の digest）。組んだ印は `continuation-scheduled`（名指しは `manual: true`）、組まなかった印は `target-skipped` の `continuation-refused`（`reasonDetail` が `no-progress`、`continuation-file-unavailable`、`continuation-snapshot-unavailable`）である。Root の file の形は `discovery-run-finished.continuation.status` で見る。
+
+- 分母は Codex 時間（ADR 0045）。Trial 数も並べる。1 回目で `openRouteCount = 0` の Root は続きを組まないので、分母から外れることを書く。
+- 主な数字 1: **2・3 回目の新規 Finding 群 / Codex 時間**。`ordinal` が 2 と 3 の Trial の `finding-recorded` のうち、同じ Snapshot の 1 回目（連鎖の先頭）の群に無い群の数を、その Trial の Codex 時間で割る。対は偶然の pass@5（同じ 10 対象 × 5 回、盲目）の b2〜b5 の新規群数 / Codex 時間。
+- 主な数字 2: **渡した id の解消率**。各 continuation の Trial について、`configuration.continuation.passedIdDigests` のうち、その Trial の Root の最新区間の `discovery-run-finished.continuation.openRouteIdDigests` に無いものの数 / `passedIdDigests` の数。集合演算だけで、経路の文は読まない（`truncated: true` の Trial は解消を多めに数えうることを明記する）。対は leads2（Lead 133 群 → F 3）の転換率。
+- 状態の内訳（valid / invalid / absent）、`no-progress` で止まった数、3 回の上限で止まった数も記録する。
+- n は 2 週で 20 対象程度で、±2 を分けられない（ADR 0043 追記 8）。採否は「盲目の反復より明らかに悪くないか」で見る。
+
+数え方の例:
+
+```bash
+node --no-warnings -e '
+const { DatabaseSync } = require("node:sqlite");
+const db = new DatabaseSync(process.argv[1], { readOnly: true });
+const rows = db.prepare("SELECT event_json FROM ledger_events WHERE event_type IN (?, ?) ORDER BY sequence").all("discovery-run-started", "discovery-run-finished");
+const open = new Map();
+for (const { event_json } of rows) {
+  const e = JSON.parse(event_json);
+  if (e.type === "discovery-run-finished" && e.continuation?.status === "valid") open.set(e.runId, new Set(e.continuation.openRouteIdDigests));
+}
+for (const { event_json } of rows) {
+  const e = JSON.parse(event_json);
+  const c = e.type === "discovery-run-started" ? e.configuration.continuation : undefined;
+  if (!c || e.resumesRun) continue;
+  const now = open.get(e.runId);
+  const solved = now ? c.passedIdDigests.filter((d) => !now.has(d)).length : "unsealed";
+  console.log(e.campaignId, e.runId, e.snapshotDigest.slice(7, 19), `ordinal ${c.ordinal}`, `passed ${c.passedIdDigests.length}`, `solved ${solved}`);
+}' <state>/ledger.sqlite
+```
+
+（再開区間がある Trial は、Root の最新区間の runId で `open` を引く。）
+
 ## 6. 記録先
 
 - 再発見 case: `docs/reviews/<日付>-<用途>.md` に表と注記、Issue #127 に comment。2026-11-05 までの記録は `history/evaluation/` にある。

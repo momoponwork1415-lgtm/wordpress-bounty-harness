@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -51,7 +52,11 @@ async function campaign(
       readonly observed: number;
       readonly admitted: number;
     };
-    readonly research?: { readonly truncated: boolean };
+    readonly research?: {
+      readonly truncated: boolean;
+      /** The archive's entries; absent, one entry without a type. */
+      readonly entries?: readonly object[];
+    };
     /** Each clock read is one second after the last (#212). */
     readonly ticking?: boolean;
   } = {},
@@ -189,7 +194,9 @@ async function campaign(
                   Buffer.from(
                     JSON.stringify({
                       kind: "research-directory-archive",
-                      entries: [{ path: "REGISTRY.md" }],
+                      entries: options.research.entries ?? [
+                        { path: "REGISTRY.md" },
+                      ],
                     }),
                   ),
                 ),
@@ -512,6 +519,59 @@ it("references bounded Trial research evidence from completed and failed Root ru
       ),
     ).toMatchObject({ status: "resolved" });
     expect(JSON.stringify(finished)).not.toContain("REGISTRY.md");
+  }
+});
+
+it("records the shape of the sealed continuation.json and never its text (ADR 0052)", async () => {
+  const file = (content: unknown) => ({
+    path: "continuation.json",
+    type: "file",
+    contentBase64: Buffer.from(JSON.stringify(content)).toString("base64"),
+  });
+  const route = {
+    id: "route-secret-id",
+    sourceFile: "includes/ajax.php",
+    sourceLine: 12,
+    observation: "observation-text-never-recorded",
+    unresolved: "unresolved-text-never-recorded",
+    nextCheck: "next-check-text-never-recorded",
+  };
+  const cases: [readonly object[], object][] = [
+    [
+      [file({ schemaVersion: 1, openRoutes: [route] })],
+      {
+        status: "valid",
+        openRouteCount: 1,
+        openRouteIdDigests: [
+          `sha256:${createHash("sha256").update("route-secret-id").digest("hex")}`,
+        ],
+      },
+    ],
+    [
+      [{ path: "REGISTRY.md", type: "file", contentBase64: "" }],
+      { status: "absent" },
+    ],
+    [
+      [file({ schemaVersion: 1, openRoutes: [{ ...route, extra: 1 }] })],
+      { status: "invalid" },
+    ],
+  ];
+  for (const [entries, continuation] of cases) {
+    const { ledger } = await campaign([], {
+      singleTrial: true,
+      research: { truncated: false, entries },
+    });
+    const finished = ledger.read({ type: "discovery-run-finished" })[0]?.event;
+    expect(finished).toMatchObject({ runId: "run-0", continuation });
+    const recorded = JSON.stringify(finished);
+    for (const text of [
+      "route-secret-id",
+      "includes/ajax.php",
+      "observation-text",
+      "unresolved-text",
+      "next-check-text",
+    ])
+      expect(recorded).not.toContain(text);
   }
 });
 

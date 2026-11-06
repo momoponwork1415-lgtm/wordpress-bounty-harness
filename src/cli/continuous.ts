@@ -13,13 +13,16 @@ import { join } from "node:path";
 
 import { z } from "zod";
 
+import { canonicalDigest } from "../infrastructure/canonical-json.js";
 import type {
   Ledger,
   LedgerEventV1,
   LedgerReadAllQuery,
 } from "../ledger/index.js";
 import {
+  MAX_AUTOMATIC_CONTINUATION_TRIALS,
   autoResumesProviderLimit,
+  continuationMadeNoProgress,
   countsAsTrialChain,
   latestSegment,
   recordedTrialActivity,
@@ -56,6 +59,70 @@ const STOP_REASONS = [
 
 export type ContinuousStopReason = (typeof STOP_REASONS)[number];
 
+type StartedEvent = Extract<LedgerEventV1, { type: "discovery-run-started" }>;
+type FinishedEvent = Extract<LedgerEventV1, { type: "discovery-run-finished" }>;
+const sha256Digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
+
+/**
+ * ADR 0052: one continuation Trial the runner (or `campaign continue`)
+ * schedules on the same Snapshot. Read from the ledger only: the Root run
+ * whose latest segment sealed a valid `continuation.json`, how many open
+ * routes it declared and their id digests. The route text is never read.
+ */
+const continuationTargetSchema = z.strictObject({
+  snapshotDigest: sha256Digest,
+  selectionId: z.string().min(1),
+  /** The Root run (its latest segment) whose `continuation.json` is passed on. */
+  ofRunId: z.string().min(1),
+  ofCampaignId: z.string().min(1),
+  /** The new Trial's place in the chain on its Snapshot. */
+  ordinal: z.number().int().min(2),
+  openRouteCount: z.number().int().positive(),
+  passedIdDigests: z.array(sha256Digest).min(1).max(64),
+  /** `campaign continue`: the chain cap and the progress rule were not applied. */
+  manual: z.boolean().optional(),
+});
+export type ContinuationTarget = z.infer<typeof continuationTargetSchema>;
+
+/** ADR 0052: a continuation the runner does not schedule, recorded once as `target-skipped`. */
+export type ContinuationRefusal = {
+  readonly snapshotDigest: string;
+  readonly selectionId: string;
+  readonly ofRunId: string;
+  readonly ofCampaignId: string;
+  readonly reasonDetail: "no-progress";
+};
+
+/** The identity of a refusal's `target-skipped`, so it is written and read once per (Snapshot, run). */
+function continuationRefusalIdentity(
+  snapshotDigest: string,
+  ofRunId: string,
+): string {
+  return `continuation-refused-${canonicalDigest({ snapshotDigest, ofRunId }).slice(7, 39)}`;
+}
+
+/** The `target-skipped` a refusal appends, in the campaign of the run it refuses to continue. */
+export function continuationRefusalEvent(
+  refusal: ContinuationRefusal,
+  occurredAt: string,
+): Parameters<Ledger["append"]>[0] {
+  return {
+    schemaVersion: 1,
+    identity: continuationRefusalIdentity(
+      refusal.snapshotDigest,
+      refusal.ofRunId,
+    ),
+    campaignId: refusal.ofCampaignId,
+    snapshotDigest: refusal.snapshotDigest,
+    occurredAt,
+    type: "target-skipped",
+    selectionId: refusal.selectionId,
+    stage: "discovery",
+    reason: "continuation-refused",
+    reasonDetail: refusal.reasonDetail,
+  };
+}
+
 /**
  * The runner's working memo. The ledger stays the record; this file may be
  * deleted. Fields a saved memo lacks start over, so a hand-trimmed memo reads.
@@ -67,6 +134,8 @@ const continuousMemoSchema = z.object({
   /** The selection batch this runner holds until its campaign finishes; other prefixes do not select its targets (#604). */
   selectionBatchId: z.string().optional(),
   target: z.string().nullable().optional(),
+  /** ADR 0052: the continuation Trials the memoised campaign runs; absent for a selection campaign. */
+  continuation: z.array(continuationTargetSchema).min(1).optional(),
   backoffStep: z.number().int().nonnegative().default(0),
   /** Per runtime, after a limit that stopped only its targets: its step and when it may start again. */
   runtimeBackoff: z
@@ -187,7 +256,20 @@ export interface ContinuousDeps {
     readonly resumeProviderLimited?: { log(line: string): void };
     /** The operator's live limits (total and per runtime), read before each new target starts. */
     readonly targetLimit: TargetLimit;
+    /** ADR 0052: this campaign runs these continuation Trials instead of a selection. */
+    readonly continuation?: {
+      readonly targets: readonly ContinuationTarget[];
+      log(line: string): void;
+    };
   }): Promise<CampaignSummary>;
+  /**
+   * ADR 0052: the campaign config's continuation policy, re-read before each
+   * round, and how a refused continuation is recorded; absent, none.
+   */
+  readonly continuation?: {
+    policy(): Promise<"open-routes" | "none">;
+    refuse(refusal: ContinuationRefusal): Promise<void>;
+  };
   /**
    * Records why the campaign's selection batch can never run under the current
    * policy and returns its id; null when it can run (#302).
@@ -414,6 +496,7 @@ function nextCampaignId(deps: ContinuousDeps): string {
     "target-selected",
     // Retired follow-up campaigns (ADR 0049 C) still hold their numbers.
     "follow-up-scheduled",
+    "continuation-scheduled",
   ] as const)
     for (const event of readAll(deps.ledger, { type }))
       if (event.campaignId.startsWith(head))
@@ -517,6 +600,192 @@ export function pendingProviderLimited(
     const latest = latestSegment(starts, start.runId);
     return finishes.get(latest)?.outcome === "provider-limited";
   });
+}
+
+/** Whether `campaignId` is one this prefix's runner numbered (`<prefix>-<YYYYMMDD>-<n>`). */
+function ownCampaign(prefix: string, campaignId: string): boolean {
+  // CAMPAIGN_PREFIX admits only [a-z0-9-], so the prefix needs no escaping.
+  return new RegExp("^" + prefix + "-[0-9]{8}-[0-9]+$").test(campaignId);
+}
+
+/**
+ * ADR 0052: whether a Root run's latest segment may be continued: it ended
+ * with a sealed report (not `provider-limited`, which the runner resumes,
+ * and not `interrupted`, which a restarted runner resumes) and its
+ * `continuation.json` was valid with at least one open route.
+ */
+export function continuableFinish(
+  finished: FinishedEvent | undefined,
+): finished is FinishedEvent & {
+  readonly continuation: {
+    readonly status: "valid";
+    readonly openRouteCount: number;
+    readonly openRouteIdDigests: string[];
+  };
+} {
+  const continuation = finished?.continuation;
+  return (
+    finished !== undefined &&
+    finished.outcome !== "provider-limited" &&
+    finished.reason !== "interrupted" &&
+    continuation !== undefined &&
+    "status" in continuation &&
+    continuation.status === "valid" &&
+    continuation.openRouteCount > 0 &&
+    continuation.openRouteIdDigests.length > 0
+  );
+}
+
+/**
+ * ADR 0052: the continuation Trials this prefix's runner owes, from the
+ * ledger alone. The chain is the prefix's latest selection campaign (the
+ * last it numbered that selected targets and is not a continuation or
+ * follow-up campaign) and every continuation campaign scheduled from it or
+ * from one of those. Per Snapshot, the chain's latest Root Trial is
+ * continued when its latest segment is `continuableFinish`, the chain holds
+ * fewer than 3 counted Trials on that Snapshot, and neither a
+ * `continuation-scheduled` nor a refusal exists for that run. A later Trial
+ * whose received id digests are all still open is refused (`no-progress`).
+ */
+export function pendingContinuations(
+  ledger: Pick<Ledger, "readAll">,
+  prefix: string,
+): {
+  readonly targets: readonly ContinuationTarget[];
+  readonly refusals: readonly ContinuationRefusal[];
+} {
+  const scheduled = readAll(ledger, { type: "continuation-scheduled" }).filter(
+    (
+      event,
+    ): event is Extract<LedgerEventV1, { type: "continuation-scheduled" }> =>
+      event.type === "continuation-scheduled",
+  );
+  const notSelections = new Set([
+    ...scheduled.map((event) => event.campaignId),
+    ...readAll(ledger, { type: "follow-up-scheduled" }).map(
+      (event) => event.campaignId,
+    ),
+  ]);
+  const batch = readAll(ledger, { type: "target-selected" })
+    .filter(
+      (event) =>
+        ownCampaign(prefix, event.campaignId) &&
+        !notSelections.has(event.campaignId),
+    )
+    .at(-1)?.campaignId;
+  if (batch === undefined) return { targets: [], refusals: [] };
+  const chain = [batch];
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const event of scheduled)
+      if (
+        chain.includes(event.ofCampaignId) &&
+        !chain.includes(event.campaignId)
+      ) {
+        chain.push(event.campaignId);
+        grew = true;
+      }
+  }
+  const settled = new Set(
+    scheduled.map((event) => `${event.snapshotDigest}\n${event.ofRunId}`),
+  );
+  const refused = new Set(
+    readAll(ledger, { type: "target-skipped" }).map((event) => event.identity),
+  );
+  type Head = {
+    readonly start: StartedEvent;
+    readonly latest: string;
+    readonly counted: boolean;
+    readonly finished: FinishedEvent | undefined;
+    readonly selectionId: string | undefined;
+  };
+  const bySnapshot = new Map<string, Head[]>();
+  for (const campaignId of chain) {
+    const starts = readAll(ledger, {
+      campaignId,
+      type: "discovery-run-started",
+    }).filter(
+      (event): event is StartedEvent =>
+        event.type === "discovery-run-started" &&
+        (event.runKind ?? "explore") === "explore",
+    );
+    const finishes = new Map(
+      readAll(ledger, { campaignId, type: "discovery-run-finished" })
+        .filter(
+          (event): event is FinishedEvent =>
+            event.type === "discovery-run-finished",
+        )
+        .map((event) => [event.runId, event] as const),
+    );
+    const selections = new Map<string, string>();
+    for (const event of readAll(ledger, {
+      campaignId,
+      type: "target-selected",
+    }))
+      if (event.type === "target-selected")
+        selections.set(event.snapshotDigest, event.selectionId);
+    const active = recordedTrialActivity(ledger, campaignId);
+    const segment = (runId: string) => ({
+      finished: finishes.get(runId),
+      hasRecordedActivity: active.has(`${campaignId}\0${runId}`),
+      resumesRun: starts.find((event) => event.runId === runId)?.resumesRun,
+    });
+    for (const start of starts) {
+      if (start.resumesRun !== undefined) continue;
+      if (supersedingRun(starts, start) !== undefined) continue;
+      const latest = latestSegment(starts, start.runId);
+      const heads = bySnapshot.get(start.snapshotDigest) ?? [];
+      heads.push({
+        start,
+        latest,
+        counted: countsAsTrialChain(start.runId, segment),
+        finished: finishes.get(latest),
+        selectionId: selections.get(start.snapshotDigest),
+      });
+      bySnapshot.set(start.snapshotDigest, heads);
+    }
+  }
+  const targets: ContinuationTarget[] = [];
+  const refusals: ContinuationRefusal[] = [];
+  for (const [snapshotDigest, heads] of bySnapshot) {
+    const head = heads.at(-1)!;
+    const { finished, selectionId } = head;
+    if (!continuableFinish(finished) || selectionId === undefined) continue;
+    if (
+      heads.filter(({ counted }) => counted).length >=
+      MAX_AUTOMATIC_CONTINUATION_TRIALS
+    )
+      continue;
+    const ofRunId = head.latest;
+    if (settled.has(`${snapshotDigest}\n${ofRunId}`)) continue;
+    if (refused.has(continuationRefusalIdentity(snapshotDigest, ofRunId)))
+      continue;
+    const received = head.start.configuration.continuation;
+    const open = finished.continuation.openRouteIdDigests;
+    if (
+      received !== undefined &&
+      continuationMadeNoProgress(received.passedIdDigests, open)
+    ) {
+      refusals.push({
+        snapshotDigest,
+        selectionId,
+        ofRunId,
+        ofCampaignId: head.start.campaignId,
+        reasonDetail: "no-progress",
+      });
+      continue;
+    }
+    targets.push({
+      snapshotDigest,
+      selectionId,
+      ofRunId,
+      ofCampaignId: head.start.campaignId,
+      ordinal: (received?.ordinal ?? 1) + 1,
+      openRouteCount: finished.continuation.openRouteCount,
+      passedIdDigests: [...open],
+    });
+  }
+  return { targets, refusals };
 }
 
 /**
@@ -826,6 +1095,8 @@ export function createContinuousRunner(deps: ContinuousDeps) {
           campaignId: string;
           target: string | null;
           selectionBatchId?: string;
+          /** ADR 0052: a continuation campaign; it binds no selection batch. */
+          continuation?: readonly ContinuationTarget[];
         }
       | undefined =
       (memo.campaignId && {
@@ -834,6 +1105,9 @@ export function createContinuousRunner(deps: ContinuousDeps) {
         ...(memo.selectionBatchId === undefined
           ? {}
           : { selectionBatchId: memo.selectionBatchId }),
+        ...(memo.continuation === undefined
+          ? {}
+          : { continuation: memo.continuation }),
       }) ||
       (adopted && {
         campaignId: nextCampaignId(deps),
@@ -843,8 +1117,9 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       undefined;
     // A batch frozen under another policy would only fail: drop it with a
     // reason and select afresh instead of holding on the error (#302). Any
-    // other error surfaces from the campaign run as before.
-    if (current) {
+    // other error surfaces from the campaign run as before. A continuation
+    // campaign has no selection batch to check.
+    if (current && current.continuation === undefined) {
       const discarded = await deps
         .discardStaleSelection(current.campaignId)
         .catch(() => null);
@@ -858,6 +1133,34 @@ export function createContinuousRunner(deps: ContinuousDeps) {
         current = undefined;
       }
     }
+    /**
+     * ADR 0052: the continuation Trials owed before any new selection, or
+     * none; a run refused for no progress is recorded once and logged.
+     */
+    const owedContinuations = async (): Promise<
+      readonly ContinuationTarget[]
+    > => {
+      if (deps.continuation === undefined) return [];
+      // A failure here (policy unreadable, ledger unreadable, a refusal's
+      // append conflicting) must not end the runner: it is logged, nothing
+      // is scheduled this round, and the ledger is read again next round.
+      try {
+        if ((await deps.continuation.policy()) !== "open-routes") return [];
+        const pending = pendingContinuations(deps.ledger, deps.campaignPrefix);
+        for (const refusal of pending.refusals) {
+          await deps.continuation.refuse(refusal);
+          deps.io.log(
+            `${deps.clock().toISOString()} continuation refused campaign=${refusal.ofCampaignId} snapshot=${refusal.snapshotDigest} of=${refusal.ofRunId} reason=${refusal.reasonDetail}`,
+          );
+        }
+        return pending.targets;
+      } catch (error) {
+        deps.io.log(
+          `${deps.clock().toISOString()} continuation error ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return [];
+      }
+    };
     let providerBackoffFinished = false;
     const backoffProvider = async (campaignId: string) => {
       const limit = providerLimitOf(deps, campaignId);
@@ -902,6 +1205,20 @@ export function createContinuousRunner(deps: ContinuousDeps) {
           expiredAt: auth?.expiresAt.toISOString() ?? "unavailable",
         });
         continue;
+      }
+      // ADR 0052: Trials that left open routes get their continuation Trial
+      // before a new target; the pending set is read from the ledger, so a
+      // restart finds it again.
+      const continuations = current ? [] : await owedContinuations();
+      if (!current && continuations.length > 0) {
+        current = {
+          campaignId: nextCampaignId(deps),
+          target: null,
+          continuation: continuations,
+        };
+        deps.io.log(
+          `${deps.clock().toISOString()} continuation campaign=${current.campaignId} of=${continuations[0]!.ofCampaignId} targets=${continuations.length}`,
+        );
       }
       if (!current) {
         if (stopRequested()) return stop("operator");
@@ -958,6 +1275,8 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       memo.campaignId = current.campaignId;
       if (current.selectionBatchId !== undefined)
         memo.selectionBatchId = current.selectionBatchId;
+      if (current.continuation === undefined) delete memo.continuation;
+      else memo.continuation = [...current.continuation];
       memo.target = current.target;
       if (stopRequested()) return stop("operator");
       await enter("running", { campaignId: current.campaignId });
@@ -973,6 +1292,15 @@ export function createContinuousRunner(deps: ContinuousDeps) {
           ...(current.selectionBatchId === undefined
             ? {}
             : { selectionBatchId: current.selectionBatchId }),
+          ...(current.continuation === undefined
+            ? {}
+            : {
+                continuation: {
+                  targets: current.continuation,
+                  log: (line: string) =>
+                    deps.io.log(`${deps.clock().toISOString()} ${line}`),
+                },
+              }),
           stop: stopRequested,
           signal: operatorController.signal,
           resumeInterrupted: {
@@ -1015,6 +1343,7 @@ export function createContinuousRunner(deps: ContinuousDeps) {
         memo.consecutiveErrorBatches++;
         delete memo.campaignId;
         delete memo.selectionBatchId;
+        delete memo.continuation;
         current = undefined;
         if (memo.consecutiveErrorBatches >= MAX_CONSECUTIVE_ERROR_BATCHES)
           return stop("errors");
@@ -1069,10 +1398,15 @@ export function createContinuousRunner(deps: ContinuousDeps) {
       memo.backoffStep = 0;
       memo.runtimeBackoff = {};
       const facts = batchFacts(deps, current.campaignId);
+      const wasContinuation = current.continuation !== undefined;
       delete memo.campaignId;
       delete memo.selectionBatchId;
+      delete memo.continuation;
       delete memo.target;
       current = undefined;
+      // A continuation campaign is not a selection: it neither probes the
+      // pool nor counts toward the refusal and no-progress stops.
+      if (wasContinuation) continue;
       if (facts.refusedAll) {
         // Refused runs are not Trials, so the same slugs come back on top.
         if (

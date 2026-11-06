@@ -20,12 +20,12 @@ const versionToken = z.string().regex(/^[0-9A-Za-z.+_-]{1,64}$/);
 const stateName = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
 /**
  * A prior-research file name relative to `prior/` (ADR 0048, widened by ADR
- * 0049 D); the same set `src/discovery/prior-research.ts` admits.
+ * 0049 D and ADR 0052); the same set `src/discovery/prior-research.ts` admits.
  */
 const priorResearchName = z
   .string()
   .regex(
-    /^(?:recon-map\.md|lab-setup\.md|REGISTRY\.md|stores\.json|(?:assumptions|walks)\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.md)$/,
+    /^(?:recon-map\.md|lab-setup\.md|REGISTRY\.md|continuation\.json|stores\.json|(?:assumptions|walks)\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.md)$/,
   );
 /** A programme's decision on an external submission (#698). */
 export const EXTERNAL_OUTCOMES = [
@@ -342,6 +342,20 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
           }),
         ])
         .optional(),
+      /**
+       * ADR 0052: present on a Trial the continuation contract scheduled on
+       * the same Snapshot: the Root run whose `continuation.json` it received,
+       * its ordinal in the chain, how many open routes that run declared and
+       * the id digests it passed on. Copied to resumed segments.
+       */
+      continuation: z
+        .strictObject({
+          of: id,
+          ordinal: z.number().int().min(2),
+          openRouteCount: z.number().int().positive(),
+          passedIdDigests: z.array(digest).min(1).max(64),
+        })
+        .optional(),
       axis: z.literal("history").optional(),
       arm: z.enum(["a", "b"]).optional(),
       arms: z
@@ -390,15 +404,30 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
       .regex(/^[a-z0-9][a-z0-9:_-]{0,127}$/)
       .optional(),
     providerLimit: z.enum(["rate-limit", "quota"]).optional(),
-    /** Legacy within-Trial continuation receipt. */
+    /**
+     * The legacy within-Trial continuation receipt (`mode: thread-resume`),
+     * or ADR 0052: the shape check of the sealed `continuation.json` —
+     * absent, invalid, or valid with the route count and each id's digest
+     * (at most 64; `truncated` when more were declared). The route text is
+     * never read or recorded.
+     */
     continuation: z
-      .strictObject({
-        mode: z.literal("thread-resume"),
-        injected: z.boolean(),
-        entriesHandedBack: z.number().int().nonnegative(),
-        remainingMinutes: z.number().nonnegative(),
-        reason: z.enum(["coverage-incomplete", "report-unavailable"]),
-      })
+      .union([
+        z.strictObject({
+          mode: z.literal("thread-resume"),
+          injected: z.boolean(),
+          entriesHandedBack: z.number().int().nonnegative(),
+          remainingMinutes: z.number().nonnegative(),
+          reason: z.enum(["coverage-incomplete", "report-unavailable"]),
+        }),
+        z.strictObject({ status: z.enum(["absent", "invalid"]) }),
+        z.strictObject({
+          status: z.literal("valid"),
+          openRouteCount: z.number().int().nonnegative(),
+          openRouteIdDigests: z.array(digest).max(64),
+          truncated: z.literal(true).optional(),
+        }),
+      ])
       .optional(),
     /** Lower-bound counts inferred from completed command events, not agent claims. */
     observed: z
@@ -529,10 +558,12 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
         "run-failed",
         /** ADR 0049 C: the runner's follow-up Trial was refused before any Lab (an ADR 0044 refusal). */
         "follow-up-refused",
+        /** ADR 0052: a continuation Trial was not run (`no-progress`, or a refusal before any Lab). */
+        "continuation-refused",
         "other",
       ])
       .optional(),
-    /** The refusal's code, for `follow-up-refused`; absent on every other skip. */
+    /** The refusal's code, for `follow-up-refused` and `continuation-refused`; absent on every other skip. */
     reasonDetail: z
       .string()
       .regex(/^[a-z0-9][a-z0-9:_-]{0,127}$/)
@@ -550,6 +581,21 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
     ofRunId: id,
     ofCampaignId: id,
     leadCount: z.number().int().positive(),
+  }),
+  event({
+    /**
+     * ADR 0052: a continuation Trial on this Snapshot was scheduled under this
+     * campaign because the Root run `ofRunId` of campaign `ofCampaignId` left
+     * `openRouteCount` open routes. `ordinal` is the new Trial's place in the
+     * chain; `manual` marks `campaign continue`. Written before the Trial
+     * resolves, so a refused or failed one is never scheduled again.
+     */
+    type: z.literal("continuation-scheduled"),
+    ofRunId: id,
+    ofCampaignId: id,
+    ordinal: z.number().int().min(2),
+    openRouteCount: z.number().int().positive(),
+    manual: z.boolean().optional(),
   }),
   event({
     /** Before a Snapshot exists, snapshotDigest is the immutable selection record's digest. */

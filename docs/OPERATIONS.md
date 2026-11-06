@@ -64,6 +64,7 @@ harness continuous concurrency [<n>] [--runtime codex] --config <campaign.json>
 ```sh
 harness campaign run <slug> --campaign <id> --config <campaign.json> --selection <selection.json>
 harness campaign resume --campaign <id> --run <runId> --config <campaign.json>
+harness campaign continue --campaign <新しい id> --run <runId> --config <campaign.json>
 harness ledger stops --campaign <id>
 harness ledger resumes --campaign <id>
 harness research import --from <別の state dir> [--slug <slug>]
@@ -72,6 +73,8 @@ harness research import --from <別の state dir> [--slug <slug>]
 - 選定方針は手動の形にする: `candidateSlugs` と `pinnedVersions`、`minimumActiveInstallations: 0`、`maximumTargets: 1`、`revisitPolicy` 無し。campaign 設定は本番の写しで、`resources` を 1 対象にし、`selectionPolicyPath` をその方針に向ける。
 - `--campaign` は 40 文字まで。1 対象に 1 Trial で、探索 Lab はその Trial だけに付く。同じ Snapshot に複数の Trial を作る `--repeat` は、Lab 無しの Trial でしか使えなかったので 2026-11-05 に削除した。
 - `campaign resume` は `completed` 以外で止まった Root を、同じ Snapshot・同じ runtime profile・残りの制限時間で新しいサンドボックスに再開する。残りが 5 分未満、receipt に `session` が無い、別の run がやり直した後（`superseded`）は `not resumable: <理由>` で終了コード 3。
+- `discovery.continuation`（ADR 0052）は `none`（既定）か `open-routes`。`open-routes` のとき、連続ランナーは新しい対象を選ぶ前に、最新の選定 campaign とそこから連なる continuation campaign で、Root の最新区間が valid な `continuation.json` に open route を 1 件以上残した Snapshot の次の Trial を、新しい campaign id で組む。連鎖の中で数えた Trial が 3 に達した Snapshot と、受け取った id が 1 つも消えなかった Snapshot（`target-skipped` の `continuation-refused` / `no-progress`）は組まない。continuation campaign は選定 batch を束ねず、拒否と無進捗の停止規則に数えない。ランナーの log には `continuation campaign=... of=... targets=...` と `continuation refused ...` が出る。
+- `campaign continue` は 4 回目以降の名指しである。`--run` の Trial の最新区間が valid な `continuation.json` に open route を残していれば、3 回の上限と進捗の規則を使わずに、`--campaign` の新しい campaign で同じ Snapshot の Trial を 1 つ組む（`continuation-scheduled` に `manual: true`）。条件を満たさなければ `not continuable: <理由>` で終了コード 3。止まったら同じコマンドで続きを走らせる。`discovery.continuation` の値に関係なく使える。
 - 台帳は `<state>/ledger.sqlite` の `ledger_events`。読み方は [agents/ledger-reading.md](agents/ledger-reading.md)。`node:sqlite` の `DatabaseSync` を `readOnly: true` で開く。
 - `research import` は、別の `--state`（bench など）で終わった Trial の研究 file を、この state の `discovery.priorResearch: same-target` の候補にする（ADR 0049 決定 D）。別の state は読み取り専用で開き、研究の本文は共有の work directory にあるものを digest で参照する。2 回目は何も書かない。
 

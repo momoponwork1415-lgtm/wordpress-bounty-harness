@@ -90,6 +90,11 @@ import {
   resolveWordPressPriorResearch,
 } from "./wordpress-prior-research.js";
 import {
+  namedContinuationTarget,
+  resolveWordPressContinuation,
+  type ResolvedContinuation,
+} from "./wordpress-continuation.js";
+import {
   DISCOVERY_RUN_MEMORY_MIB,
   openWordPressCampaignSession,
   readWordPressCampaignConfig,
@@ -536,6 +541,8 @@ type WordPressDiscoveryContext = {
   readonly state: CliState;
   readonly objective: WordPressDiscoveryAsset;
   readonly trustBoundary: WordPressDiscoveryAsset;
+  /** ADR 0052: a continuation campaign's Snapshots, by digest; absent otherwise. */
+  readonly continuation?: ReadonlyMap<string, ResolvedContinuation>;
 };
 
 /**
@@ -789,15 +796,24 @@ async function planWordPressDiscovery(
   const maxRuns = 1;
   const stopRules = { maxRuns, noFindingRuns: 1 };
   const runParameters = wordPressRunParameters(config, runtime.runtimeProfile);
+  // ADR 0052: a continuation Trial receives the notes of the run it
+  // continues, resolved by its campaign before any Lab.
+  const continued = context.continuation?.get(snapshot.digest);
+  if ((context.continuation === undefined) !== (continued === undefined))
+    throw new Error(
+      "The Snapshot is not one of the campaign's continuation targets",
+    );
   // ADR 0048: the latest earlier Trial's map and setup record for this target.
   const priorResearch =
-    config.discovery.priorResearch === "same-target"
-      ? await resolveWordPressPriorResearch(state, boundaries.attachments, {
-          targetId: input.target.targetId,
-          snapshotDigest: snapshot.digest,
-          currentVersion: snapshot.target.version,
-        })
-      : undefined;
+    continued !== undefined
+      ? continued.priorResearch
+      : config.discovery.priorResearch === "same-target"
+        ? await resolveWordPressPriorResearch(state, boundaries.attachments, {
+            targetId: input.target.targetId,
+            snapshotDigest: snapshot.digest,
+            currentVersion: snapshot.target.version,
+          })
+        : undefined;
   const promptFor = (selectedObjective: typeof objective) =>
     wordPressDiscoveryPromptText({
       objective: selectedObjective,
@@ -869,6 +885,9 @@ async function planWordPressDiscovery(
           ...(priorResearch === undefined
             ? {}
             : { priorResearch: priorResearch.configuration }),
+          ...(continued === undefined
+            ? {}
+            : { continuation: continued.configuration }),
         },
         run: {
           runId: trialId,
@@ -1185,6 +1204,7 @@ async function resumeWordPressRun(
       boundaries.attachments,
       recordedPriorResearch,
       snapshot.target.version,
+      started.configuration.continuation !== undefined,
     );
     if (
       rebuilt === undefined ||
@@ -1495,13 +1515,25 @@ async function runWordPressCampaign(
   session: WordPressCampaignSession,
 ): ReturnType<CliProfile["runCampaign"]> {
   const { config, boundaries } = session;
-  const policy = await session.policy();
+  // ADR 0052: a continuation campaign runs the listed Snapshots again, each
+  // resolved and checked before any Lab; selection does not run.
+  const continuation =
+    input.continuation === undefined
+      ? undefined
+      : await resolveWordPressContinuation(
+          state,
+          boundaries.attachments,
+          input.campaignId,
+          input.continuation,
+        );
+  const policy = continuation === undefined ? await session.policy() : null;
   // A named-list policy binds the batch the runner selected too: without it the
   // campaign ranked the list without the ledger and ran the same top targets
   // every batch (prod-v26d, 2026-11-06). A manual `campaign run` names none,
   // and a named-list campaign that already ran unbound before that fix keeps
   // its own targets.
   const unboundNamedCampaign =
+    policy !== null &&
     !("candidateSource" in policy) &&
     state.ledger.read({
       campaignId: input.campaignId,
@@ -1514,16 +1546,21 @@ async function runWordPressCampaign(
       limit: 1,
     }).length > 0;
   const reservedSelections =
-    "candidateSource" in policy ||
-    (input.selectionBatchId !== undefined && !unboundNamedCampaign)
-      ? await bindCampaignSelectionBatch(
-          state,
-          policy,
-          input.campaignId,
-          input.target,
-          input.selectionBatchId,
-        )
-      : undefined;
+    policy === null
+      ? continuation!.map(({ target, snapshotDigest }) => ({
+          target,
+          snapshotDigest,
+        }))
+      : "candidateSource" in policy ||
+          (input.selectionBatchId !== undefined && !unboundNamedCampaign)
+        ? await bindCampaignSelectionBatch(
+            state,
+            policy,
+            input.campaignId,
+            input.target,
+            input.selectionBatchId,
+          )
+        : undefined;
   const reservedDigests = new Map(
     reservedSelections?.map(({ target, snapshotDigest }) => [
       targetSelectionId(target),
@@ -1576,7 +1613,7 @@ async function runWordPressCampaign(
     pipeline: {
       select: async () =>
         (reservedSelections === undefined
-          ? await boundaries.selection.rank(policy)
+          ? await boundaries.selection.rank(policy!)
           : reservedSelections.map(({ target }) => target)
         ).filter(
           (target) =>
@@ -1639,6 +1676,16 @@ async function runWordPressCampaign(
           state,
           objective,
           trustBoundary,
+          ...(continuation === undefined
+            ? {}
+            : {
+                continuation: new Map(
+                  continuation.map((resolved) => [
+                    resolved.snapshotDigest,
+                    resolved,
+                  ]),
+                ),
+              }),
         }),
       get verification() {
         return session.verification;
@@ -1945,6 +1992,28 @@ export function createWordPressCliProfile(
         input,
         await openWordPressCampaignSession(options, state, input),
       ),
+    // ADR 0052: the runner's continuation policy and the named continuation.
+    continuationPolicy: async (configPath) =>
+      (await readWordPressCampaignConfig(configPath)).discovery.continuation,
+    async continueCampaignRun(state, input) {
+      const named = namedContinuationTarget(state, input.runId);
+      if (named.status === "refused") return named;
+      const continuation = {
+        targets: [named.target],
+        log: input.log,
+      };
+      const summary = await runWordPressCampaign(
+        state,
+        {
+          campaignId: input.campaignId,
+          configPath: input.configPath,
+          target: null,
+          continuation,
+        },
+        await openWordPressCampaignSession(options, state, input),
+      );
+      return { status: "scheduled", summary };
+    },
     ...(options.attachments === undefined
       ? {}
       : {

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import {
+  CONTINUATION_FILE,
   MAX_PRIOR_RESEARCH_FILE_BYTES,
   PRIOR_RESEARCH_DIRECTORIES,
   PRIOR_RESEARCH_FILE_NAMES,
@@ -79,6 +80,12 @@ export interface PriorResearchQuery {
   /** The Snapshot this Trial reads; a Trial on it is not an earlier Trial. */
   readonly snapshotDigest: string;
   readonly currentVersion: string;
+  /**
+   * ADR 0052: a continuation Trial names the Root run of this ledger whose
+   * archive it receives, on the same Snapshot; no other candidate is read,
+   * and the section ends with the continuation sentence.
+   */
+  readonly continuationOf?: string;
 }
 
 /**
@@ -240,14 +247,23 @@ export async function resolveWordPressPriorResearch(
   query: PriorResearchQuery,
 ): Promise<ResolvedPriorResearch> {
   const local = await localResearchTrials(state, { targetId: query.targetId });
-  const imported = importedResearchTrials(state, { targetId: query.targetId });
+  const named = query.continuationOf;
+  const imported =
+    named === undefined
+      ? importedResearchTrials(state, { targetId: query.targetId })
+      : [];
   // Latest finish first. At an equal instant this ledger's own Trial wins
   // over an imported one, and among its own the later-appended wins.
   const ordered = [
     ...local.map((trial, index) => ({ trial, order: index })),
     ...imported.map((trial, index) => ({ trial, order: -1 - index })),
   ]
-    .filter(({ trial }) => trial.snapshotDigest !== query.snapshotDigest)
+    .filter(({ trial }) =>
+      named === undefined
+        ? trial.snapshotDigest !== query.snapshotDigest
+        : trial.runId === named &&
+          trial.snapshotDigest === query.snapshotDigest,
+    )
     .sort(
       (a, b) =>
         (a.trial.finishedAt < b.trial.finishedAt
@@ -269,6 +285,7 @@ export async function resolveWordPressPriorResearch(
         bytes: content.byteLength,
       })),
       withheld: collected.withheld.map(({ name }) => name),
+      ...(named === undefined ? {} : { continuation: true }),
     });
     return {
       status: "passed",
@@ -308,6 +325,8 @@ export async function rebuildWordPressPriorResearch(
   attachments: Pick<ProviderAttachmentStore, "readByDigest">,
   recorded: PassedConfiguration,
   currentVersion: string,
+  /** ADR 0052: the Trial recorded `configuration.continuation`. */
+  continuation = false,
 ): Promise<string | undefined> {
   const source =
     recorded.sourceState === undefined
@@ -318,7 +337,18 @@ export async function rebuildWordPressPriorResearch(
             trial.runId === recorded.sourceRunId,
         );
   if (source === undefined) return undefined;
-  const collected = await collectPriorResearch(state, attachments, source);
+  // A Trial that started before `continuation.json` joined the set (ADR
+  // 0052) was not given it; its section is rebuilt without it.
+  const named = new Set([
+    ...recorded.files.map(({ name }) => name),
+    ...(recorded.withheld ?? []),
+  ]);
+  const collected = await collectPriorResearch(
+    state,
+    attachments,
+    source,
+    named.has(CONTINUATION_FILE) ? undefined : CONTINUATION_FILE,
+  );
   if (collected === undefined) return undefined;
   return priorResearchSection({
     priorVersion: recorded.sourceVersion,
@@ -328,6 +358,7 @@ export async function rebuildWordPressPriorResearch(
       bytes: content.byteLength,
     })),
     withheld: collected.withheld.map(({ name }) => name),
+    ...(continuation ? { continuation: true } : {}),
   });
 }
 
@@ -404,6 +435,7 @@ async function collectPriorResearch(
   state: Pick<CliState, "store">,
   attachments: Pick<ProviderAttachmentStore, "readByDigest">,
   source: Pick<ResearchTrial, "researchDigest" | "stores">,
+  leaveOut?: string,
 ): Promise<
   | {
       readonly kept: readonly CollectedFile[];
@@ -411,7 +443,9 @@ async function collectPriorResearch(
     }
   | undefined
 > {
-  const files = await archivedFiles(attachments, source.researchDigest);
+  const files = (
+    await archivedFiles(attachments, source.researchDigest)
+  ).filter(({ name }) => name !== leaveOut);
   if (source.stores !== undefined) {
     const stores = await researchStoresFile(state.store, source.stores);
     if (stores !== undefined) files.push(stores);

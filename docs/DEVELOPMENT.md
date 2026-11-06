@@ -14,7 +14,7 @@
 
 - **本番が bench。** 探索の数字は本番の対象から取る（所有者決定 2026-10-26）。開発セットに戻すのは、本番で対象範囲内の Finding は出るのに人間の観測の `match` が 1 週間 0 件のときだけ。既知の公開事例の benchmark は、現行の方法が 1 回の Trial で既知の型を外したときに、その型を名指しして回す。pass@3 のような反復は置かない。
 - **変えない 5 つ。** 不変条件 1〜8、Harness は制御だけ、確定は人間の Lab 観測だけ、探索プロンプトの文面（消すだけは許す）、設計変更は月 1 回（[ADR 0045](adr/0045-frozen-core-and-three-exploration-forces.md)）。2026-11-05 に所有者が決めた 7 月 30 日方式の版付き目的文だけ、文面の凍結の例外とする（[ADR 0051](adr/0051-july30-prompt-pilot.md)）。
-- **リポジトリの探索既定。** wide は v26-wide の単一目的文、探索 Lab 付き、最低時間なし、子の上限 4 とし、別 Snapshot の研究 file を `priorResearch: same-target` で引き継ぐ。六段階探索方式は 2026-11-05 に削除した（ADR 0050）。同一 Snapshot の自動再探索は、未解決経路を判定する契約ができるまで切る。本番ランナーの Git 外設定は、このリポジトリの既定を変えるだけでは切り替わらない（ADR 0051 の 2026-11-05 追記）。
+- **リポジトリの探索既定。** wide は v26-wide の単一目的文、探索 Lab 付き、最低時間なし、子の上限 4 とし、別 Snapshot の研究 file を `priorResearch: same-target` で引き継ぐ。六段階探索方式は 2026-11-05 に削除した（ADR 0050）。同一 Snapshot の自動再探索は continuation 契約（ADR 0052）だけで行い、リポジトリの wide 方針は `continuation: open-routes` を指定する。Harness は `continuation.json` の形・件数・id の digest だけを読み、連鎖 3 Trial までを自動で組む。本番ランナーの Git 外設定は、このリポジトリの既定を変えるだけでは切り替わらない（ADR 0051 の 2026-11-05 追記）。
 - **採用した方式の運転を測る。** 現行の v26-wide を本番対象で回し、完了率、停止理由、Finding / Lead、Lab の利用、人間の観測、時間と使用量を記録する。旧版・新版を交互に走らせる比較や旧 6 段の採否基準は必須にしない（ADR 0051 の 2026-11-05 追記）。分母は Codex 1 時間あたりの Lab 発火数と Wordfence の結果（ADR 0045）。手順は [docs/agents/measurement.md](agents/measurement.md)。
 - **Harness の変更は制御だけ。** 選定、Snapshot、sandbox、制限、保存、park、Lab の供給、観測の記録、台帳。探索と検証の「やり方」が code に現れたらプロンプトかスキルへ移す（[AGENTS.md](../AGENTS.md) の責務）。bug 修正と削除は随時、新しい機構は ADR 0045 の月 1 回の枠で。
 - **文書の役割。** 正本は [SPEC.md](SPEC.md) と [ADR](adr/)。いまの動きの説明は [SYSTEM.md](SYSTEM.md)。調べて報告した文書は [docs/reviews/](reviews/) に日付付きで置き、正本ではない。本番の設定、台帳、Private Evidence は Git 外。

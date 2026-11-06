@@ -10,6 +10,7 @@ import type {
   DiscoveryTransportResult,
   DiscoveryTransportRun,
 } from "./codex-native-agent-runtime.js";
+import { inspectContinuation } from "./continuation.js";
 import {
   countsAsTrial,
   countsAsTrialChain,
@@ -86,6 +87,8 @@ export type TrialOutcome = {
   /** The receipt's wall, or the configured wall when a cancelled transport threw. */
   readonly wallTimeMs: number;
   readonly researchArtifact?: FinishedEvent["researchArtifact"];
+  /** ADR 0052: the shape check of the archive's `continuation.json`; absent without a readable archive. */
+  readonly continuation?: FinishedEvent["continuation"];
   /** Sealed receipt: the transport's, or a synthetic one after a cancellation. */
   readonly receiptDigest?: string;
   readonly readPathsDigest?: string;
@@ -121,6 +124,9 @@ export function finishedEventFrom(
     ...(outcome.researchArtifact === undefined
       ? {}
       : { researchArtifact: outcome.researchArtifact }),
+    ...(outcome.continuation === undefined
+      ? {}
+      : { continuation: outcome.continuation }),
     ...(outcome.outcome === "completed" || outcome.failure === undefined
       ? {}
       : outcome.failure),
@@ -382,6 +388,17 @@ export async function executeTrial(
         digest: result.researchArtifact.attachment.digest,
         truncated: result.researchArtifact.truncated,
       };
+      // ADR 0052: the same shape check for every runtime, on the archive as
+      // sealed; only the status, the count and id digests are kept.
+      const continuation = await context.attachments
+        .readByDigest("research", result.researchArtifact.attachment.digest)
+        .then((stored) =>
+          stored.status === "resolved"
+            ? inspectContinuation(stored.bytes)
+            : undefined,
+        )
+        .catch(() => undefined);
+      if (continuation !== undefined) draft.continuation = continuation;
     }
     const receipt = nativeRunReceiptSchema.parse(result.receipt);
     draft.receipt = receipt;

@@ -4,6 +4,7 @@ import { appendFileSync } from "node:fs";
 import {
   CAMPAIGN_PREFIX,
   clearContinuousStop,
+  continuationRefusalEvent,
   continuousPaths,
   continuousPrefixes,
   createContinuousRunner,
@@ -321,6 +322,22 @@ export async function continuousCommand(
         configPath,
         selectionPolicyPath: selectionPath,
       }),
+    ...(profile.continuationPolicy === undefined
+      ? {}
+      : {
+          continuation: {
+            policy: () => profile.continuationPolicy!(configPath),
+            refuse: async (refusal) => {
+              const appended = await state.ledger.append(
+                continuationRefusalEvent(refusal, state.clock().toISOString()),
+              );
+              if (appended.status === "conflict")
+                throw new Error(
+                  `Continuation refusal of ${refusal.snapshotDigest} conflicted`,
+                );
+            },
+          },
+        }),
     discardStaleSelection: async (campaignId) =>
       (await profile.discardStaleSelection?.(state, {
         campaignId,

@@ -4,6 +4,7 @@ export {
   runDiscoveryCampaign,
   type CampaignHistory,
   type CampaignInputV1,
+  type ContinuationConfiguration,
   type PlannedDiscoveryRun,
   type PlannedTrial,
 } from "./campaign.js";
@@ -87,6 +88,7 @@ export {
   PRIOR_RESEARCH_FILE_NAMES,
   PRIOR_RESEARCH_NAME,
   PRIOR_RESEARCH_STORES_FILE,
+  CONTINUATION_SECTION_SENTENCE,
   capPriorResearch,
   isPriorResearchName,
   isPriorResearchPath,
@@ -189,3 +191,13 @@ export {
   readPrivateChatgptLogin,
   type PrivateChatgptLogin,
 } from "./provider-private-credential.js";
+export {
+  CONTINUATION_FILE,
+  MAX_AUTOMATIC_CONTINUATION_TRIALS,
+  MAX_CONTINUATION_ID_DIGESTS,
+  continuationFileSchema,
+  continuationIdDigest,
+  continuationMadeNoProgress,
+  inspectContinuation,
+  type ContinuationRecord,
+} from "./continuation.js";

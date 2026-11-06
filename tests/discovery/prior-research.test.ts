@@ -126,6 +126,7 @@ describe("Prior research section (ADR 0048)", () => {
       "recon-map.md",
       "lab-setup.md",
       "REGISTRY.md",
+      "continuation.json",
     ]);
     expect(PRIOR_RESEARCH_DIRECTORIES).toEqual(["assumptions", "walks"]);
     expect(PRIOR_RESEARCH_STORES_FILE).toBe("stores.json");
