@@ -5426,6 +5426,72 @@ describe("harness CLI vertical slice", () => {
     });
   });
 
+  it("binds the runner's batch under a named-list policy, so the next campaign runs the next targets", async () => {
+    const { configPath, root, ledger, profile, select } = await harness({
+      candidates: ["item-a", "item-b", "item-c", "item-d", "item-e", "item-f"],
+    });
+    const policyPath = join(root, "selection.json");
+    const named = JSON.parse(await readFile(policyPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    await writeFile(
+      policyPath,
+      JSON.stringify({
+        ...named,
+        pinnedVersions: {},
+        revisitPolicy: { kind: "version-increased" },
+        wordpressVersion: "6.8",
+        maximumTargets: 3,
+      }),
+    );
+    const state = () =>
+      openState(join(root, "state"), { clock: () => new Date(now) });
+    const boundIds = (campaignId: string) =>
+      ledger()
+        .read({ campaignId, type: "selection-batch-bound" })
+        .map(({ event }) =>
+          event.type === "selection-batch-bound" ? event.selectionIds : [],
+        );
+    const first = await select(policyPath);
+    await profile.runCampaign(await state(), {
+      campaignId: "prod-named-1",
+      configPath,
+      target: null,
+      selectionBatchId: first.batchId!,
+    });
+    expect(boundIds("prod-named-1")).toEqual([
+      ["wporg:item-a@9.9.9", "wporg:item-b@9.9.9", "wporg:item-c@9.9.9"],
+    ]);
+    // The second batch holds the next three; the campaign must run those,
+    // not the policy's top three again (prod-v26d, 2026-11-06).
+    const second = await select(policyPath);
+    expect(second.selected.map(({ targetId }) => targetId)).toEqual([
+      "wporg:item-d",
+      "wporg:item-e",
+      "wporg:item-f",
+    ]);
+    await profile.runCampaign(await state(), {
+      campaignId: "prod-named-2",
+      configPath,
+      target: null,
+      selectionBatchId: second.batchId!,
+    });
+    expect(boundIds("prod-named-2")).toEqual([
+      ["wporg:item-d@9.9.9", "wporg:item-e@9.9.9", "wporg:item-f@9.9.9"],
+    ]);
+    const ran = ledger()
+      .read({ campaignId: "prod-named-2", type: "target-selected" })
+      .map(({ event }) =>
+        event.type === "target-selected" ? event.selectionId : "",
+      );
+    expect(ran.sort()).toEqual([
+      "wporg:item-d@9.9.9",
+      "wporg:item-e@9.9.9",
+      "wporg:item-f@9.9.9",
+    ]);
+  });
+
   it("drops a batch frozen under another policy on restart and selects its targets again (#302)", async () => {
     const { run, root, profile, configPath, ledger, store, select } =
       await harness({
