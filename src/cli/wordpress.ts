@@ -1498,9 +1498,24 @@ async function runWordPressCampaign(
   const policy = await session.policy();
   // A named-list policy binds the batch the runner selected too: without it the
   // campaign ranked the list without the ledger and ran the same top targets
-  // every batch (prod-v26d, 2026-11-06). A manual `campaign run` names none.
+  // every batch (prod-v26d, 2026-11-06). A manual `campaign run` names none,
+  // and a named-list campaign that already ran unbound before that fix keeps
+  // its own targets.
+  const unboundNamedCampaign =
+    !("candidateSource" in policy) &&
+    state.ledger.read({
+      campaignId: input.campaignId,
+      type: "selection-batch-bound",
+      limit: 1,
+    }).length === 0 &&
+    state.ledger.read({
+      campaignId: input.campaignId,
+      type: "target-selected",
+      limit: 1,
+    }).length > 0;
   const reservedSelections =
-    "candidateSource" in policy || input.selectionBatchId !== undefined
+    "candidateSource" in policy ||
+    (input.selectionBatchId !== undefined && !unboundNamedCampaign)
       ? await bindCampaignSelectionBatch(
           state,
           policy,
