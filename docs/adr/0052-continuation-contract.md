@@ -52,3 +52,25 @@ ADR 0049 決定 C の失敗は「件数だけを見たこと」ではなく「�
 ## 消し方
 
 `discovery.continuation`、`src/discovery/continuation.ts` と `executeTrial` の検査、`continuation-scheduled`、`configuration.continuation`、`discovery-run-finished.continuation` の新しい形、ランナーの `pendingContinuations` と continuation campaign の分岐、`src/cli/wordpress-continuation.ts`、`resolveWordPressPriorResearch` の `continuationOf`、`PRIOR_RESEARCH_FILE_NAMES` の `continuation.json`、節の 1 文、`campaign continue` を revert する。台帳の記録（`continuation-scheduled`、`configuration.continuation`、`discovery-run-finished.continuation`、`target-skipped` の `continuation-refused`）は読み続ける（任意項目と schema の形を残す）。SPEC 第 6 節、AGENTS.md、DEVELOPMENT.md 第 2 節の該当行を「同一 Snapshot の第 2 Trial は行わない」に戻す。
+
+## 2026-11-06 追記: 名指しの続きに操作役の焦点メモを渡す（focus 経路）
+
+**問い。** 操作役の AI が前回 Trial の Lead と未解決経路を読んで続きを名指しするとき、その Trial に「どこから始めるか」の短いメモを渡せるか。open route を残さなかった Root にも名指しで続きを組めるか。
+
+**背景。** 台帳を数えると、prod-v26 の終了 Root 80 本のうち open route > 0 は 15 本だけで、Lead を出したのに open route 0 の Root が 48 本あった。自動の続きは Root の宣言だけで組むので、この 48 本には続きが無い。所有者は 2026-11-06 に「操作役 AI が Lead を読んで続きを名指しする手順（skill）が欲しい」と決めた。skill の本文（何を読み、何を書くか）は Harness の外にある。ここで決めるのは Harness 側の「形」だけである。
+
+**決定。**
+
+- **名指しの条件を緩める。** `campaign continue --run <runId>` は、名指しした Trial の最新区間の `discovery-run-finished` が `provider-limited` でなく、reason が `interrupted` でないこと（自動の条件と同じ除外）に加えて、`continuation.openRouteCount > 0` **または** `--focus <path>` があることを要る。両方無ければ `not-continuable`（open route も焦点メモも無い）で拒否する。`continuation` が `invalid` / `absent` のときは `openRouteCount` 0、`passedIdDigests` [] として扱う。3 回の上限と進捗の規則は、従来どおり名指しには当てない。
+- **焦点メモ（operator focus）。** `--focus <path>` は操作役が書いた Markdown 1 本で、UTF-8、8 KiB 以下、空でない。超えたら UsageError で止め、切らない。Harness は内容を読まず、形（サイズ、UTF-8）だけを見る。本文は provider attachment store に content-addressed で置き（kind `focus`、`<work>/provider-attachments/focus-<hex>/content/focus.md`）、台帳には digest と byte 数だけを書く。`continuation-scheduled` に `focusDigest` と `focusBytes`（`manual: true` のときだけ現れる任意項目）、`discovery-run-started.configuration.continuation` に `focus: { digest, bytes }` を足し、再開区間（ADR 0036）にも写す。
+- **渡し方。** 続きの Trial で `/workspace/research/prior/operator-focus.md` として置く。`PRIOR_RESEARCH_FILE_NAMES` に `operator-focus.md` を足し、順序は `continuation.json` の直後にする。archive 由来ではなく store 由来なので、`resolveWordPressPriorResearch` は名指しの focus digest があるときだけ store から読んで files に足す。Root が同じ名前の file を研究 directory に書いても、archive からは渡さない。`stores.json` の導出、総量の上限、再開時の再建と digest 照合は既存のまま通す。メモが store に無ければ `continuation-refused`（`continuation-focus-unavailable`）で止める。open route が 0 の名指しは `continuation.json` を要らず、焦点メモだけで組む。自動の続き（ランナーが組むもの）に focus は無い。
+- **生成節の 1 文。** `## Prior research` 節の末尾、`CONTINUATION_SECTION_SENTENCE` の後に、focus があるときだけ `FOCUS_SECTION_SENTENCE` を足す。全文、訳、出典対照は docs/reviews/2026-11-06-focus-section.md にあり、`owner-approved` を要する。目的文 v26 の本文は変えない。open route が 0 で focus だけのときも continuation の 1 文はそのまま出す（`continuation.json` の open route が空であることは Root が見れば分かる）。
+- **操作役が読む一覧。** `review leads --campaign <id>` の各行の末尾に Root Trial の `runId`（`trialId`）を足す。新規 `campaign trials --campaign <id> | --prefix <campaignPrefix>`（readOnly）は Root Trial ごとに 1 行で、`runId`、選定 id（`targetId@version`）、campaign、`ordinal`、続きなら元 `runId`、最新区間の outcome / reason（終わっていなければ `running`）、`continuation.status` と `openRouteCount`、その Trial の Finding が属する群の数、Lead 数、封じた研究 archive の digest（`discovery-run-finished.researchArtifact.digest`。無ければ `-`）を出す。台帳の形と件数だけで、文は出さない。
+
+**不変条件 1 との関係。** 不変条件 1 の例外（SPEC 第 2 節）は「Finding と Lead は渡さない」と言う。焦点メモは、操作役が自分たちの Trial の Lead と研究 file を読んで書くメモであり、Lead の写しではない。公開記録の本文、PoC、ペイロード、他人の再現手順を含めてはならない。この規則は skill の側にあり、Harness は形だけを見る。
+
+**削除済みの ADR 0044（`priorLeads`）との違い。** ADR 0044 は過去 Trial の Lead を全件、機械で `## Prior leads` 節に写した。Harness が Lead を選ばず、agent は雑音の Lead と未解決の経路を区別できなかった。focus 経路では、操作役が Lead と研究 file を読んで続ける経路を選び、短いメモに書く。渡るのはそのメモ 1 本（8 KiB 以下）だけで、Lead の本文は渡らない。読む側の規則（何を書くか、何を書かないか）は skill にあり、Harness は形（サイズ、UTF-8、digest）だけを見る。
+
+**計測。** 名指し（focus あり）の続きと自動の続きは別の列で数える（measurement.md 5e）。focus の有無は `continuation-scheduled.focusDigest` と `configuration.continuation.focus` で見分ける。
+
+**消し方。** `--focus`、`operator-focus.md`（`PRIOR_RESEARCH_FILE_NAMES` と台帳の名前の pattern）、`FOCUS_SECTION_SENTENCE`、attachment の kind `focus`、`continuation-scheduled` の `focusDigest` / `focusBytes`、`configuration.continuation.focus`、名指し条件の緩和（`sealedFinish` だけで通す分岐と `openRouteCount` 0 の許容）、`campaign trials`、`review leads` の `trial` 列を revert する。台帳の記録は読み続ける（任意項目と schema の形を残す）。

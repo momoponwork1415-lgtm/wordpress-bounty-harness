@@ -25,7 +25,7 @@ const stateName = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
 const priorResearchName = z
   .string()
   .regex(
-    /^(?:recon-map\.md|lab-setup\.md|REGISTRY\.md|continuation\.json|stores\.json|(?:assumptions|walks)\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.md)$/,
+    /^(?:recon-map\.md|lab-setup\.md|REGISTRY\.md|continuation\.json|operator-focus\.md|stores\.json|(?:assumptions|walks)\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.md)$/,
   );
 /** A programme's decision on an external submission (#698). */
 export const EXTERNAL_OUTCOMES = [
@@ -346,14 +346,22 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
        * ADR 0052: present on a Trial the continuation contract scheduled on
        * the same Snapshot: the Root run whose `continuation.json` it received,
        * its ordinal in the chain, how many open routes that run declared and
-       * the id digests it passed on. Copied to resumed segments.
+       * the id digests it passed on. Copied to resumed segments. A named
+       * continuation with an operator focus note (2026-11-06 addendum) may
+       * carry 0 routes; `focus` is that note's digest and size.
        */
       continuation: z
         .strictObject({
           of: id,
           ordinal: z.number().int().min(2),
-          openRouteCount: z.number().int().positive(),
-          passedIdDigests: z.array(digest).min(1).max(64),
+          openRouteCount: z.number().int().nonnegative(),
+          passedIdDigests: z.array(digest).max(64),
+          focus: z
+            .strictObject({
+              digest,
+              bytes: z.number().int().positive().max(8192),
+            })
+            .optional(),
         })
         .optional(),
       axis: z.literal("history").optional(),
@@ -588,14 +596,18 @@ export const ledgerEventV1Schema = z.discriminatedUnion("type", [
      * campaign because the Root run `ofRunId` of campaign `ofCampaignId` left
      * `openRouteCount` open routes. `ordinal` is the new Trial's place in the
      * chain; `manual` marks `campaign continue`. Written before the Trial
-     * resolves, so a refused or failed one is never scheduled again.
+     * resolves, so a refused or failed one is never scheduled again. A manual
+     * one may carry 0 routes when the operator passed a focus note
+     * (`focusDigest`, `focusBytes`; 2026-11-06 addendum).
      */
     type: z.literal("continuation-scheduled"),
     ofRunId: id,
     ofCampaignId: id,
     ordinal: z.number().int().min(2),
-    openRouteCount: z.number().int().positive(),
+    openRouteCount: z.number().int().nonnegative(),
     manual: z.boolean().optional(),
+    focusDigest: digest.optional(),
+    focusBytes: z.number().int().positive().max(8192).optional(),
   }),
   event({
     /** Before a Snapshot exists, snapshotDigest is the immutable selection record's digest. */

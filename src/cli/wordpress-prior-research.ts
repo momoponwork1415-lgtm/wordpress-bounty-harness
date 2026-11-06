@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 
 import {
   CONTINUATION_FILE,
+  MAX_OPERATOR_FOCUS_BYTES,
   MAX_PRIOR_RESEARCH_FILE_BYTES,
+  OPERATOR_FOCUS_FILE,
   PRIOR_RESEARCH_DIRECTORIES,
   PRIOR_RESEARCH_FILE_NAMES,
   PRIOR_RESEARCH_STORES_FILE,
@@ -11,6 +13,7 @@ import {
   priorResearchPath,
   priorResearchSection,
   researchArchiveSchema,
+  type OperatorFocus,
   type ProviderAttachmentStore,
 } from "../discovery/index.js";
 import type { PrivateArtifactStore } from "../infrastructure/private-artifact-store.js";
@@ -86,6 +89,12 @@ export interface PriorResearchQuery {
    * and the section ends with the continuation sentence.
    */
   readonly continuationOf?: string;
+  /**
+   * ADR 0052 (2026-11-06): with `continuationOf`, the operator's focus note
+   * in the attachment store, placed as `prior/operator-focus.md` after the
+   * archive's files; the section then ends with one more sentence.
+   */
+  readonly focus?: OperatorFocus;
 }
 
 /**
@@ -274,8 +283,18 @@ export async function resolveWordPressPriorResearch(
     )
     .map(({ trial }) => trial);
   if (ordered.length === 0) return none("no-earlier-trial");
+  const focus =
+    named === undefined || query.focus === undefined
+      ? undefined
+      : await operatorFocusFile(attachments, query.focus);
   for (const trial of ordered) {
-    const collected = await collectPriorResearch(state, attachments, trial);
+    const collected = await collectPriorResearch(
+      state,
+      attachments,
+      trial,
+      undefined,
+      focus,
+    );
     if (collected === undefined) return none("no-files");
     const section = priorResearchSection({
       priorVersion: trial.version,
@@ -286,6 +305,7 @@ export async function resolveWordPressPriorResearch(
       })),
       withheld: collected.withheld.map(({ name }) => name),
       ...(named === undefined ? {} : { continuation: true }),
+      ...(focus === undefined ? {} : { focus: true }),
     });
     return {
       status: "passed",
@@ -325,8 +345,11 @@ export async function rebuildWordPressPriorResearch(
   attachments: Pick<ProviderAttachmentStore, "readByDigest">,
   recorded: PassedConfiguration,
   currentVersion: string,
-  /** ADR 0052: the Trial recorded `configuration.continuation`. */
-  continuation = false,
+  /**
+   * ADR 0052: the Trial's recorded `configuration.continuation`, when it is
+   * a continuation Trial; its `focus` names the note to place again.
+   */
+  continuation?: { readonly focus?: OperatorFocus | undefined },
 ): Promise<string | undefined> {
   const source =
     recorded.sourceState === undefined
@@ -343,11 +366,18 @@ export async function rebuildWordPressPriorResearch(
     ...recorded.files.map(({ name }) => name),
     ...(recorded.withheld ?? []),
   ]);
+  const focus =
+    continuation?.focus === undefined
+      ? undefined
+      : await operatorFocusFile(attachments, continuation.focus);
+  if (continuation?.focus !== undefined && focus === undefined)
+    return undefined;
   const collected = await collectPriorResearch(
     state,
     attachments,
     source,
     named.has(CONTINUATION_FILE) ? undefined : CONTINUATION_FILE,
+    focus,
   );
   if (collected === undefined) return undefined;
   return priorResearchSection({
@@ -358,8 +388,40 @@ export async function rebuildWordPressPriorResearch(
       bytes: content.byteLength,
     })),
     withheld: collected.withheld.map(({ name }) => name),
-    ...(continuation ? { continuation: true } : {}),
+    ...(continuation === undefined ? {} : { continuation: true }),
+    ...(focus === undefined ? {} : { focus: true }),
   });
+}
+
+/**
+ * ADR 0052 (2026-11-06): the operator's note from the attachment store, as
+ * the file `operator-focus.md`, when it is there whole, UTF-8 and of the
+ * recorded size. Its text is not read.
+ */
+async function operatorFocusFile(
+  attachments: Pick<ProviderAttachmentStore, "readByDigest">,
+  focus: OperatorFocus,
+): Promise<CollectedFile | undefined> {
+  let stored: Awaited<ReturnType<typeof attachments.readByDigest>>;
+  try {
+    stored = await attachments.readByDigest("focus", focus.digest);
+  } catch {
+    return undefined;
+  }
+  if (stored.status !== "resolved") return undefined;
+  const content = stored.bytes;
+  if (
+    content.byteLength === 0 ||
+    content.byteLength !== focus.bytes ||
+    content.byteLength > MAX_OPERATOR_FOCUS_BYTES
+  )
+    return undefined;
+  try {
+    utf8.decode(content);
+  } catch {
+    return undefined;
+  }
+  return { name: OPERATOR_FOCUS_FILE, content };
 }
 
 /** The archive and Lab record this ledger's own finished run left, by run id. */
@@ -428,14 +490,16 @@ async function recordedVersion(
 type CollectedFile = { readonly name: string; readonly content: Buffer };
 
 /**
- * The source Trial's files within the per-file bounds, plus its store table,
- * then the total cap; undefined when nothing is left to pass.
+ * The source Trial's files within the per-file bounds, plus its store table
+ * and (a named continuation) the operator's note, then the total cap;
+ * undefined when nothing is left to pass.
  */
 async function collectPriorResearch(
   state: Pick<CliState, "store">,
   attachments: Pick<ProviderAttachmentStore, "readByDigest">,
   source: Pick<ResearchTrial, "researchDigest" | "stores">,
   leaveOut?: string,
+  focus?: CollectedFile,
 ): Promise<
   | {
       readonly kept: readonly CollectedFile[];
@@ -450,6 +514,7 @@ async function collectPriorResearch(
     const stores = await researchStoresFile(state.store, source.stores);
     if (stores !== undefined) files.push(stores);
   }
+  if (focus !== undefined) files.push(focus);
   if (files.length === 0) return undefined;
   const capped = capPriorResearch(
     files.map((file) => ({ ...file, bytes: file.content.byteLength })),
@@ -513,11 +578,14 @@ async function archivedFiles(
   for (const entry of parsed.data.entries) {
     if (entry.type !== "file" || entry.truncated) continue;
     const name = entry.path;
+    // The operator's note comes from the store only (ADR 0052, 2026-11-06):
+    // an archive entry of that name, whoever wrote it, is not passed on.
     const admitted =
-      (PRIOR_RESEARCH_FILE_NAMES as readonly string[]).includes(name) ||
-      PRIOR_RESEARCH_DIRECTORIES.some((directory) =>
-        name.startsWith(`${directory}/`),
-      );
+      name !== OPERATOR_FOCUS_FILE &&
+      ((PRIOR_RESEARCH_FILE_NAMES as readonly string[]).includes(name) ||
+        PRIOR_RESEARCH_DIRECTORIES.some((directory) =>
+          name.startsWith(`${directory}/`),
+        ));
     if (!admitted || !isPriorResearchName(name) || seen.has(name)) continue;
     const content = Buffer.from(entry.contentBase64, "base64");
     if (

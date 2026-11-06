@@ -12,13 +12,35 @@ import {
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 const MAX_DIAGNOSTIC_BYTES = 64 * 1024 * 1024;
 const MAX_RESEARCH_ARCHIVE_BYTES = 12 * 1024 * 1024;
+/** ADR 0052 (2026-11-06): the operator's focus note of a named continuation, 8 KiB at most. */
+const MAX_FOCUS_BYTES = 8 * 1024;
 const kindSchema = z.enum([
   "findings",
   "coverage",
   "diagnostic",
   "research",
   "verification",
+  "focus",
 ]);
+type AttachmentKind = z.infer<typeof kindSchema>;
+
+function attachmentLimit(kind: AttachmentKind): number {
+  switch (kind) {
+    case "diagnostic":
+      return MAX_DIAGNOSTIC_BYTES;
+    case "research":
+      return MAX_RESEARCH_ARCHIVE_BYTES;
+    case "focus":
+      return MAX_FOCUS_BYTES;
+    default:
+      return MAX_ATTACHMENT_BYTES;
+  }
+}
+
+/** The one file under `content/`: JSON for every kind but the operator's Markdown note. */
+function attachmentFileName(kind: AttachmentKind): string {
+  return kind === "focus" ? "focus.md" : `${kind}.json`;
+}
 const digestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 export const providerAttachmentRefSchema = z.strictObject({
   kind: kindSchema,
@@ -46,21 +68,19 @@ export class ProviderAttachmentStore {
 
   async put(kindValue: unknown, bytes: Buffer): Promise<ProviderAttachmentRef> {
     const kind = kindSchema.parse(kindValue);
-    const limit =
-      kind === "diagnostic"
-        ? MAX_DIAGNOSTIC_BYTES
-        : kind === "research"
-          ? MAX_RESEARCH_ARCHIVE_BYTES
-          : MAX_ATTACHMENT_BYTES;
-    if (bytes.byteLength === 0 || bytes.byteLength > limit)
+    if (bytes.byteLength === 0 || bytes.byteLength > attachmentLimit(kind))
       throw new Error("Provider attachment size is invalid");
     const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
     const staging = await this.#store.stage();
     try {
-      await writeFile(join(staging.contentDirectory, `${kind}.json`), bytes, {
-        flag: "wx",
-        mode: 0o600,
-      });
+      await writeFile(
+        join(staging.contentDirectory, attachmentFileName(kind)),
+        bytes,
+        {
+          flag: "wx",
+          mode: 0o600,
+        },
+      );
       const result = await this.#store.commit(
         `${kind}-${digest.slice(7)}`,
         staging,
@@ -87,12 +107,8 @@ export class ProviderAttachmentStore {
     if (!parsed.success) return { status: "invalid" };
     const result = await this.#store.readFile(
       parsed.data.artifact as PrivateArtifactDescriptor,
-      `${parsed.data.kind}.json`,
-      parsed.data.kind === "diagnostic"
-        ? MAX_DIAGNOSTIC_BYTES
-        : parsed.data.kind === "research"
-          ? MAX_RESEARCH_ARCHIVE_BYTES
-          : MAX_ATTACHMENT_BYTES,
+      attachmentFileName(parsed.data.kind),
+      attachmentLimit(parsed.data.kind),
     );
     if (result.status === "missing") return { status: "missing" };
     if (result.status !== "resolved") return { status: "invalid" };
@@ -108,12 +124,8 @@ export class ProviderAttachmentStore {
     const digest = digestSchema.parse(digestValue);
     const result = await this.#store.readFile(
       `${kind}-${digest.slice(7)}`,
-      `${kind}.json`,
-      kind === "diagnostic"
-        ? MAX_DIAGNOSTIC_BYTES
-        : kind === "research"
-          ? MAX_RESEARCH_ARCHIVE_BYTES
-          : MAX_ATTACHMENT_BYTES,
+      attachmentFileName(kind),
+      attachmentLimit(kind),
     );
     if (result.status !== "resolved") return { status: "unavailable" as const };
     const actual = `sha256:${createHash("sha256").update(result.bytes).digest("hex")}`;

@@ -5,6 +5,7 @@ export {
   type CampaignHistory,
   type CampaignInputV1,
   type ContinuationConfiguration,
+  type OperatorFocus,
   type PlannedDiscoveryRun,
   type PlannedTrial,
 } from "./campaign.js";
@@ -89,6 +90,9 @@ export {
   PRIOR_RESEARCH_NAME,
   PRIOR_RESEARCH_STORES_FILE,
   CONTINUATION_SECTION_SENTENCE,
+  FOCUS_SECTION_SENTENCE,
+  MAX_OPERATOR_FOCUS_BYTES,
+  OPERATOR_FOCUS_FILE,
   capPriorResearch,
   isPriorResearchName,
   isPriorResearchPath,

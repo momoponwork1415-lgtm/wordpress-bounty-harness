@@ -30,6 +30,7 @@ import {
 } from "../../src/cli/wordpress.js";
 import {
   CONTINUATION_SECTION_SENTENCE,
+  FOCUS_SECTION_SENTENCE,
   createNativeRunReceipt,
   assignDiscoveryRuntime,
   defineAgentRuntimeProfile,
@@ -1824,6 +1825,214 @@ describe("harness CLI vertical slice", () => {
     );
     expect(refused.code).toBe(3);
     expect(refused.stderr).toContain("not continuable: not-continuable");
+  });
+
+  it("continues a named run that left no open route on the operator's focus note alone, and lists the Trials (ADR 0052, 2026-11-06)", async () => {
+    const { run, root, configPath, prompts, ledger, transportRuns } =
+      await harness({
+        config: { discovery: { lab: "attached" } },
+        researchOnCalls: [1],
+        // The continuation (call 2) is refused, so that a resume can copy its record.
+        refuseOnCalls: [2],
+        refusalSession: true,
+      });
+    expect(
+      await run(
+        "campaign",
+        "run",
+        "synthetic-plugin",
+        "--campaign",
+        "first",
+        "--config",
+        configPath,
+      ),
+    ).toMatchObject({ code: 0 });
+    const first = ledger()
+      .read({ campaignId: "first", type: "discovery-run-started" })
+      .at(0)?.event;
+    if (first?.type !== "discovery-run-started")
+      throw new Error("the first Trial starts");
+    expect(
+      ledger()
+        .read({ campaignId: "first", type: "discovery-run-finished" })
+        .at(0)?.event,
+    ).toMatchObject({ continuation: { status: "absent" } });
+    const continueArgs = (campaign: string) => [
+      "campaign",
+      "continue",
+      "--campaign",
+      campaign,
+      "--run",
+      first.runId,
+      "--config",
+      configPath,
+    ];
+    // No open route and no note: refused as before.
+    const refused = await run(...continueArgs("second"));
+    expect(refused.code).toBe(3);
+    expect(refused.stderr).toContain("no open route and no focus note");
+    expect(
+      ledger().read({ campaignId: "second", type: "continuation-scheduled" }),
+    ).toHaveLength(0);
+    // The note's shape is checked at the command line: size and encoding, never cut.
+    const oversize = join(root, "focus-oversize.md");
+    await writeFile(oversize, Buffer.alloc(8193, 0x61));
+    const tooLarge = await run(...continueArgs("second"), "--focus", oversize);
+    expect(tooLarge.code).toBe(2);
+    expect(tooLarge.stderr).toContain("--focus must be at most 8192 bytes");
+    const binary = join(root, "focus-binary.md");
+    await writeFile(binary, Buffer.from([0xff, 0xfe, 0x00]));
+    expect(
+      await run(...continueArgs("second"), "--focus", binary),
+    ).toMatchObject({ code: 2 });
+    const empty = join(root, "focus-empty.md");
+    await writeFile(empty, "");
+    expect(
+      await run(...continueArgs("second"), "--focus", empty),
+    ).toMatchObject({ code: 2 });
+    expect(
+      ledger().read({ campaignId: "second", type: "continuation-scheduled" }),
+    ).toHaveLength(0);
+    // The note: its text is never recorded, only its digest and size.
+    const focusPath = join(root, "focus.md");
+    const note = "# Start here\n\nThe operator's note, never in the ledger.\n";
+    await writeFile(focusPath, note);
+    const focusDigest = `sha256:${createHash("sha256").update(note).digest("hex")}`;
+    expect(
+      await run(...continueArgs("second"), "--focus", focusPath),
+    ).toMatchObject({ code: 0 });
+    const second = ledger()
+      .read({ campaignId: "second", type: "discovery-run-started" })
+      .at(0)?.event;
+    if (second?.type !== "discovery-run-started")
+      throw new Error("the continuation Trial starts");
+    expect(second.snapshotDigest).toBe(first.snapshotDigest);
+    expect(second.configuration.continuation).toEqual({
+      of: first.runId,
+      ordinal: 2,
+      openRouteCount: 0,
+      passedIdDigests: [],
+      focus: { digest: focusDigest, bytes: Buffer.byteLength(note) },
+    });
+    expect(second.configuration.priorResearch).toMatchObject({
+      sourceRunId: first.runId,
+      files: [
+        { name: "recon-map.md" },
+        {
+          name: "operator-focus.md",
+          digest: focusDigest,
+          bytes: Buffer.byteLength(note),
+        },
+      ],
+    });
+    expect(
+      ledger()
+        .read({ campaignId: "second", type: "continuation-scheduled" })
+        .map(({ event }) => event),
+    ).toEqual([
+      expect.objectContaining({
+        ofRunId: first.runId,
+        ordinal: 2,
+        openRouteCount: 0,
+        manual: true,
+        focusDigest,
+        focusBytes: Buffer.byteLength(note),
+      }),
+    ]);
+    const events = ledger().readAll({ campaignId: "second" });
+    expect(JSON.stringify(events)).not.toContain("Start here");
+    // The sandbox receives the note after the archive's files; the section
+    // ends with the continuation sentence and then the focus sentence.
+    expect(transportRuns[1]?.priorResearch?.map(({ path }) => path)).toEqual([
+      "prior/recon-map.md",
+      "prior/operator-focus.md",
+    ]);
+    expect(
+      Buffer.from(
+        transportRuns[1]!.priorResearch![1]!.contentBase64,
+        "base64",
+      ).toString("utf8"),
+    ).toBe(note);
+    expect(prompts[1]).toContain(
+      "\n- /workspace/research/prior/operator-focus.md (",
+    );
+    expect(prompts[1]).toContain(
+      `\n\n${CONTINUATION_SECTION_SENTENCE}\n\n${FOCUS_SECTION_SENTENCE}\n\n## Trust boundary`,
+    );
+    expect(prompts[1]).not.toContain("Start here");
+    // The stored note sits in the attachment store, content-addressed.
+    expect(
+      existsSync(
+        join(
+          root,
+          "provider",
+          `focus-${focusDigest.slice(7)}`,
+          "content",
+          "focus.md",
+        ),
+      ),
+    ).toBe(true);
+    // The operator's list: one line per Root Trial, shape and counts only.
+    // The refused continuation sealed no archive, so neither a shape nor a digest.
+    const listed = await run("campaign", "trials", "--campaign", "second");
+    expect(listed.code).toBe(0);
+    expect(listed.stdout).toBe(
+      `trial ${second.runId}  wporg:synthetic-plugin@3.3.1  campaign second  ordinal 2  of ${first.runId}  failed/provider  continuation -  groups 0  leads 0  research -`,
+    );
+    // A resumed segment copies the continuation record, note included, and
+    // rebuilds the same section from the store (digest-checked).
+    expect(
+      await run(
+        "campaign",
+        "resume",
+        "--campaign",
+        "second",
+        "--run",
+        second.runId,
+        "--config",
+        configPath,
+      ),
+    ).toMatchObject({ code: 0 });
+    const segment = ledger()
+      .read({ campaignId: "second", type: "discovery-run-started" })
+      .at(1)?.event;
+    expect(segment).toMatchObject({
+      resumesRun: second.runId,
+      configuration: {
+        continuation: second.configuration.continuation,
+        priorResearch: second.configuration.priorResearch,
+      },
+    });
+    expect(transportRuns[2]?.prompt).toContain(
+      `\n\n${CONTINUATION_SECTION_SENTENCE}\n\n${FOCUS_SECTION_SENTENCE}\n\n## Trust boundary`,
+    );
+    // The list follows the Trial's latest segment.
+    expect(
+      (await run("campaign", "trials", "--campaign", "second")).stdout,
+    ).toBe(
+      `trial ${second.runId}  wporg:synthetic-plugin@3.3.1  campaign second  ordinal 2  of ${first.runId}  completed  continuation -  groups 0  leads 0  research -`,
+    );
+    const firstListed = await run("campaign", "trials", "--campaign", "first");
+    const firstFinished = ledger()
+      .read({ campaignId: "first", type: "discovery-run-finished" })
+      .at(0)?.event;
+    if (firstFinished?.type !== "discovery-run-finished")
+      throw new Error("the first Trial finishes");
+    expect(firstListed.stdout).toBe(
+      `trial ${first.runId}  wporg:synthetic-plugin@3.3.1  campaign first  ordinal 1  of -  completed  continuation absent open 0  groups 2  leads 0  research ${firstFinished.researchArtifact?.digest}`,
+    );
+    expect(firstListed.stdout).not.toContain("Start here");
+    expect(
+      await run("campaign", "trials", "--campaign", "nothing-here"),
+    ).toMatchObject({ code: 0, stdout: "no trials recorded" });
+    expect(await run("campaign", "trials", "--prefix", "fir")).toMatchObject({
+      code: 0,
+      stdout: "no trials recorded",
+    });
+    expect(await run("campaign", "trials")).toMatchObject({ code: 2 });
+    expect(
+      await run("campaign", "trials", "--campaign", "first", "--prefix", "x"),
+    ).toMatchObject({ code: 2 });
   });
 
   it("imports another state's sealed research once and passes it to this state's first Trial of a later version (ADR 0049 D)", async () => {

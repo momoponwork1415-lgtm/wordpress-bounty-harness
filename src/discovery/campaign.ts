@@ -107,10 +107,18 @@ export type ContinuationConfiguration = {
   readonly of: string;
   /** This Trial's place in the chain on its Snapshot (2 or later). */
   readonly ordinal: number;
-  /** How many open routes that run declared. */
+  /** How many open routes that run declared (0 on a named continuation with a focus note only). */
   readonly openRouteCount: number;
   /** The id digests that run recorded, which this Trial received. */
   readonly passedIdDigests: string[];
+  /** ADR 0052 (2026-11-06): the operator's focus note a named continuation received, by digest and size. */
+  readonly focus?: OperatorFocus | undefined;
+};
+
+/** ADR 0052 (2026-11-06): the operator's note in the attachment store; the Harness reads its shape only. */
+export type OperatorFocus = {
+  readonly digest: string;
+  readonly bytes: number;
 };
 
 export type PlannedTrial = {
