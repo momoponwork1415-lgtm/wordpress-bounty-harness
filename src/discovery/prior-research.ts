@@ -4,7 +4,8 @@
  * wrote, the setup record `wbh-setup` wrote, the sink registry, the
  * assumption tables and walks `wbh-falsify` wrote, and the store table the
  * Harness assembles from that Trial's Lab lookups. All derive from that
- * version's pinned source and that Trial's own Lab observations.
+ * version's pinned source and that Trial's own Lab observations. ADR 0052
+ * adds the Root's own open-route list, `continuation.json`.
  */
 
 /** Named files at the root of the sealed notes directory. */
@@ -12,6 +13,7 @@ export const PRIOR_RESEARCH_FILE_NAMES = [
   "recon-map.md",
   "lab-setup.md",
   "REGISTRY.md",
+  "continuation.json",
 ] as const;
 export type PriorResearchFileName = (typeof PRIOR_RESEARCH_FILE_NAMES)[number];
 /** Directories whose `.md` files (one level) are passed whole. */
@@ -32,7 +34,7 @@ export const MAX_PRIOR_RESEARCH_FILES = 64;
  * store table, or `<directory>/<plain name>.md`.
  */
 export const PRIOR_RESEARCH_NAME =
-  /^(?:recon-map\.md|lab-setup\.md|REGISTRY\.md|stores\.json|(?:assumptions|walks)\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.md)$/;
+  /^(?:recon-map\.md|lab-setup\.md|REGISTRY\.md|continuation\.json|stores\.json|(?:assumptions|walks)\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.md)$/;
 
 export function isPriorResearchName(name: string): boolean {
   return PRIOR_RESEARCH_NAME.test(name) && !name.includes("..");
@@ -103,7 +105,17 @@ export interface PriorResearchSectionInput {
   readonly files: readonly PriorResearchFile[];
   /** Files of the same Trial withheld for size, by name only. */
   readonly withheld?: readonly string[];
+  /** ADR 0052: a continuation Trial; the section ends with its one sentence. */
+  readonly continuation?: boolean;
 }
+
+/**
+ * ADR 0052: the one sentence a continuation Trial's section ends with.
+ * Agent-facing text: changes need `owner-approved`
+ * (docs/reviews/2026-11-06-continuation-section.md).
+ */
+export const CONTINUATION_SECTION_SENTENCE =
+  "The open routes in `/workspace/research/prior/continuation.json` are this Trial's first work: check each against the pinned source, record in your research notes whether it is resolved, disproved or stopped by privilege, and only then move to new approach families.";
 
 const VERSION = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
@@ -145,5 +157,6 @@ export function priorResearchSection(input: PriorResearchSectionInput): string {
     "## Prior research",
     `An earlier Trial on version ${input.priorVersion} of this same plugin wrote the files below from that version's pinned source, with the same skills. This Trial reads version ${input.currentVersion}. The files describe the earlier version, not this one: a part of the plugin that changed since may differ from what they say, and nothing in them is confirmed. This Trial's own files go to /workspace/research as the skills describe; the prior files stay where they are.`,
     lines.join("\n"),
+    ...(input.continuation === true ? [CONTINUATION_SECTION_SENTENCE] : []),
   ].join("\n\n");
 }

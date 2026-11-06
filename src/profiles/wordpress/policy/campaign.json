@@ -5,7 +5,8 @@
     "mode": "wide",
     "maxChildren": 4,
     "minimumActiveMinutes": 0,
-    "priorResearch": "same-target"
+    "priorResearch": "same-target",
+    "continuation": "open-routes"
   },
   "selectionPolicyPath": "src/profiles/wordpress/policy/selection.json",
   "promptId": "wp2shell-bounty-v26-wide",

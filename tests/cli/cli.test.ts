@@ -29,6 +29,7 @@ import {
   type WordPressCampaignBoundaries,
 } from "../../src/cli/wordpress.js";
 import {
+  CONTINUATION_SECTION_SENTENCE,
   createNativeRunReceipt,
   assignDiscoveryRuntime,
   defineAgentRuntimeProfile,
@@ -168,6 +169,8 @@ async function harness(
     readonly leadsOnCalls?: Readonly<Record<number, readonly unknown[]>>;
     /** Provider calls (1-based) whose Root seals a notes archive holding a map (ADR 0048). */
     readonly researchOnCalls?: readonly number[];
+    /** Provider calls (1-based) whose sealed notes also hold a valid continuation.json with one open route (ADR 0052). */
+    readonly continuationOnCalls?: readonly number[];
     /** Another harness's attachment store, shared as the work directory is across states (ADR 0049 D). */
     readonly attachmentsDirectory?: string;
     readonly zeroFindings?: boolean;
@@ -892,6 +895,29 @@ async function harness(
                           `# Map of call ${call}\n`,
                         ).toString("base64"),
                       },
+                      ...(options.continuationOnCalls?.includes(call) === true
+                        ? [
+                            {
+                              path: "continuation.json",
+                              type: "file",
+                              contentBase64: Buffer.from(
+                                JSON.stringify({
+                                  schemaVersion: 1,
+                                  openRoutes: [
+                                    {
+                                      id: `route-of-call-${call}`,
+                                      sourceFile: "synthetic.php",
+                                      sourceLine: 7,
+                                      observation: "route text never recorded",
+                                      unresolved: "u",
+                                      nextCheck: "n",
+                                    },
+                                  ],
+                                }),
+                              ).toString("base64"),
+                            },
+                          ]
+                        : []),
                     ],
                   }),
                 ),
@@ -1697,6 +1723,107 @@ describe("harness CLI vertical slice", () => {
     expect(later.configuration.inputDigest).toBe(
       `sha256:${createHash("sha256").update(prompts[1]!).digest("hex")}`,
     );
+  });
+
+  it("continues a named run on the same Snapshot with its notes and the one sentence, and refuses a run without open routes (ADR 0052)", async () => {
+    const { run, configPath, prompts, ledger, transportRuns } = await harness({
+      config: { discovery: { lab: "attached" } },
+      researchOnCalls: [1, 2],
+      continuationOnCalls: [1],
+    });
+    expect(
+      await run(
+        "campaign",
+        "run",
+        "synthetic-plugin",
+        "--campaign",
+        "first",
+        "--config",
+        configPath,
+      ),
+    ).toMatchObject({ code: 0 });
+    const first = ledger()
+      .read({ campaignId: "first", type: "discovery-run-started" })
+      .at(0)?.event;
+    if (first?.type !== "discovery-run-started")
+      throw new Error("the first Trial starts");
+    const idDigest = `sha256:${createHash("sha256").update("route-of-call-1").digest("hex")}`;
+    const finished = ledger()
+      .read({ campaignId: "first", type: "discovery-run-finished" })
+      .at(0)?.event;
+    expect(finished).toMatchObject({
+      continuation: {
+        status: "valid",
+        openRouteCount: 1,
+        openRouteIdDigests: [idDigest],
+      },
+    });
+    expect(JSON.stringify(finished)).not.toContain("route-of-call-1");
+    expect(
+      await run(
+        "campaign",
+        "continue",
+        "--campaign",
+        "second",
+        "--run",
+        first.runId,
+        "--config",
+        configPath,
+      ),
+    ).toMatchObject({ code: 0 });
+    const second = ledger()
+      .read({ campaignId: "second", type: "discovery-run-started" })
+      .at(0)?.event;
+    if (second?.type !== "discovery-run-started")
+      throw new Error("the continuation Trial starts");
+    expect(second.snapshotDigest).toBe(first.snapshotDigest);
+    expect(second.configuration.continuation).toEqual({
+      of: first.runId,
+      ordinal: 2,
+      openRouteCount: 1,
+      passedIdDigests: [idDigest],
+    });
+    expect(second.configuration.priorResearch).toMatchObject({
+      sourceRunId: first.runId,
+      sourceSnapshotDigest: first.snapshotDigest,
+    });
+    expect(
+      ledger()
+        .read({ campaignId: "second", type: "continuation-scheduled" })
+        .map(({ event }) => event),
+    ).toEqual([
+      expect.objectContaining({
+        ofRunId: first.runId,
+        ofCampaignId: "first",
+        ordinal: 2,
+        openRouteCount: 1,
+        manual: true,
+      }),
+    ]);
+    expect(prompts[1]).toContain(
+      "\n- /workspace/research/prior/continuation.json (",
+    );
+    expect(prompts[1]).toContain(
+      `\n\n${CONTINUATION_SECTION_SENTENCE}\n\n## Trust boundary`,
+    );
+    expect(prompts[1]).not.toContain("route text never recorded");
+    expect(transportRuns[1]?.priorResearch?.map(({ path }) => path)).toEqual([
+      "prior/recon-map.md",
+      "prior/continuation.json",
+    ]);
+    // The continuation sealed no continuation.json: nothing to continue.
+    const refused = await run(
+      "campaign",
+      "continue",
+      "--campaign",
+      "third",
+      "--run",
+      second.runId,
+      "--config",
+      configPath,
+    );
+    expect(refused.code).toBe(3);
+    expect(refused.stderr).toContain("not continuable: not-continuable");
   });
 
   it("imports another state's sealed research once and passes it to this state's first Trial of a later version (ADR 0049 D)", async () => {
@@ -2828,6 +2955,7 @@ describe("harness CLI vertical slice", () => {
       maxChildren: 4,
       minimumActiveMinutes: 0,
       priorResearch: "none",
+      continuation: "none",
     });
     expect(
       wordpressCampaignConfigSchema.safeParse({

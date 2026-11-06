@@ -7,8 +7,12 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { CampaignSummary } from "../../src/cli/pipeline.js";
 import {
+  continuationRefusalEvent,
   continuousPaths,
   createContinuousRunner,
+  pendingContinuations,
+  type ContinuationRefusal,
+  type ContinuationTarget,
   type ContinuousDeps,
   type ContinuousStopReason,
 } from "../../src/cli/continuous.js";
@@ -124,6 +128,7 @@ async function setup(steps: Step[], overrides: Partial<ContinuousDeps> = {}) {
   const states = () => log.map((line) => line.split(" ")[1] ?? "");
   return {
     root,
+    ledger,
     runner,
     calls,
     log,
@@ -1026,5 +1031,428 @@ describe("runners of two campaign prefixes in one state (#604)", () => {
     expect(waits).toBe(2);
     expect(selects).toBeGreaterThan(0);
     expect(existsSync(continuousPaths(t.root).selectLock)).toBe(false);
+  });
+});
+
+describe("continuation Trials on the same Snapshot (ADR 0052)", () => {
+  const digest = (letter: string) => `sha256:${letter.repeat(64)}`;
+  const idDigest = (id: string) => digest(id);
+  type Batch = Awaited<ReturnType<typeof setup>>;
+  /** One explore Trial on `snapshot` in `campaignId` and its finish, by ledger events only. */
+  const explored = async (
+    t: Batch,
+    campaignId: string,
+    snapshot: string,
+    options: {
+      readonly open?: readonly string[] | "invalid" | "absent";
+      readonly finished?: object | null;
+      readonly received?: {
+        readonly of: string;
+        readonly ordinal: number;
+        readonly passedIdDigests: readonly string[];
+      };
+      readonly scheduledFrom?: {
+        readonly campaignId: string;
+        readonly runId: string;
+      };
+    } = {},
+  ) => {
+    const runId = `run-${campaignId}-${snapshot.slice(7, 9)}`;
+    if (options.scheduledFrom !== undefined)
+      await t.append(campaignId, {
+        snapshotDigest: snapshot,
+        type: "continuation-scheduled",
+        ofRunId: options.scheduledFrom.runId,
+        ofCampaignId: options.scheduledFrom.campaignId,
+        ordinal: options.received?.ordinal ?? 2,
+        openRouteCount: 1,
+      });
+    await t.append(campaignId, {
+      snapshotDigest: snapshot,
+      type: "target-selected",
+      selectionId: `wporg:${snapshot.slice(7, 9)}@1.0.0`,
+    });
+    await t.append(campaignId, {
+      snapshotDigest: snapshot,
+      type: "discovery-run-started",
+      runId,
+      trialId: runId,
+      runKind: "explore",
+      history: { mode: "none" },
+      configuration: {
+        promptVariant: "wp2shell-bounty-v26-wide",
+        ...(options.received === undefined
+          ? {}
+          : {
+              continuation: {
+                of: options.received.of,
+                ordinal: options.received.ordinal,
+                openRouteCount: options.received.passedIdDigests.length,
+                passedIdDigests: options.received.passedIdDigests,
+              },
+            }),
+      },
+    });
+    const open = options.open ?? ["a"];
+    if (options.finished !== null)
+      await t.append(campaignId, {
+        snapshotDigest: snapshot,
+        type: "discovery-run-finished",
+        runId,
+        outcome: "completed",
+        costUsd: "unavailable",
+        wallTimeMs: 1,
+        observed: {
+          toolCalls: 3,
+          filesRead: 3,
+          uniqueFilesRead: 3,
+          labRequests: 0,
+          dbQueries: 0,
+        },
+        continuation:
+          open === "invalid" || open === "absent"
+            ? { status: open }
+            : {
+                status: "valid",
+                openRouteCount: open.length,
+                openRouteIdDigests: open.map(idDigest),
+              },
+        ...options.finished,
+      });
+    return runId;
+  };
+
+  it("finds, from the ledger alone, the latest batch's Trials that left valid open routes", async () => {
+    const t = await setup([]);
+    await explored(t, "prod-20261019-1", digest("1"));
+    await explored(t, "bench-20261020-1", digest("2"));
+    const campaignId = "prod-20261020-1";
+    const ended = await explored(t, campaignId, digest("3"), {
+      open: ["a", "b"],
+    });
+    await explored(t, campaignId, digest("4"), { open: [] });
+    await explored(t, campaignId, digest("5"), { open: "invalid" });
+    await explored(t, campaignId, digest("6"), { open: "absent" });
+    await explored(t, campaignId, digest("7"), {
+      finished: { outcome: "provider-limited", reason: "provider" },
+    });
+    await explored(t, campaignId, digest("8"), {
+      finished: { outcome: "failed", reason: "interrupted" },
+    });
+    await explored(t, campaignId, digest("9"), { finished: null });
+    // A sealed report that ended on the wall still counts as ended.
+    const walled = await explored(t, campaignId, digest("b"), {
+      finished: { outcome: "failed", reason: "wall" },
+    });
+    // Already scheduled for that run: not scheduled twice.
+    const once = await explored(t, campaignId, digest("c"));
+    await t.append("prod-20261020-9", {
+      snapshotDigest: digest("c"),
+      type: "continuation-scheduled",
+      ofRunId: once,
+      ofCampaignId: campaignId,
+      ordinal: 2,
+      openRouteCount: 1,
+    });
+    const pending = pendingContinuations(t.deps.ledger, "prod");
+    expect(pending.refusals).toEqual([]);
+    expect(pending.targets.map((target) => target.snapshotDigest)).toEqual([
+      digest("3"),
+      digest("b"),
+    ]);
+    expect(pending.targets[0]).toEqual({
+      snapshotDigest: digest("3"),
+      selectionId: "wporg:33@1.0.0",
+      ofRunId: ended,
+      ofCampaignId: campaignId,
+      ordinal: 2,
+      openRouteCount: 2,
+      passedIdDigests: [idDigest("a"), idDigest("b")],
+    });
+    expect(pending.targets[1]).toMatchObject({ ofRunId: walled });
+    expect(
+      pendingContinuations(t.deps.ledger, "bench").targets.map(
+        (target) => target.snapshotDigest,
+      ),
+    ).toEqual([digest("2")]);
+  });
+
+  it("follows the chain to a third Trial and stops at three counted Trials", async () => {
+    const t = await setup([]);
+    const first = await explored(t, "prod-20261020-1", digest("3"), {
+      open: ["a", "b"],
+    });
+    const second = await explored(t, "prod-20261020-2", digest("3"), {
+      open: ["a"],
+      received: {
+        of: first,
+        ordinal: 2,
+        passedIdDigests: [idDigest("a"), idDigest("b")],
+      },
+      scheduledFrom: { campaignId: "prod-20261020-1", runId: first },
+    });
+    expect(pendingContinuations(t.deps.ledger, "prod").targets).toEqual([
+      expect.objectContaining({
+        ofRunId: second,
+        ofCampaignId: "prod-20261020-2",
+        ordinal: 3,
+        passedIdDigests: [idDigest("a")],
+      }),
+    ]);
+    await explored(t, "prod-20261020-3", digest("3"), {
+      open: ["c"],
+      received: { of: second, ordinal: 3, passedIdDigests: [idDigest("a")] },
+      scheduledFrom: { campaignId: "prod-20261020-2", runId: second },
+    });
+    expect(pendingContinuations(t.deps.ledger, "prod")).toEqual({
+      targets: [],
+      refusals: [],
+    });
+  });
+
+  it("refuses a later Trial whose received ids all stay open, by digest sets only", async () => {
+    const t = await setup([]);
+    const first = await explored(t, "prod-20261020-1", digest("3"), {
+      open: ["a"],
+    });
+    const second = await explored(t, "prod-20261020-2", digest("3"), {
+      open: ["a", "c"],
+      received: { of: first, ordinal: 2, passedIdDigests: [idDigest("a")] },
+      scheduledFrom: { campaignId: "prod-20261020-1", runId: first },
+    });
+    const pending = pendingContinuations(t.deps.ledger, "prod");
+    expect(pending.targets).toEqual([]);
+    expect(pending.refusals).toEqual([
+      {
+        snapshotDigest: digest("3"),
+        selectionId: "wporg:33@1.0.0",
+        ofRunId: second,
+        ofCampaignId: "prod-20261020-2",
+        reasonDetail: "no-progress",
+      },
+    ]);
+    // Recorded once, it is not offered again.
+    await t.ledger.append(
+      continuationRefusalEvent(pending.refusals[0]!, "2026-10-20T01:00:00Z"),
+    );
+    expect(pendingContinuations(t.deps.ledger, "prod")).toEqual({
+      targets: [],
+      refusals: [],
+    });
+    const skipped = t.deps.ledger
+      .readAll({ type: "target-skipped" })
+      .map(({ event }) => event);
+    expect(skipped).toEqual([
+      expect.objectContaining({
+        identity: expect.stringMatching(/^continuation-refused-[a-f0-9]{32}$/),
+        campaignId: "prod-20261020-2",
+        stage: "discovery",
+        reason: "continuation-refused",
+        reasonDetail: "no-progress",
+      }),
+    ]);
+  });
+
+  /** A runner whose batch leaves open routes and whose continuation step records what the profile would. */
+  const continuationRunner = async (
+    policy: "open-routes" | "none" | undefined,
+    options: { readonly quiet?: boolean } = {},
+  ) => {
+    let selections = 0;
+    const received: (readonly ContinuationTarget[] | undefined)[] = [];
+    const refused: ContinuationRefusal[] = [];
+    const steps: Step[] = [];
+    const ledgerOf: { current?: Batch["ledger"] } = {};
+    const t = await setup(
+      steps,
+      policy === undefined
+        ? {}
+        : {
+            continuation: {
+              policy: async () => policy,
+              refuse: async (refusal) => {
+                refused.push(refusal);
+                await ledgerOf.current!.append(
+                  continuationRefusalEvent(refusal, "2026-10-20T01:00:00Z"),
+                );
+              },
+            },
+          },
+    );
+    ledgerOf.current = t.ledger;
+    t.deps.runCampaign = async (input) => {
+      t.calls.push(input);
+      received.push(input.continuation?.targets);
+      const step = steps.shift();
+      if (step === undefined) {
+        await writeFile(continuousPaths(t.root).stop, "");
+        return {
+          campaignId: input.campaignId,
+          targets: [],
+          skipped: [],
+          stopped: "operator",
+        };
+      }
+      if (input.continuation === undefined)
+        await explored(
+          t,
+          input.campaignId,
+          digest("3"),
+          // Quiet: after the first, batches complete nothing and leave nothing open.
+          options.quiet === true && selections++ > 0
+            ? { open: [], finished: { outcome: "failed", reason: "wall" } }
+            : { open: ["a"] },
+        );
+      else if (options.quiet === true)
+        // Scheduled, then refused before any Lab: no Trial completes.
+        for (const target of input.continuation.targets)
+          await t.append(input.campaignId, {
+            snapshotDigest: target.snapshotDigest,
+            type: "continuation-scheduled",
+            ofRunId: target.ofRunId,
+            ofCampaignId: target.ofCampaignId,
+            ordinal: target.ordinal,
+            openRouteCount: target.openRouteCount,
+          });
+      else
+        for (const target of input.continuation.targets)
+          // The continuation left the same route open: no progress.
+          await explored(t, input.campaignId, target.snapshotDigest, {
+            open: ["a"],
+            received: {
+              of: target.ofRunId,
+              ordinal: target.ordinal,
+              passedIdDigests: target.passedIdDigests,
+            },
+            scheduledFrom: {
+              campaignId: target.ofCampaignId,
+              runId: target.ofRunId,
+            },
+          });
+      const result = await step(input);
+      return {
+        campaignId: input.campaignId,
+        targets: [],
+        skipped: [],
+        ...result,
+      } as CampaignSummary;
+    };
+    return { t, steps, received, refused };
+  };
+
+  it("runs one continuation campaign before selecting again, then refuses no progress and selects", async () => {
+    let selects = 0;
+    const { t, steps, received, refused } =
+      await continuationRunner("open-routes");
+    t.deps.select = async () => (
+      selects++,
+      { batchId: `selection-${selects}`, targets: ["a"] }
+    );
+    steps.push(
+      async () => ({}),
+      async () => ({}),
+      async () => ({}),
+    );
+    expect(await t.runner.run()).toBe("operator");
+    expect(t.calls.map((call) => call.campaignId)).toEqual([
+      "prod-20261020-1",
+      "prod-20261020-2",
+      "prod-20261020-3",
+      "prod-20261020-4",
+    ]);
+    expect(received[0]).toBeUndefined();
+    expect(received[1]).toEqual([
+      {
+        snapshotDigest: digest("3"),
+        selectionId: "wporg:33@1.0.0",
+        ofRunId: "run-prod-20261020-1-33",
+        ofCampaignId: "prod-20261020-1",
+        ordinal: 2,
+        openRouteCount: 1,
+        passedIdDigests: [idDigest("a")],
+      },
+    ]);
+    // The second Trial left its received route open: refused once, then a
+    // new selection runs; the next batch is continued again as its own chain.
+    expect(refused).toEqual([
+      expect.objectContaining({
+        ofRunId: "run-prod-20261020-2-33",
+        reasonDetail: "no-progress",
+      }),
+    ]);
+    expect(received[2]).toBeUndefined();
+    expect(received[3]).toMatchObject([{ ofCampaignId: "prod-20261020-3" }]);
+    expect(selects).toBe(2);
+    expect(t.log.join("\n")).toContain(
+      "continuation campaign=prod-20261020-2 of=prod-20261020-1 targets=1",
+    );
+    expect(t.log.join("\n")).toContain(
+      "continuation refused campaign=prod-20261020-2",
+    );
+    // A continuation campaign is not a batch for the stop rules.
+    expect(t.runner.memo().consecutiveNoProgressBatches).toBe(0);
+    // The operator stopped inside the last continuation campaign: its memo
+    // keeps the targets for the restart.
+    expect(t.runner.memo().continuation).toEqual(received[3]);
+  });
+
+  it.each([["none"], [undefined]] as const)(
+    "schedules nothing when the policy is %s",
+    async (policy) => {
+      const { t, steps, received } = await continuationRunner(policy);
+      steps.push(
+        async () => ({}),
+        async () => ({}),
+      );
+      await t.runner.run();
+      expect(received).toEqual([undefined, undefined, undefined]);
+    },
+  );
+
+  it("does not count a continuation campaign that completed nothing toward no-progress", async () => {
+    const { t, steps, received } = await continuationRunner("open-routes", {
+      quiet: true,
+    });
+    // A batch that completes, a continuation that completes nothing, then
+    // one stalled batch: counting the continuation would hold at two.
+    steps.push(
+      async () => ({}),
+      async () => ({}),
+      async () => ({}),
+    );
+    await t.runner.run();
+    expect(received.map((targets) => targets?.length)).toEqual([
+      undefined,
+      1,
+      undefined,
+      undefined,
+    ]);
+    expect(t.states()).not.toContain("holding-no-progress");
+    expect(t.runner.memo().consecutiveNoProgressBatches).toBe(1);
+  });
+
+  it("resumes a memoised continuation campaign with its targets after a restart", async () => {
+    const { t, steps, received } = await continuationRunner("open-routes");
+    const target: ContinuationTarget = {
+      snapshotDigest: digest("3"),
+      selectionId: "wporg:33@1.0.0",
+      ofRunId: "run-prod-20261019-9-33",
+      ofCampaignId: "prod-20261019-9",
+      ordinal: 2,
+      openRouteCount: 1,
+      passedIdDigests: [idDigest("a")],
+    };
+    await writeFile(
+      continuousPaths(t.root).memo,
+      JSON.stringify({
+        campaignId: "prod-20261020-7",
+        target: null,
+        continuation: [target],
+      }),
+    );
+    steps.push(async () => ({}));
+    await t.runner.run();
+    expect(t.calls[0]?.campaignId).toBe("prod-20261020-7");
+    expect(received[0]).toEqual([target]);
   });
 });

@@ -96,7 +96,21 @@ export type PlannedDiscoveryRun = {
     };
     readonly model?: string;
     readonly effort?: string;
+    /** ADR 0052: set on a continuation Trial on the same Snapshot. */
+    readonly continuation?: ContinuationConfiguration;
   };
+};
+
+/** ADR 0052: what `discovery-run-started.configuration.continuation` records. */
+export type ContinuationConfiguration = {
+  /** The Root run whose `continuation.json` this Trial received. */
+  readonly of: string;
+  /** This Trial's place in the chain on its Snapshot (2 or later). */
+  readonly ordinal: number;
+  /** How many open routes that run declared. */
+  readonly openRouteCount: number;
+  /** The id digests that run recorded, which this Trial received. */
+  readonly passedIdDigests: string[];
 };
 
 export type PlannedTrial = {

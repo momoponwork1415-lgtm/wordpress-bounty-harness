@@ -172,6 +172,10 @@ function configurationOf(
       "model",
       "effort",
       "skills",
+      // ADR 0052: a segment of a continuation Trial keeps its record and the
+      // prior section it was built from, so a later resume rebuilds the same.
+      "priorResearch",
+      "continuation",
     ]),
   };
 }

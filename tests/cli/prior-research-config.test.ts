@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,10 +12,17 @@ import {
   resolveWordPressPriorResearch,
 } from "../../src/cli/wordpress-prior-research.js";
 import {
+  namedContinuationTarget,
+  resolveWordPressContinuation,
+} from "../../src/cli/wordpress-continuation.js";
+import {
   importWordPressResearch,
   researchImportIdentity,
 } from "../../src/cli/wordpress-research-import.js";
-import { ProviderAttachmentStore } from "../../src/discovery/index.js";
+import {
+  CONTINUATION_SECTION_SENTENCE,
+  ProviderAttachmentStore,
+} from "../../src/discovery/index.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
 import { Ledger, type LedgerEventInput } from "../../src/ledger/index.js";
 
@@ -899,5 +906,368 @@ describe("research import (ADR 0049 D)", () => {
     expect(later.status === "passed" && later.configuration.sourceRunId).toBe(
       "prod-run-later",
     );
+  });
+});
+
+describe("continuation Trials receive the continued run's notes (ADR 0052)", () => {
+  const openRoutes = JSON.stringify({
+    schemaVersion: 1,
+    openRoutes: [
+      {
+        id: "r1",
+        sourceFile: "a.php",
+        sourceLine: 3,
+        observation: "o",
+        unresolved: "u",
+        nextCheck: "n",
+      },
+    ],
+  });
+  const target = (ofRunId: string, ofCampaignId: string) => ({
+    snapshotDigest: query.snapshotDigest,
+    selectionId: `${query.targetId}@3.4.0`,
+    ofRunId,
+    ofCampaignId,
+    ordinal: 2,
+    openRouteCount: 1,
+    passedIdDigests: [sha("e")],
+  });
+  const frozen = async (
+    f: Awaited<ReturnType<typeof fixture>>,
+    campaignId: string,
+  ) => {
+    const appended = await f.ledger.append({
+      schemaVersion: 1,
+      identity: `${campaignId}-frozen`,
+      campaignId,
+      snapshotDigest: query.snapshotDigest,
+      occurredAt: "2026-10-20T00:00:00.000Z",
+      type: "snapshot-frozen",
+      sourceDigest: sha("f"),
+      dependencyDigests: [],
+    });
+    if (appended.status !== "appended") throw new Error(appended.status);
+  };
+
+  it("parses discovery.continuation, defaulting to none, and the repository policy names open-routes", async () => {
+    expect(
+      wordpressCampaignConfigSchema.parse({
+        ...base,
+        discovery: { lab: "attached" },
+      }).discovery.continuation,
+    ).toBe("none");
+    expect(
+      wordpressCampaignConfigSchema.parse({
+        ...base,
+        discovery: { lab: "attached", continuation: "open-routes" },
+      }).discovery.continuation,
+    ).toBe("open-routes");
+    expect(
+      wordpressCampaignConfigSchema.safeParse({
+        ...base,
+        discovery: { lab: "attached", continuation: "leads" },
+      }).success,
+    ).toBe(false);
+    const policy = JSON.parse(
+      await readFile(
+        new URL(
+          "../../src/profiles/wordpress/policy/campaign.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ) as { discovery: { continuation: string } };
+    expect(policy.discovery.continuation).toBe("open-routes");
+  });
+
+  it("passes the named run on the same Snapshot, continuation.json included, with the one sentence; the resume rebuilds it", async () => {
+    const f = await fixture();
+    // A later Trial on another Snapshot would win for same-target; it is not read.
+    await f.trial({
+      campaignId: "c1",
+      snapshotDigest: query.snapshotDigest,
+      targetId: query.targetId,
+      version: "3.4.0",
+      runId: "run-first",
+      archive: { "recon-map.md": "# Map\n", "continuation.json": openRoutes },
+    });
+    await f.trial({
+      campaignId: "c2",
+      snapshotDigest: sha("c"),
+      targetId: query.targetId,
+      version: "3.3.1",
+      runId: "run-other-version",
+      archive: { "recon-map.md": "# Other version\n" },
+    });
+    const resolved = await resolveWordPressPriorResearch(f, f.attachments, {
+      ...query,
+      continuationOf: "run-first",
+    });
+    expect(resolved.status).toBe("passed");
+    if (resolved.status !== "passed") return;
+    expect(resolved.configuration).toMatchObject({
+      sourceRunId: "run-first",
+      sourceSnapshotDigest: query.snapshotDigest,
+    });
+    expect(resolved.files.map(({ path }) => path)).toEqual([
+      "prior/recon-map.md",
+      "prior/continuation.json",
+    ]);
+    expect(resolved.section).toContain(
+      `- /workspace/research/prior/continuation.json (${openRoutes.length} bytes).`,
+    );
+    expect(resolved.section.endsWith(CONTINUATION_SECTION_SENTENCE)).toBe(true);
+    const rebuilt = await rebuildWordPressPriorResearch(
+      f,
+      f.attachments,
+      resolved.configuration,
+      "3.4.0",
+      true,
+    );
+    expect(rebuilt).toBe(resolved.section);
+    expect(
+      `sha256:${createHash("sha256").update(rebuilt!).digest("hex")}`,
+    ).toBe(resolved.configuration.sectionDigest);
+    // Without the continuation record the sentence is not there.
+    expect(
+      await rebuildWordPressPriorResearch(
+        f,
+        f.attachments,
+        resolved.configuration,
+        "3.4.0",
+      ),
+    ).not.toContain(CONTINUATION_SECTION_SENTENCE);
+    // An unknown run passes nothing.
+    expect(
+      (
+        await resolveWordPressPriorResearch(f, f.attachments, {
+          ...query,
+          continuationOf: "run-missing",
+        })
+      ).status,
+    ).toBe("none");
+  });
+
+  it("rebuilds a same-target section recorded before continuation.json joined the set without it", async () => {
+    const f = await fixture();
+    await f.trial({
+      campaignId: "c1",
+      snapshotDigest: sha("a"),
+      targetId: query.targetId,
+      version: "3.3.0",
+      runId: "run-old",
+      archive: { "recon-map.md": "# Map\n", "continuation.json": openRoutes },
+    });
+    const resolved = await resolveWordPressPriorResearch(
+      f,
+      f.attachments,
+      query,
+    );
+    if (resolved.status !== "passed") throw new Error("not passed");
+    expect(resolved.section).not.toContain(CONTINUATION_SECTION_SENTENCE);
+    const recordedBefore = {
+      ...resolved.configuration,
+      files: resolved.configuration.files.filter(
+        ({ name }) => name !== "continuation.json",
+      ),
+    };
+    const rebuilt = await rebuildWordPressPriorResearch(
+      f,
+      f.attachments,
+      recordedBefore,
+      "3.4.0",
+    );
+    expect(rebuilt).not.toContain("continuation.json");
+    expect(rebuilt).toContain("prior/recon-map.md");
+  });
+
+  it("schedules each Snapshot once before resolving, and refuses a run without a passable continuation.json", async () => {
+    const f = await fixture();
+    await f.trial({
+      campaignId: "c1",
+      snapshotDigest: query.snapshotDigest,
+      targetId: query.targetId,
+      version: "3.4.0",
+      runId: "run-first",
+      archive: { "recon-map.md": "# Map\n", "continuation.json": openRoutes },
+    });
+    await frozen(f, "c1");
+    const log: string[] = [];
+    const state = { ...f, newId: () => `id-${log.length}-${Math.random()}` };
+    const continuation = {
+      targets: [target("run-first", "c1")],
+      log: (line: string) => log.push(line),
+    };
+    const [resolved] = await resolveWordPressContinuation(
+      state,
+      f.attachments,
+      "c9",
+      continuation,
+    );
+    expect(resolved).toMatchObject({
+      snapshotDigest: query.snapshotDigest,
+      target: { targetId: query.targetId, version: "3.4.0" },
+      configuration: {
+        of: "run-first",
+        ordinal: 2,
+        openRouteCount: 1,
+        passedIdDigests: [sha("e")],
+      },
+      priorResearch: { status: "passed" },
+    });
+    await resolveWordPressContinuation(
+      state,
+      f.attachments,
+      "c9",
+      continuation,
+    );
+    const scheduled = f.ledger
+      .readAll({ type: "continuation-scheduled" })
+      .map(({ event }) => event);
+    expect(scheduled).toEqual([
+      expect.objectContaining({
+        campaignId: "c9",
+        snapshotDigest: query.snapshotDigest,
+        ofRunId: "run-first",
+        ofCampaignId: "c1",
+        ordinal: 2,
+        openRouteCount: 1,
+      }),
+    ]);
+    expect(JSON.stringify(scheduled)).not.toContain("r1");
+
+    const g = await fixture();
+    await g.trial({
+      campaignId: "c1",
+      snapshotDigest: query.snapshotDigest,
+      targetId: query.targetId,
+      version: "3.4.0",
+      runId: "run-first",
+      archive: { "recon-map.md": "# Map\n" },
+    });
+    await frozen(g, "c1");
+    const refused = await resolveWordPressContinuation(
+      { ...g, newId: () => "skip-1" },
+      g.attachments,
+      "c9",
+      continuation,
+    );
+    expect(refused).toEqual([]);
+    expect(
+      g.ledger.readAll({ type: "target-skipped" }).map(({ event }) => event),
+    ).toEqual([
+      expect.objectContaining({
+        campaignId: "c9",
+        stage: "discovery",
+        reason: "continuation-refused",
+        reasonDetail: "continuation-file-unavailable",
+      }),
+    ]);
+    expect(log.join("\n")).toContain("reason=continuation-file-unavailable");
+    // Scheduled before resolving, and not refused or scheduled twice.
+    await resolveWordPressContinuation(
+      { ...g, newId: () => "skip-2" },
+      g.attachments,
+      "c9",
+      continuation,
+    );
+    expect(g.ledger.readAll({ type: "target-skipped" })).toHaveLength(1);
+    expect(g.ledger.readAll({ type: "continuation-scheduled" })).toHaveLength(
+      1,
+    );
+  });
+
+  it("names a run for campaign continue: its Trial's latest segment must hold valid open routes", async () => {
+    const f = await fixture();
+    const common = {
+      schemaVersion: 1 as const,
+      campaignId: "c1",
+      snapshotDigest: query.snapshotDigest,
+      occurredAt: "2026-10-20T00:00:00.000Z",
+    };
+    const append = async (event: Record<string, unknown>) => {
+      const result = await f.ledger.append({
+        ...common,
+        ...event,
+      } as LedgerEventInput);
+      if (result.status !== "appended") throw new Error(result.status);
+    };
+    await append({
+      identity: "selected",
+      type: "target-selected",
+      selectionId: `${query.targetId}@3.4.0`,
+    });
+    for (const [runId, resumesRun] of [
+      ["run-head", undefined],
+      ["run-segment", "run-head"],
+    ] as const)
+      await append({
+        identity: `${runId}-started`,
+        type: "discovery-run-started",
+        runId,
+        trialId: "trial",
+        runKind: "explore",
+        history: { mode: "none" },
+        ...(resumesRun === undefined ? {} : { resumesRun }),
+        configuration: {
+          promptVariant: "wp2shell-bounty-v26-wide",
+          continuation: {
+            of: "run-earlier",
+            ordinal: 3,
+            openRouteCount: 1,
+            passedIdDigests: [sha("1")],
+          },
+        },
+      });
+    expect(namedContinuationTarget(f, "run-missing")).toEqual({
+      status: "refused",
+      reason: "run-unknown",
+    });
+    await append({
+      identity: "run-head-finished",
+      type: "discovery-run-finished",
+      runId: "run-head",
+      outcome: "failed",
+      reason: "provider",
+      costUsd: "unavailable",
+      wallTimeMs: 1,
+      continuation: {
+        status: "valid",
+        openRouteCount: 1,
+        openRouteIdDigests: [sha("1")],
+      },
+    });
+    expect(namedContinuationTarget(f, "run-head")).toMatchObject({
+      status: "refused",
+      reason: "not-continuable",
+    });
+    await append({
+      identity: "run-segment-finished",
+      type: "discovery-run-finished",
+      runId: "run-segment",
+      outcome: "completed",
+      costUsd: "unavailable",
+      wallTimeMs: 1,
+      continuation: {
+        status: "valid",
+        openRouteCount: 2,
+        openRouteIdDigests: [sha("1"), sha("2")],
+      },
+    });
+    // No cap and no progress rule: the 4th Trial, though sha("1") stayed open.
+    for (const named of ["run-head", "run-segment"])
+      expect(namedContinuationTarget(f, named)).toEqual({
+        status: "ok",
+        target: {
+          snapshotDigest: query.snapshotDigest,
+          selectionId: `${query.targetId}@3.4.0`,
+          ofRunId: "run-segment",
+          ofCampaignId: "c1",
+          ordinal: 4,
+          openRouteCount: 2,
+          passedIdDigests: [sha("1"), sha("2")],
+          manual: true,
+        },
+      });
   });
 });

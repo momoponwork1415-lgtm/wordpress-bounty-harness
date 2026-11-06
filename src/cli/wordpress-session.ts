@@ -141,6 +141,13 @@ const commonCampaignFields = {
        * nothing.
        */
       priorResearch: z.enum(["none", "same-target"]).default("none"),
+      /**
+       * ADR 0052: `open-routes` lets the continuous runner schedule, on the
+       * same Snapshot, the next Trial of a Root that left open routes in a
+       * valid `continuation.json` (at most 3 Trials in a chain); `none` (the
+       * default) schedules none.
+       */
+      continuation: z.enum(["none", "open-routes"]).default("none"),
       /** ADR 0049 addendum 7: `none` still parses; the follow-up Trial is gone. */
       followUp: z.literal("none").optional(),
     })
