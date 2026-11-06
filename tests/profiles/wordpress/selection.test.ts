@@ -271,6 +271,20 @@ describe("WordPress selection public interface", () => {
     ).toBe(false);
   });
 
+  it("accepts one target per selection and still caps a batch at ten", async () => {
+    const policy = await loadWordPressSelectionPolicy();
+    for (const [maximumTargets, success] of [
+      [0, false],
+      [1, true],
+      [10, true],
+      [11, false],
+    ] as const)
+      expect(
+        wordPressSelectionPolicySchema.safeParse({ ...policy, maximumTargets })
+          .success,
+      ).toBe(success);
+  });
+
   it("ships the install queue and rejects retired policy fields", async () => {
     const policy = await loadWordPressSelectionPolicy();
     expect(policy.minimumActiveInstallations).toBe(5_000);

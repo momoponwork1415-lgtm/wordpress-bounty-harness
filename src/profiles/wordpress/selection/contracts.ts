@@ -146,7 +146,7 @@ const automaticSelectionPolicy = z
       .optional(),
     promptVariant: z.string().min(1).max(128),
     revisitPolicy: wordPressRevisitPolicySchema,
-    maximumTargets: z.number().int().min(3).max(10),
+    maximumTargets: z.number().int().min(1).max(10),
     /**
      * Set: the core version select freezes (development and historical runs).
      * Absent (#741): the Lab image's version, which select checks against the
