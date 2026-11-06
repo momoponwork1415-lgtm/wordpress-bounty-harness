@@ -395,7 +395,6 @@ async function discardStaleSelectionBatch(
   policy: WordPressSelectionPolicy,
   campaignId: string,
 ): Promise<string | null> {
-  if (!("candidateSource" in policy)) return null;
   const binding = state.ledger.read({
     campaignId,
     type: "selection-batch-bound",
@@ -1497,8 +1496,11 @@ async function runWordPressCampaign(
 ): ReturnType<CliProfile["runCampaign"]> {
   const { config, boundaries } = session;
   const policy = await session.policy();
+  // A named-list policy binds the batch the runner selected too: without it the
+  // campaign ranked the list without the ledger and ran the same top targets
+  // every batch (prod-v26d, 2026-11-06). A manual `campaign run` names none.
   const reservedSelections =
-    "candidateSource" in policy
+    "candidateSource" in policy || input.selectionBatchId !== undefined
       ? await bindCampaignSelectionBatch(
           state,
           policy,
