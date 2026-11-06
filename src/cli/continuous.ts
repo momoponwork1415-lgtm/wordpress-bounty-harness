@@ -1140,19 +1140,26 @@ export function createContinuousRunner(deps: ContinuousDeps) {
     const owedContinuations = async (): Promise<
       readonly ContinuationTarget[]
     > => {
-      if (
-        deps.continuation === undefined ||
-        (await deps.continuation.policy()) !== "open-routes"
-      )
-        return [];
-      const pending = pendingContinuations(deps.ledger, deps.campaignPrefix);
-      for (const refusal of pending.refusals) {
-        await deps.continuation.refuse(refusal);
+      if (deps.continuation === undefined) return [];
+      // A failure here (policy unreadable, ledger unreadable, a refusal's
+      // append conflicting) must not end the runner: it is logged, nothing
+      // is scheduled this round, and the ledger is read again next round.
+      try {
+        if ((await deps.continuation.policy()) !== "open-routes") return [];
+        const pending = pendingContinuations(deps.ledger, deps.campaignPrefix);
+        for (const refusal of pending.refusals) {
+          await deps.continuation.refuse(refusal);
+          deps.io.log(
+            `${deps.clock().toISOString()} continuation refused campaign=${refusal.ofCampaignId} snapshot=${refusal.snapshotDigest} of=${refusal.ofRunId} reason=${refusal.reasonDetail}`,
+          );
+        }
+        return pending.targets;
+      } catch (error) {
         deps.io.log(
-          `${deps.clock().toISOString()} continuation refused campaign=${refusal.ofCampaignId} snapshot=${refusal.snapshotDigest} of=${refusal.ofRunId} reason=${refusal.reasonDetail}`,
+          `${deps.clock().toISOString()} continuation error ${error instanceof Error ? error.message : String(error)}`,
         );
+        return [];
       }
-      return pending.targets;
     };
     let providerBackoffFinished = false;
     const backoffProvider = async (campaignId: string) => {

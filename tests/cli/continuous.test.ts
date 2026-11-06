@@ -1255,7 +1255,11 @@ describe("continuation Trials on the same Snapshot (ADR 0052)", () => {
 
   /** A runner whose batch leaves open routes and whose continuation step records what the profile would. */
   const continuationRunner = async (
-    policy: "open-routes" | "none" | undefined,
+    policy:
+      | "open-routes"
+      | "none"
+      | undefined
+      | (() => Promise<"open-routes" | "none">),
     options: { readonly quiet?: boolean } = {},
   ) => {
     let selections = 0;
@@ -1269,7 +1273,8 @@ describe("continuation Trials on the same Snapshot (ADR 0052)", () => {
         ? {}
         : {
             continuation: {
-              policy: async () => policy,
+              policy:
+                typeof policy === "function" ? policy : async () => policy,
               refuse: async (refusal) => {
                 refused.push(refusal);
                 await ledgerOf.current!.append(
@@ -1408,6 +1413,28 @@ describe("continuation Trials on the same Snapshot (ADR 0052)", () => {
       expect(received).toEqual([undefined, undefined, undefined]);
     },
   );
+
+  it("logs a failing continuation step and selects instead of ending the runner", async () => {
+    let reads = 0;
+    const { t, steps, received } = await continuationRunner(async () => {
+      if (reads++ === 1) throw new Error("config unreadable");
+      return "open-routes";
+    });
+    steps.push(
+      async () => ({}),
+      async () => ({}),
+    );
+    expect(await t.runner.run()).toBe("operator");
+    // The first batch left open routes, but the failed read schedules
+    // nothing that round: a new selection runs, and the next round (read
+    // again) continues the latest batch as usual.
+    expect(received.map((targets) => targets?.[0]?.ofCampaignId)).toEqual([
+      undefined,
+      undefined,
+      "prod-20261020-2",
+    ]);
+    expect(t.log.join("\n")).toContain("continuation error config unreadable");
+  });
 
   it("does not count a continuation campaign that completed nothing toward no-progress", async () => {
     const { t, steps, received } = await continuationRunner("open-routes", {
