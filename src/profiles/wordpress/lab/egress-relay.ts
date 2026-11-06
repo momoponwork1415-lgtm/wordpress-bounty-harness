@@ -1,3 +1,6 @@
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
+
 import type { LabEgressDestination } from "../../../lab/egress-plan.js";
 import type { WordPressLabSession } from "./lab-session.js";
 
@@ -88,6 +91,29 @@ const connectionLine = (
   }
 };
 
+const MAX_DESTINATION_ADDRESSES = 16;
+
+/**
+ * The relay also sits on the internal Lab network, so Docker's embedded DNS
+ * does not forward its queries. The Harness resolves the destination on the
+ * host and pins it in the relay. IPv4 only: the bridge has no IPv6 route.
+ */
+async function resolveDestinationAddresses(host: string): Promise<string[]> {
+  const addresses = await lookup(host, { all: true, family: 4 });
+  return addresses.map(({ address }) => address);
+}
+
+function admittedDestinationAddresses(addresses: readonly string[]): string[] {
+  const admitted = [...new Set(addresses)].sort();
+  if (
+    admitted.length === 0 ||
+    admitted.length > MAX_DESTINATION_ADDRESSES ||
+    admitted.some((address) => isIP(address) !== 4)
+  )
+    throw new Error("Egress destination address is unavailable");
+  return admitted;
+}
+
 /**
  * Starts one relay per destination before WordPress, so WordPress can be
  * given the relays' addresses. Created on the bridge, connected to the Lab
@@ -96,10 +122,16 @@ const connectionLine = (
 export async function startEgressRelays(
   lab: Pick<WordPressLabSession, "id" | "network" | "images" | "requireDocker">,
   destinations: readonly LabEgressDestination[],
+  resolve: (
+    host: string,
+  ) => Promise<readonly string[]> = resolveDestinationAddresses,
 ): Promise<EgressRelay[]> {
   const relays: EgressRelay[] = [];
   for (const [index, destination] of destinations.entries()) {
     const container = egressRelayName(lab.id, index + 1);
+    const addresses = admittedDestinationAddresses(
+      await resolve(destination.host),
+    );
     await lab.requireDocker([
       "create",
       "--name",
@@ -110,6 +142,9 @@ export async function startEgressRelays(
       "--read-only",
       "--cap-drop=ALL",
       "--security-opt=no-new-privileges",
+      ...addresses.map(
+        (address) => `--add-host=${destination.host}:${address}`,
+      ),
       "--env",
       `WBH_EGRESS_HOST=${destination.host}`,
       "--env",

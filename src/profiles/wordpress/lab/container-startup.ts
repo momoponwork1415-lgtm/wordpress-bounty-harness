@@ -366,11 +366,16 @@ export async function startLabContainers(
   lab: WordPressLabSession,
   attempts: number,
   egress?: LabEgressPlan,
+  resolveEgressHost?: (host: string) => Promise<readonly string[]>,
 ): Promise<{ readonly internalIp: string; readonly recorderIp: string }> {
   await startNetworkAndDatabase(lab);
   // ADR 0046: relays first, so WordPress starts with their addresses.
   if (egress !== undefined && egress.destinations.length > 0)
-    lab.egressRelays = await startEgressRelays(lab, egress.destinations);
+    lab.egressRelays = await startEgressRelays(
+      lab,
+      egress.destinations,
+      resolveEgressHost,
+    );
   const internalIp = await startWordPress(lab);
   const recorderIp = await startRecorder(lab, internalIp);
   if (lab.exploration) await startControl(lab);

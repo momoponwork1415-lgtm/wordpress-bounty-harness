@@ -7,6 +7,7 @@ import { runInNewContext } from "node:vm";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { startEgressRelays } from "../../../src/profiles/wordpress/lab/egress-relay.js";
 import { DISCOVERY_LEFTOVER_PATTERNS } from "../../../src/discovery/provider-credential-egress-broker.js";
 import { measureCanonicalSourceTree } from "../../../src/infrastructure/canonical-source-tree.js";
 import { canonicalDigest } from "../../../src/infrastructure/canonical-json.js";
@@ -155,6 +156,7 @@ async function fixture(
   const lab = openWordPressLab({
     dockerExecutablePath: "/usr/bin/docker",
     ownerDirectory: join(root, "lab-owners"),
+    resolveEgressHost: async () => ["203.0.113.7"],
     images: {
       database: `mariadb@${sha("1")}`,
       wordpress: `wordpress@${sha("2")}`,
@@ -459,6 +461,27 @@ async function fixture(
 }
 
 describe("WordPress gVisor Lab", () => {
+  it("refuses an egress relay whose destination has no IPv4 address on the host (ADR 0046)", async () => {
+    const calls: string[][] = [];
+    const lab = {
+      id: "lab-1",
+      network: "wbh-lab-1-net",
+      images: { recorder: `node@${"sha256:" + "a".repeat(64)}` },
+      requireDocker: async (args: readonly string[]) => {
+        calls.push([...args]);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    } as unknown as Parameters<typeof startEgressRelays>[0];
+    await expect(
+      startEgressRelays(
+        lab,
+        [{ host: "api.example.test", port: 443 }],
+        async () => ["2001:db8::1"],
+      ),
+    ).rejects.toThrow("Egress destination address is unavailable");
+    expect(calls).toEqual([]);
+  });
+
   it("starts one relay per plan destination before WordPress, resolves the host to it, and closes it with a confirmation probe (ADR 0046)", async () => {
     const { lab, snapshot, setup, commands, docker } = await fixture();
     const provisioned = await lab.provision(snapshot, setup, {
@@ -487,6 +510,8 @@ describe("WordPress gVisor Lab", () => {
         "--env",
         "WBH_EGRESS_HOST=api.example.test",
         "WBH_EGRESS_PORT=443",
+        // gVisor on the internal Lab network gets no forwarded DNS; the host pins the name.
+        "--add-host=api.example.test:203.0.113.7",
       ]),
     );
     expect(commands[create]!.args).not.toContain("--publish");
