@@ -73,6 +73,8 @@ describe("review operations on recorded history", () => {
     expect(listed.stdout).toContain(
       "lead  partial-execution/consumer  unauthenticated  lead-a  Imported feed text reaches an administrator preview unescaped",
     );
+    // ADR 0052 (2026-11-06): the Root Trial's run id ends the line, for `campaign continue --run`.
+    expect(listed.stdout).toMatch(/  groups none  trial trial-1$/m);
     // The same leadId recorded twice is listed once.
     expect(listed.stdout.split("lead-a").length).toBe(2);
     const none = await run("review", "leads");

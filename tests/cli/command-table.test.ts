@@ -59,7 +59,8 @@ const PINNED_USAGE = [
   "  continuous concurrency [<n>] [--runtime <name>] --config <path>",
   "  review held --campaign <id>",
   "  research import --from <state dir> [--slug <slug>]",
-  "  campaign continue --campaign <id> --run <runId> --config <path>",
+  "  campaign continue --campaign <id> --run <runId> --config <path> [--focus <path>]",
+  "  campaign trials --campaign <id> | --prefix <campaignPrefix>",
 ].join("\n");
 
 const directories: string[] = [];

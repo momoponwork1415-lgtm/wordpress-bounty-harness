@@ -21,6 +21,7 @@ import {
 } from "../../src/cli/wordpress-research-import.js";
 import {
   CONTINUATION_SECTION_SENTENCE,
+  FOCUS_SECTION_SENTENCE,
   ProviderAttachmentStore,
 } from "../../src/discovery/index.js";
 import { PrivateArtifactStore } from "../../src/infrastructure/private-artifact-store.js";
@@ -1022,7 +1023,7 @@ describe("continuation Trials receive the continued run's notes (ADR 0052)", () 
       f.attachments,
       resolved.configuration,
       "3.4.0",
-      true,
+      {},
     );
     expect(rebuilt).toBe(resolved.section);
     expect(
@@ -1269,5 +1270,235 @@ describe("continuation Trials receive the continued run's notes (ADR 0052)", () 
           manual: true,
         },
       });
+  });
+
+  it("names a run without open routes only with a focus note, carries the note's digest, and treats an absent file as 0 routes (2026-11-06)", async () => {
+    const f = await fixture();
+    const common = {
+      schemaVersion: 1 as const,
+      campaignId: "c1",
+      snapshotDigest: query.snapshotDigest,
+      occurredAt: "2026-10-20T00:00:00.000Z",
+    };
+    const append = async (event: Record<string, unknown>) => {
+      const result = await f.ledger.append({
+        ...common,
+        ...event,
+      } as LedgerEventInput);
+      if (result.status !== "appended") throw new Error(result.status);
+    };
+    await append({
+      identity: "selected",
+      type: "target-selected",
+      selectionId: `${query.targetId}@3.4.0`,
+    });
+    for (const [runId, continuation] of [
+      ["run-absent", undefined],
+      [
+        "run-empty",
+        { status: "valid", openRouteCount: 0, openRouteIdDigests: [] },
+      ],
+      ["run-invalid", { status: "invalid" }],
+      ["run-interrupted", undefined],
+    ] as const) {
+      await append({
+        identity: `${runId}-started`,
+        type: "discovery-run-started",
+        runId,
+        trialId: runId,
+        runKind: "explore",
+        history: { mode: "none" },
+        configuration: { promptVariant: "wp2shell-bounty-v26-wide" },
+      });
+      await append({
+        identity: `${runId}-finished`,
+        type: "discovery-run-finished",
+        runId,
+        outcome: runId === "run-interrupted" ? "failed" : "completed",
+        ...(runId === "run-interrupted" ? { reason: "interrupted" } : {}),
+        costUsd: "unavailable",
+        wallTimeMs: 1,
+        ...(continuation === undefined ? {} : { continuation }),
+      });
+    }
+    const focus = { digest: sha("f"), bytes: 42 };
+    for (const runId of ["run-absent", "run-empty", "run-invalid"]) {
+      expect(namedContinuationTarget(f, runId)).toMatchObject({
+        status: "refused",
+        reason: "not-continuable",
+        detail: expect.stringContaining("no focus note"),
+      });
+      expect(namedContinuationTarget(f, runId, focus)).toEqual({
+        status: "ok",
+        target: {
+          snapshotDigest: query.snapshotDigest,
+          selectionId: `${query.targetId}@3.4.0`,
+          ofRunId: runId,
+          ofCampaignId: "c1",
+          ordinal: 2,
+          openRouteCount: 0,
+          passedIdDigests: [],
+          manual: true,
+          focus,
+        },
+      });
+    }
+    // The runner's exclusions stay: an interrupted run is resumed, not continued.
+    expect(namedContinuationTarget(f, "run-interrupted", focus)).toMatchObject({
+      status: "refused",
+      reason: "not-continuable",
+      detail: expect.stringContaining("interrupted"),
+    });
+  });
+
+  it("passes the focus note from the store after the archive's files, records it, rebuilds the same section on resume, and never admits an archive entry of that name", async () => {
+    const f = await fixture();
+    const note = Buffer.from("# Start here\n");
+    const stored = await f.attachments.put("focus", note);
+    const focus = { digest: stored.digest, bytes: note.byteLength };
+    await f.trial({
+      campaignId: "c1",
+      snapshotDigest: query.snapshotDigest,
+      targetId: query.targetId,
+      version: "3.4.0",
+      runId: "run-first",
+      archive: {
+        "recon-map.md": "# Map\n",
+        // A Root-written file of the note's name is not the operator's note.
+        "operator-focus.md": "# Not the operator\n",
+      },
+    });
+    await frozen(f, "c1");
+    const resolved = await resolveWordPressPriorResearch(f, f.attachments, {
+      ...query,
+      continuationOf: "run-first",
+      focus,
+    });
+    if (resolved.status !== "passed") throw new Error("not passed");
+    expect(resolved.files.map(({ path }) => path)).toEqual([
+      "prior/recon-map.md",
+      "prior/operator-focus.md",
+    ]);
+    expect(
+      Buffer.from(resolved.files[1]!.contentBase64, "base64").toString("utf8"),
+    ).toBe("# Start here\n");
+    expect(resolved.configuration.files).toEqual([
+      expect.objectContaining({ name: "recon-map.md" }),
+      { name: "operator-focus.md", digest: focus.digest, bytes: focus.bytes },
+    ]);
+    expect(
+      resolved.section.endsWith(
+        `${CONTINUATION_SECTION_SENTENCE}\n\n${FOCUS_SECTION_SENTENCE}`,
+      ),
+    ).toBe(true);
+    expect(
+      await rebuildWordPressPriorResearch(
+        f,
+        f.attachments,
+        resolved.configuration,
+        "3.4.0",
+        { focus },
+      ),
+    ).toBe(resolved.section);
+    // A segment of a continuation Trial without the note rebuilds without it.
+    expect(
+      await rebuildWordPressPriorResearch(
+        f,
+        f.attachments,
+        resolved.configuration,
+        "3.4.0",
+        {},
+      ),
+    ).not.toContain("operator-focus.md");
+    // A note the store does not hold cannot be rebuilt.
+    expect(
+      await rebuildWordPressPriorResearch(
+        f,
+        f.attachments,
+        resolved.configuration,
+        "3.4.0",
+        { focus: { digest: sha("0"), bytes: 1 } },
+      ),
+    ).toBeUndefined();
+    // A same-target Trial never receives the Root-written file of that name.
+    const sameTarget = await resolveWordPressPriorResearch(f, f.attachments, {
+      ...query,
+      snapshotDigest: sha("d"),
+    });
+    if (sameTarget.status !== "passed") throw new Error("not passed");
+    expect(sameTarget.files.map(({ path }) => path)).toEqual([
+      "prior/recon-map.md",
+    ]);
+    // The continuation on the note alone: no continuation.json is needed,
+    // the schedule carries the note's digest, and the Trial records it.
+    const log: string[] = [];
+    const [scheduled] = await resolveWordPressContinuation(
+      { ...f, newId: () => "id-focus" },
+      f.attachments,
+      "c9",
+      {
+        targets: [
+          {
+            snapshotDigest: query.snapshotDigest,
+            selectionId: `${query.targetId}@3.4.0`,
+            ofRunId: "run-first",
+            ofCampaignId: "c1",
+            ordinal: 2,
+            openRouteCount: 0,
+            passedIdDigests: [],
+            manual: true,
+            focus,
+          },
+        ],
+        log: (line) => log.push(line),
+      },
+    );
+    expect(scheduled).toMatchObject({
+      configuration: {
+        of: "run-first",
+        ordinal: 2,
+        openRouteCount: 0,
+        passedIdDigests: [],
+        focus,
+      },
+    });
+    expect(
+      f.ledger
+        .readAll({ type: "continuation-scheduled" })
+        .map(({ event }) => event),
+    ).toEqual([
+      expect.objectContaining({
+        campaignId: "c9",
+        ofRunId: "run-first",
+        openRouteCount: 0,
+        manual: true,
+        focusDigest: focus.digest,
+        focusBytes: focus.bytes,
+      }),
+    ]);
+    // A note the store lost is a refusal, not a Trial without it.
+    const lost = await resolveWordPressContinuation(
+      { ...f, newId: () => "id-lost" },
+      f.attachments,
+      "c10",
+      {
+        targets: [
+          {
+            snapshotDigest: query.snapshotDigest,
+            selectionId: `${query.targetId}@3.4.0`,
+            ofRunId: "run-first",
+            ofCampaignId: "c1",
+            ordinal: 2,
+            openRouteCount: 0,
+            passedIdDigests: [],
+            manual: true,
+            focus: { digest: sha("0"), bytes: 1 },
+          },
+        ],
+        log: (line) => log.push(line),
+      },
+    );
+    expect(lost).toEqual([]);
+    expect(log.join("\n")).toContain("reason=continuation-focus-unavailable");
   });
 });

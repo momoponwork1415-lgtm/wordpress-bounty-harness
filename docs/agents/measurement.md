@@ -154,6 +154,7 @@ for (const { event_json } of rows) {
 - 主な数字 1: **2・3 回目の新規 Finding 群 / Codex 時間**。`ordinal` が 2 と 3 の Trial の `finding-recorded` のうち、同じ Snapshot の 1 回目（連鎖の先頭）の群に無い群の数を、その Trial の Codex 時間で割る。対は偶然の pass@5（同じ 10 対象 × 5 回、盲目）の b2〜b5 の新規群数 / Codex 時間。
 - 主な数字 2: **渡した id の解消率**。各 continuation の Trial について、`configuration.continuation.passedIdDigests` のうち、その Trial の Root の最新区間の `discovery-run-finished.continuation.openRouteIdDigests` に無いものの数 / `passedIdDigests` の数。集合演算だけで、経路の文は読まない（`truncated: true` の Trial は解消を多めに数えうることを明記する）。対は leads2（Lead 133 群 → F 3）の転換率。
 - 状態の内訳（valid / invalid / absent）、`no-progress` で止まった数、3 回の上限で止まった数も記録する。
+- 名指し（focus あり）の続きと自動の続きは別の列で数える（ADR 0052 の 2026-11-06 追記）。見分けは `continuation-scheduled` の `manual: true` と `focusDigest`、`configuration.continuation.focus` の有無。focus ありの続きは操作役が経路を選んでいるので、自動の続き（Root の宣言だけ）と同じ分母に混ぜない。focus ありの列では、主な数字 1（新規 Finding 群 / Codex 時間）を同じ形で出し、主な数字 2（渡した id の解消率）は `passedIdDigests` が空の Trial を分母から外す。
 - n は 2 週で 20 対象程度で、±2 を分けられない（ADR 0043 追記 8）。採否は「盲目の反復より明らかに悪くないか」で見る。
 
 数え方の例:

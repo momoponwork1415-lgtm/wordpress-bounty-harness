@@ -64,7 +64,8 @@ harness continuous concurrency [<n>] [--runtime codex] --config <campaign.json>
 ```sh
 harness campaign run <slug> --campaign <id> --config <campaign.json> --selection <selection.json>
 harness campaign resume --campaign <id> --run <runId> --config <campaign.json>
-harness campaign continue --campaign <新しい id> --run <runId> --config <campaign.json>
+harness campaign continue --campaign <新しい id> --run <runId> --config <campaign.json> [--focus <メモ.md>]
+harness campaign trials --campaign <id> | --prefix <campaignPrefix>
 harness ledger stops --campaign <id>
 harness ledger resumes --campaign <id>
 harness research import --from <別の state dir> [--slug <slug>]
@@ -75,6 +76,8 @@ harness research import --from <別の state dir> [--slug <slug>]
 - `campaign resume` は `completed` 以外で止まった Root を、同じ Snapshot・同じ runtime profile・残りの制限時間で新しいサンドボックスに再開する。残りが 5 分未満、receipt に `session` が無い、別の run がやり直した後（`superseded`）は `not resumable: <理由>` で終了コード 3。
 - `discovery.continuation`（ADR 0052）は `none`（既定）か `open-routes`。`open-routes` のとき、連続ランナーは新しい対象を選ぶ前に、最新の選定 campaign とそこから連なる continuation campaign で、Root の最新区間が valid な `continuation.json` に open route を 1 件以上残した Snapshot の次の Trial を、新しい campaign id で組む。連鎖の中で数えた Trial が 3 に達した Snapshot と、受け取った id が 1 つも消えなかった Snapshot（`target-skipped` の `continuation-refused` / `no-progress`）は組まない。continuation campaign は選定 batch を束ねず、拒否と無進捗の停止規則に数えない。ランナーの log には `continuation campaign=... of=... targets=...` と `continuation refused ...` が出る。
 - `campaign continue` は 4 回目以降の名指しである。`--run` の Trial の最新区間が valid な `continuation.json` に open route を残していれば、3 回の上限と進捗の規則を使わずに、`--campaign` の新しい campaign で同じ Snapshot の Trial を 1 つ組む（`continuation-scheduled` に `manual: true`）。条件を満たさなければ `not continuable: <理由>` で終了コード 3。止まったら同じコマンドで続きを走らせる。`discovery.continuation` の値に関係なく使える。
+- `campaign continue --focus <path>`（ADR 0052 の 2026-11-06 追記）は、操作役が書いた焦点メモ（Markdown、UTF-8、8 KiB 以下、空でない）を続きの Trial に `/workspace/research/prior/operator-focus.md` として渡す。超えたら切らずに終了コード 2 で止まる。メモがあれば、open route 0 の Root（`continuation.json` が無い、または形が崩れていたものを含む）にも続きを組める。無ければ従来どおり open route > 0 が要る。本文は `<work>/provider-attachments/focus-<hex>/content/focus.md` に置かれ、台帳には digest と byte 数だけが残る（`continuation-scheduled.focusDigest` / `focusBytes`、`configuration.continuation.focus`）。メモに Lead の写し、公開記録の本文、PoC を書かない（書く側の規則は skill にある）。
+- `campaign trials --campaign <id>` は Root Trial ごとに 1 行、`campaign trials --prefix <campaignPrefix>` は prefix で始まる campaign を全部並べる（読み取り専用）。列は `trial <runId>`、選定 id（`targetId@version`）、`campaign`、`ordinal`、`of <元 runId | ->`、最新区間の outcome（`/reason` 付き。終わっていなければ `running`）、`continuation <status> open <n>`（archive が無ければ `continuation -`）、`groups <Finding 群の数>`、`leads <Lead 数>`、`research <封じた研究 archive の digest | ->` の順。research の digest で `<work>/provider-attachments/research-<hex>/content/research.json` を開く。`review leads` の各行の末尾には `trial <runId>` が付く。どちらも台帳の形と件数だけで、文は出さない。
 - 台帳は `<state>/ledger.sqlite` の `ledger_events`。読み方は [agents/ledger-reading.md](agents/ledger-reading.md)。`node:sqlite` の `DatabaseSync` を `readOnly: true` で開く。
 - `research import` は、別の `--state`（bench など）で終わった Trial の研究 file を、この state の `discovery.priorResearch: same-target` の候補にする（ADR 0049 決定 D）。別の state は読み取り専用で開き、研究の本文は共有の work directory にあるものを digest で参照する。2 回目は何も書かない。
 

@@ -1204,7 +1204,7 @@ async function resumeWordPressRun(
       boundaries.attachments,
       recordedPriorResearch,
       snapshot.target.version,
-      started.configuration.continuation !== undefined,
+      started.configuration.continuation,
     );
     if (
       rebuilt === undefined ||
@@ -1996,8 +1996,26 @@ export function createWordPressCliProfile(
     continuationPolicy: async (configPath) =>
       (await readWordPressCampaignConfig(configPath)).discovery.continuation,
     async continueCampaignRun(state, input) {
-      const named = namedContinuationTarget(state, input.runId);
+      // ADR 0052 (2026-11-06): the operator's note is content-addressed; the
+      // ledger keeps its digest and size, the attachment store its bytes.
+      const focus =
+        input.focus === undefined
+          ? undefined
+          : {
+              digest: `sha256:${createHash("sha256").update(input.focus).digest("hex")}`,
+              bytes: input.focus.byteLength,
+            };
+      const named = namedContinuationTarget(state, input.runId, focus);
       if (named.status === "refused") return named;
+      const session = await openWordPressCampaignSession(options, state, input);
+      if (input.focus !== undefined) {
+        const stored = await session.boundaries.attachments.put(
+          "focus",
+          input.focus,
+        );
+        if (stored.digest !== focus?.digest)
+          throw new Error("The focus note was stored under another digest");
+      }
       const continuation = {
         targets: [named.target],
         log: input.log,
@@ -2010,7 +2028,7 @@ export function createWordPressCliProfile(
           target: null,
           continuation,
         },
-        await openWordPressCampaignSession(options, state, input),
+        session,
       );
       return { status: "scheduled", summary };
     },

@@ -21,6 +21,7 @@ import type {
 } from "../ledger/index.js";
 import {
   MAX_AUTOMATIC_CONTINUATION_TRIALS,
+  MAX_OPERATOR_FOCUS_BYTES,
   autoResumesProviderLimit,
   continuationMadeNoProgress,
   countsAsTrialChain,
@@ -69,19 +70,34 @@ const sha256Digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
  * whose latest segment sealed a valid `continuation.json`, how many open
  * routes it declared and their id digests. The route text is never read.
  */
-const continuationTargetSchema = z.strictObject({
-  snapshotDigest: sha256Digest,
-  selectionId: z.string().min(1),
-  /** The Root run (its latest segment) whose `continuation.json` is passed on. */
-  ofRunId: z.string().min(1),
-  ofCampaignId: z.string().min(1),
-  /** The new Trial's place in the chain on its Snapshot. */
-  ordinal: z.number().int().min(2),
-  openRouteCount: z.number().int().positive(),
-  passedIdDigests: z.array(sha256Digest).min(1).max(64),
-  /** `campaign continue`: the chain cap and the progress rule were not applied. */
-  manual: z.boolean().optional(),
-});
+const continuationTargetSchema = z
+  .strictObject({
+    snapshotDigest: sha256Digest,
+    selectionId: z.string().min(1),
+    /** The Root run (its latest segment) whose `continuation.json` is passed on. */
+    ofRunId: z.string().min(1),
+    ofCampaignId: z.string().min(1),
+    /** The new Trial's place in the chain on its Snapshot. */
+    ordinal: z.number().int().min(2),
+    openRouteCount: z.number().int().nonnegative(),
+    passedIdDigests: z.array(sha256Digest).max(64),
+    /** `campaign continue`: the chain cap and the progress rule were not applied. */
+    manual: z.boolean().optional(),
+    /**
+     * ADR 0052 (2026-11-06): `campaign continue --focus`: the operator's note
+     * in the attachment store, by digest and size. With it a run that left no
+     * open route can be continued.
+     */
+    focus: z
+      .strictObject({
+        digest: sha256Digest,
+        bytes: z.number().int().positive().max(MAX_OPERATOR_FOCUS_BYTES),
+      })
+      .optional(),
+  })
+  .refine((target) => target.openRouteCount > 0 || target.focus !== undefined, {
+    message: "A continuation needs open routes or a focus note",
+  });
 export type ContinuationTarget = z.infer<typeof continuationTargetSchema>;
 
 /** ADR 0052: a continuation the runner does not schedule, recorded once as `target-skipped`. */
@@ -609,10 +625,23 @@ function ownCampaign(prefix: string, campaignId: string): boolean {
 }
 
 /**
- * ADR 0052: whether a Root run's latest segment may be continued: it ended
- * with a sealed report (not `provider-limited`, which the runner resumes,
- * and not `interrupted`, which a restarted runner resumes) and its
- * `continuation.json` was valid with at least one open route.
+ * ADR 0052: whether a Root run's latest segment ended for good: not
+ * `provider-limited`, which the runner resumes, and not `interrupted`, which
+ * a restarted runner resumes. The first half of `continuableFinish`; alone it
+ * admits a named continuation with a focus note (2026-11-06 addendum).
+ */
+export function sealedFinish(finished: FinishedEvent | undefined): boolean {
+  return (
+    finished !== undefined &&
+    finished.outcome !== "provider-limited" &&
+    finished.reason !== "interrupted"
+  );
+}
+
+/**
+ * ADR 0052: whether a Root run's latest segment may be continued
+ * automatically: it is `sealedFinish` and its `continuation.json` was valid
+ * with at least one open route.
  */
 export function continuableFinish(
   finished: FinishedEvent | undefined,
@@ -625,9 +654,7 @@ export function continuableFinish(
 } {
   const continuation = finished?.continuation;
   return (
-    finished !== undefined &&
-    finished.outcome !== "provider-limited" &&
-    finished.reason !== "interrupted" &&
+    sealedFinish(finished) &&
     continuation !== undefined &&
     "status" in continuation &&
     continuation.status === "valid" &&

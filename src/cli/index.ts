@@ -8,7 +8,11 @@ import { lstat, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 
-import { summarizeRecordedRuntimes } from "../discovery/index.js";
+import {
+  MAX_OPERATOR_FOCUS_BYTES,
+  latestSegment,
+  summarizeRecordedRuntimes,
+} from "../discovery/index.js";
 import { canonicalJson } from "../infrastructure/canonical-json.js";
 import { readFindingGroups } from "../ledger/finding-groups.js";
 import {
@@ -42,7 +46,11 @@ import {
   type TargetLimit,
   type VerifyNextSummary,
 } from "./pipeline.js";
-import { holdDiscoverySweep, type ContinuationTarget } from "./continuous.js";
+import {
+  CAMPAIGN_PREFIX,
+  holdDiscoverySweep,
+  type ContinuationTarget,
+} from "./continuous.js";
 import {
   continuousCommand,
   type ContinuousHostStatus,
@@ -254,8 +262,9 @@ export interface CliProfile {
   continuationPolicy?(configPath: string): Promise<"open-routes" | "none">;
   /**
    * ADR 0052: `campaign continue --run`: one continuation Trial of a named
-   * run whose sealed `continuation.json` was valid with open routes, without
-   * the chain cap or the progress rule; a reasoned refusal otherwise.
+   * run whose sealed `continuation.json` was valid with open routes, or
+   * (2026-11-06 addendum) named together with the operator's focus note,
+   * without the chain cap or the progress rule; a reasoned refusal otherwise.
    */
   continueCampaignRun?(
     state: CliState,
@@ -263,6 +272,8 @@ export interface CliProfile {
       readonly campaignId: string;
       readonly runId: string;
       readonly configPath: string;
+      /** `--focus`: the operator's note, already checked for size and UTF-8; its text is not read. */
+      readonly focus?: Buffer;
       log(line: string): void;
     },
   ): Promise<
@@ -506,6 +517,31 @@ function required(value: string | undefined, name: string): string {
   if (value === undefined || value.length === 0)
     throw new UsageError(`--${name} is required`);
   return value;
+}
+
+/**
+ * ADR 0052 (2026-11-06): `campaign continue --focus <path>`: the operator's
+ * Markdown note, non-empty, UTF-8 and at most `MAX_OPERATOR_FOCUS_BYTES`.
+ * Oversize is a usage error, never a cut. The text is not read.
+ */
+async function readOperatorFocus(path: string): Promise<Buffer> {
+  let bytes: Buffer;
+  try {
+    bytes = await readFile(path);
+  } catch {
+    throw new UsageError(`--focus ${path} cannot be read`);
+  }
+  if (bytes.byteLength === 0) throw new UsageError("--focus must not be empty");
+  if (bytes.byteLength > MAX_OPERATOR_FOCUS_BYTES)
+    throw new UsageError(
+      `--focus must be at most ${MAX_OPERATOR_FOCUS_BYTES} bytes (${bytes.byteLength} given)`,
+    );
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new UsageError("--focus must be UTF-8");
+  }
+  return bytes;
 }
 
 async function humanMinutes(
@@ -1469,8 +1505,10 @@ const COMMANDS: readonly Command[] = [
           }
         }
         const matching = groups.matchingKeyDigests(event.snapshotDigest, keys);
+        // ADR 0052 (2026-11-06): the Root Trial's run id last, so an operator
+        // can name it in `campaign continue --run`.
         print([
-          `lead  ${event.primitive}/${event.missingEdge}  ${position}  ${event.leadId}  ${summary}  keys ${keys.length === 0 ? "unkeyed" : keys.join(",")}  groups ${matching.length === 0 ? "none" : matching.join(",")}`,
+          `lead  ${event.primitive}/${event.missingEdge}  ${position}  ${event.leadId}  ${summary}  keys ${keys.length === 0 ? "unkeyed" : keys.join(",")}  groups ${matching.length === 0 ? "none" : matching.join(",")}  trial ${event.trialId}`,
         ]);
       }
       return 0;
@@ -2558,12 +2596,20 @@ const COMMANDS: readonly Command[] = [
   command({
     name: "campaign continue",
     required: ["campaign", "run", "config"],
-    usage: ["campaign continue --campaign <id> --run <runId> --config <path>"],
-    options: { campaign: STR, run: STR, config: STR },
+    usage: [
+      "campaign continue --campaign <id> --run <runId> --config <path> [--focus <path>]",
+    ],
+    options: { campaign: STR, run: STR, config: STR, focus: STR },
     handler: async ({ values, state, environment, io, print }) => {
       if (environment.profile.continueCampaignRun === undefined)
         throw new UsageError("This profile cannot continue a discovery run");
       const campaignId = required(values.campaign, "campaign");
+      // ADR 0052 (2026-11-06): the operator's note is checked for shape only
+      // (non-empty, UTF-8, within size) and refused rather than cut.
+      const focus =
+        values.focus === undefined
+          ? undefined
+          : await readOperatorFocus(resolve(values.focus));
       const release = await holdDiscoverySweep(
         state.stateDirectory,
         process.pid,
@@ -2573,6 +2619,7 @@ const COMMANDS: readonly Command[] = [
           campaignId,
           runId: required(values.run, "run"),
           configPath: resolve(required(values.config, "config")),
+          ...(focus === undefined ? {} : { focus }),
           log: (line) => io.stderr(line),
         })
         .finally(release);
@@ -2600,7 +2647,135 @@ const COMMANDS: readonly Command[] = [
       return summary.targets.length === 0 ? 1 : 0;
     },
   }),
+  // ADR 0052 (2026-11-06): the operator's read-only view of Root Trials, shape and counts only.
+  command({
+    name: "campaign trials",
+    readOnly: true,
+    usage: ["campaign trials --campaign <id> | --prefix <campaignPrefix>"],
+    options: { campaign: STR, prefix: STR },
+    validate: (values) => {
+      if (values.campaign === undefined && values.prefix === undefined)
+        throw new UsageError("--campaign or --prefix is required");
+      if (values.campaign !== undefined && values.prefix !== undefined)
+        throw new UsageError("--campaign and --prefix exclude each other");
+      if (values.prefix !== undefined && !CAMPAIGN_PREFIX.test(values.prefix))
+        throw new UsageError("--prefix must be a campaign prefix");
+    },
+    handler: async ({ values, state, print }) => {
+      const campaigns =
+        values.campaign !== undefined
+          ? [values.campaign]
+          : [
+              ...new Set(
+                state.ledger
+                  .readAll({ type: "discovery-run-started" })
+                  .map(({ event }) => event.campaignId)
+                  .filter((campaignId) =>
+                    campaignId.startsWith(`${values.prefix}-`),
+                  ),
+              ),
+            ];
+      const rows = campaigns.flatMap((campaignId) =>
+        trialRows(state.ledger, campaignId),
+      );
+      if (rows.length === 0) print(["no trials recorded"]);
+      print(rows);
+      return 0;
+    },
+  }),
 ];
+
+/**
+ * One line per Root Trial of a campaign, from the ledger's shape and counts
+ * alone: the run to name in `campaign continue --run`, the selection, the
+ * place in the continuation chain, how the latest segment ended, what the
+ * sealed `continuation.json` looked like, the Finding groups and Leads the
+ * Trial recorded, and the sealed research archive's digest. No text.
+ */
+function trialRows(ledger: CliState["ledger"], campaignId: string): string[] {
+  type Started = Extract<LedgerEventV1, { type: "discovery-run-started" }>;
+  type Finished = Extract<LedgerEventV1, { type: "discovery-run-finished" }>;
+  const starts = ledger
+    .readAll({ campaignId, type: "discovery-run-started" })
+    .map(({ event }) => event)
+    .filter(
+      (event): event is Started =>
+        event.type === "discovery-run-started" &&
+        (event.runKind ?? "explore") === "explore",
+    );
+  const finishes = new Map(
+    ledger
+      .readAll({ campaignId, type: "discovery-run-finished" })
+      .map(({ event }) => event)
+      .filter(
+        (event): event is Finished => event.type === "discovery-run-finished",
+      )
+      .map((event) => [event.runId, event] as const),
+  );
+  const selections = new Map<string, string>();
+  for (const { event } of ledger.readAll({
+    campaignId,
+    type: "target-selected",
+  }))
+    if (event.type === "target-selected")
+      selections.set(event.snapshotDigest, event.selectionId);
+  const findings = ledger
+    .readAll({ campaignId, type: "finding-recorded" })
+    .map(({ event }) => event)
+    .filter((event) => event.type === "finding-recorded");
+  const leads = ledger
+    .readAll({ campaignId, type: "lead-recorded" })
+    .map(({ event }) => event)
+    .filter((event) => event.type === "lead-recorded");
+  const groups = readFindingGroups(ledger, { campaignId });
+  return starts
+    .filter((start) => start.resumesRun === undefined)
+    .map((start) => {
+      const trialId = start.trialId ?? start.runId;
+      const segments = new Set<string>();
+      for (let runId = start.runId; ;) {
+        segments.add(runId);
+        const next = starts.find(
+          (event) => event.resumesRun === runId && !segments.has(event.runId),
+        );
+        if (next === undefined) break;
+        runId = next.runId;
+      }
+      const finished = finishes.get(latestSegment(starts, start.runId));
+      const ofTrial = (event: {
+        readonly runId: string;
+        readonly trialId?: string | undefined;
+      }) => event.trialId === trialId || segments.has(event.runId);
+      const groupIds = new Set(
+        findings
+          .filter(ofTrial)
+          .map((event) => groups.of(campaignId, event.findingId).id),
+      );
+      const leadCount = leads.filter(ofTrial).length;
+      const continuation = finished?.continuation;
+      const shape =
+        continuation === undefined || !("status" in continuation)
+          ? "continuation -"
+          : continuation.status === "valid"
+            ? `continuation valid open ${continuation.openRouteCount}`
+            : `continuation ${continuation.status} open 0`;
+      const received = start.configuration.continuation;
+      return [
+        `trial ${start.runId}`,
+        selections.get(start.snapshotDigest) ?? "unselected",
+        `campaign ${campaignId}`,
+        `ordinal ${received?.ordinal ?? 1}`,
+        `of ${received?.of ?? "-"}`,
+        finished === undefined
+          ? "running"
+          : `${finished.outcome}${finished.reason === undefined ? "" : `/${finished.reason}`}`,
+        shape,
+        `groups ${groupIds.size}`,
+        `leads ${leadCount}`,
+        `research ${finished?.researchArtifact?.digest ?? "-"}`,
+      ].join("  ");
+    });
+}
 
 const COMMAND_BY_NAME = commandIndex(COMMANDS);
 

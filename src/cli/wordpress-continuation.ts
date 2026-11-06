@@ -1,8 +1,10 @@
 import {
   CONTINUATION_FILE,
+  OPERATOR_FOCUS_FILE,
   latestSegment,
   priorResearchPath,
   type ContinuationConfiguration,
+  type OperatorFocus,
   type ProviderAttachmentStore,
 } from "../discovery/index.js";
 import { canonicalDigest } from "../infrastructure/canonical-json.js";
@@ -12,7 +14,11 @@ import {
   wordPressTargetSelectionSchema,
   type WordPressTargetSelection,
 } from "../profiles/wordpress/selection/index.js";
-import { continuableFinish, type ContinuationTarget } from "./continuous.js";
+import {
+  continuableFinish,
+  sealedFinish,
+  type ContinuationTarget,
+} from "./continuous.js";
 import type { CliState } from "./index.js";
 import {
   resolveWordPressPriorResearch,
@@ -93,6 +99,12 @@ export async function resolveWordPressContinuation(
         ordinal: target.ordinal,
         openRouteCount: target.openRouteCount,
         ...(target.manual === true ? { manual: true } : {}),
+        ...(target.focus === undefined
+          ? {}
+          : {
+              focusDigest: target.focus.digest,
+              focusBytes: target.focus.bytes,
+            }),
       });
       if (appended.status === "conflict")
         throw new Error(
@@ -119,17 +131,30 @@ export async function resolveWordPressContinuation(
           snapshotDigest,
           currentVersion: selection.version,
           continuationOf: target.ofRunId,
+          ...(target.focus === undefined ? {} : { focus: target.focus }),
         },
       );
-      if (
-        priorResearch.status !== "passed" ||
-        !priorResearch.files.some(
-          ({ path }) => path === priorResearchPath(CONTINUATION_FILE),
-        )
-      )
+      const passes = (name: string) =>
+        priorResearch.status === "passed" &&
+        priorResearch.files.some(
+          ({ path }) => path === priorResearchPath(name),
+        );
+      // The open routes travel in `continuation.json`; a run that declared
+      // none is continued on the operator's note alone, which must travel.
+      if (target.openRouteCount > 0 && !passes(CONTINUATION_FILE))
         throw new ContinuationRefusal(
           "continuation-file-unavailable",
           `run ${target.ofRunId} left no passable ${CONTINUATION_FILE}`,
+        );
+      if (target.focus !== undefined && !passes(OPERATOR_FOCUS_FILE))
+        throw new ContinuationRefusal(
+          "continuation-focus-unavailable",
+          `the focus note ${target.focus.digest} is not passable`,
+        );
+      if (priorResearch.status !== "passed")
+        throw new ContinuationRefusal(
+          "continuation-file-unavailable",
+          `run ${target.ofRunId} left no passable research files`,
         );
       resolved.push({
         snapshotDigest,
@@ -139,6 +164,7 @@ export async function resolveWordPressContinuation(
           ordinal: target.ordinal,
           openRouteCount: target.openRouteCount,
           passedIdDigests: [...target.passedIdDigests],
+          ...(target.focus === undefined ? {} : { focus: target.focus }),
         },
         priorResearch,
       });
@@ -166,12 +192,16 @@ export async function resolveWordPressContinuation(
 
 /**
  * ADR 0052, `campaign continue --run`: the continuation of a named run. Its
- * Trial's latest segment must have sealed a valid `continuation.json` with
- * open routes; the chain cap and the progress rule do not apply.
+ * Trial's latest segment must have ended for good (`sealedFinish`) and
+ * either sealed a valid `continuation.json` with open routes or, with the
+ * 2026-11-06 addendum, be named together with the operator's focus note;
+ * the chain cap and the progress rule do not apply. An `invalid` or `absent`
+ * `continuation.json` counts as 0 routes.
  */
 export function namedContinuationTarget(
   state: Pick<CliState, "ledger">,
   runId: string,
+  focus?: OperatorFocus,
 ):
   | {
       readonly status: "refused";
@@ -213,14 +243,29 @@ export function namedContinuationTarget(
       (event): event is FinishedEvent =>
         event.type === "discovery-run-finished" && event.runId === latest,
     );
-  if (!continuableFinish(finished))
+  if (finished === undefined)
     return {
       status: "refused",
       reason: "not-continuable",
-      detail:
-        finished === undefined
-          ? `run ${latest} has not finished`
-          : `run ${latest} left no valid continuation.json with open routes`,
+      detail: `run ${latest} has not finished`,
+    };
+  if (!sealedFinish(finished))
+    return {
+      status: "refused",
+      reason: "not-continuable",
+      detail: `run ${latest} ended ${finished.outcome}${finished.reason === undefined ? "" : ` (${finished.reason})`}, which the runner resumes`,
+    };
+  const routes = continuableFinish(finished)
+    ? {
+        openRouteCount: finished.continuation.openRouteCount,
+        passedIdDigests: [...finished.continuation.openRouteIdDigests],
+      }
+    : { openRouteCount: 0, passedIdDigests: [] };
+  if (routes.openRouteCount === 0 && focus === undefined)
+    return {
+      status: "refused",
+      reason: "not-continuable",
+      detail: `run ${latest} left no open route and no focus note was given`,
     };
   const selected = state.ledger
     .readAll({ campaignId, type: "target-selected" })
@@ -244,9 +289,9 @@ export function namedContinuationTarget(
       ofRunId: latest,
       ofCampaignId: campaignId,
       ordinal: (head.configuration.continuation?.ordinal ?? 1) + 1,
-      openRouteCount: finished.continuation.openRouteCount,
-      passedIdDigests: [...finished.continuation.openRouteIdDigests],
+      ...routes,
       manual: true,
+      ...(focus === undefined ? {} : { focus }),
     },
   };
 }

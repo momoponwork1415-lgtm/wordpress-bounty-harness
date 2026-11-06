@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CONTINUATION_SECTION_SENTENCE,
+  FOCUS_SECTION_SENTENCE,
+  MAX_OPERATOR_FOCUS_BYTES,
   MAX_PRIOR_RESEARCH_FILE_BYTES,
   MAX_PRIOR_RESEARCH_FILES,
   MAX_PRIOR_RESEARCH_TOTAL_BYTES,
+  OPERATOR_FOCUS_FILE,
   PRIOR_RESEARCH_DIRECTORIES,
   PRIOR_RESEARCH_FILE_NAMES,
   PRIOR_RESEARCH_STORES_FILE,
@@ -70,6 +74,49 @@ describe("Prior research section (ADR 0048)", () => {
       expect(new RegExp(`\\b${word}\\b`, "i").test(text)).toBe(false);
   });
 
+  it("places operator-focus.md right after continuation.json and ends with the focus sentence only when the note was passed (ADR 0052, 2026-11-06)", () => {
+    const files = [
+      { name: "stores.json", bytes: 50 },
+      { name: "operator-focus.md", bytes: 120 },
+      { name: "continuation.json", bytes: 80 },
+      { name: "recon-map.md", bytes: 9000 },
+    ];
+    const text = priorResearchSection({
+      priorVersion: "3.4.0",
+      currentVersion: "3.4.0",
+      files,
+      continuation: true,
+      focus: true,
+    });
+    const parts = text.split("\n\n");
+    expect(parts[2]!.split("\n")).toEqual([
+      "- /workspace/research/prior/recon-map.md: the map of the plugin that wbh-recon wrote (9000 bytes).",
+      "- /workspace/research/prior/continuation.json (80 bytes).",
+      "- /workspace/research/prior/operator-focus.md (120 bytes).",
+      "- /workspace/research/prior/stores.json (50 bytes).",
+    ]);
+    expect(parts.slice(3)).toEqual([
+      CONTINUATION_SECTION_SENTENCE,
+      FOCUS_SECTION_SENTENCE,
+    ]);
+    // Without the note the section is byte-for-byte the continuation one.
+    const without = priorResearchSection({
+      priorVersion: "3.4.0",
+      currentVersion: "3.4.0",
+      files: files.filter(({ name }) => name !== "operator-focus.md"),
+      continuation: true,
+    });
+    expect(without.endsWith(CONTINUATION_SECTION_SENTENCE)).toBe(true);
+    expect(without).not.toContain(FOCUS_SECTION_SENTENCE);
+    expect(without).not.toContain("operator-focus.md");
+    expect(capPriorResearch(files).kept.map(({ name }) => name)).toEqual([
+      "recon-map.md",
+      "continuation.json",
+      "operator-focus.md",
+      "stores.json",
+    ]);
+  });
+
   it("lists one file alone and refuses nothing, duplicates, names outside the set and odd versions", () => {
     const one = priorResearchSection({
       priorVersion: "1.0",
@@ -127,7 +174,10 @@ describe("Prior research section (ADR 0048)", () => {
       "lab-setup.md",
       "REGISTRY.md",
       "continuation.json",
+      "operator-focus.md",
     ]);
+    expect(OPERATOR_FOCUS_FILE).toBe("operator-focus.md");
+    expect(MAX_OPERATOR_FOCUS_BYTES).toBe(8192);
     expect(PRIOR_RESEARCH_DIRECTORIES).toEqual(["assumptions", "walks"]);
     expect(PRIOR_RESEARCH_STORES_FILE).toBe("stores.json");
     expect(priorResearchPath("recon-map.md")).toBe("prior/recon-map.md");
